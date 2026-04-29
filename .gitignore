@@ -1,0 +1,13 @@
+# Local ESP-IDF / tools install (do not commit; each developer installs separately)
+Espressif/
+python_env/
+
+# ESP-IDF build output
+build/
+project/build/
+project/sdkconfig
+project/sdkconfig.old
+
+# Component manager (if used)
+project/dependencies.lock
+project/managed_components/

@@ -1,0 +1,18 @@
+{
+    "idf.currentSetup": "D:/edgedownload/desktopsrc/TY/ESP32-S3/Espressif/frameworks/esp-idf-v5.5.4/",
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ],
+    "idf.flashType": "UART",
+
+    "terminal.integrated.profiles.windows": {
+        "ESP-IDF 5.5": {
+            "path": "C:/WINDOWS/system32/cmd.exe",
+            "args": [
+                "/k",
+                "call D:\\edgedownload\\desktopsrc\\TY\\ESP32-S3\\Espressif\\idf_cmd_init.bat esp-idf-8b3331941e59a9b78cefdb2ca2bdfee0 && cd /d D:\\edgedownload\\desktopsrc\\TY\\ESP32-S3\\project"
+            ]
+        }
+    },
+    "terminal.integrated.defaultProfile.windows": "ESP-IDF 5.5"
+}
