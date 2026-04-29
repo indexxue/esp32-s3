@@ -5,7 +5,7 @@ This repository tracks source code only. Local ESP-IDF toolchains and build outp
 ## Prerequisites
 
 - Windows 10/11
-- Espressif IDF Tools installed (default local path expected by this repo)
+- Git for Windows (required for zero-install bootstrap)
 
 ## First-time setup
 
@@ -14,6 +14,11 @@ From the repository root:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_env.ps1
 ```
+
+The setup script supports zero-install flow:
+
+- If ESP-IDF is missing, it auto-clones `v5.5.4` to `.\Espressif\frameworks\esp-idf-v5.5.4`
+- Then it runs `install.bat` to install/update toolchain dependencies
 
 Then open a new terminal and load ESP-IDF environment:
 
@@ -42,7 +47,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_env.ps1
 Optional full checks:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\verify_env.ps1 -RunInstall -RunBuildTest
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_env.ps1 -RunInstall -RequireIdfInPath -RunBuildTest
 ```
 
 ## Notes

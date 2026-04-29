@@ -19,9 +19,12 @@ Write-Host "Repository root: $repoRoot"
 if (-not (Test-Path $setupScript)) { Write-Error "Missing setup script: $setupScript" }
 if (-not (Test-Path $projectPath)) { Write-Error "Missing project directory: $projectPath" }
 if (-not (Test-Path (Join-Path $projectPath "CMakeLists.txt"))) { Write-Error "Missing project/CMakeLists.txt" }
-if (-not (Test-Path $idfPath)) { Write-Error "Missing ESP-IDF path: $idfPath" }
-if (-not (Test-Path $installScript)) { Write-Error "Missing install script: $installScript" }
-if (-not (Test-Path $exportScript)) { Write-Error "Missing export script: $exportScript" }
+if ((-not (Test-Path $idfPath)) -or (-not (Test-Path $installScript)) -or (-not (Test-Path $exportScript))) {
+    Write-Warning "ESP-IDF local environment is not fully present yet."
+    if (-not $RunInstall) {
+        Write-Host "Run with -RunInstall to bootstrap ESP-IDF automatically."
+    }
+}
 
 if ($RunInstall) {
     Write-Host "Running setup script..."
@@ -29,6 +32,10 @@ if ($RunInstall) {
     if ($LASTEXITCODE -ne 0) {
         Write-Error "setup_env.ps1 failed with exit code $LASTEXITCODE"
     }
+
+    if (-not (Test-Path $idfPath)) { Write-Error "Missing ESP-IDF path after setup: $idfPath" }
+    if (-not (Test-Path $installScript)) { Write-Error "Missing install script after setup: $installScript" }
+    if (-not (Test-Path $exportScript)) { Write-Error "Missing export script after setup: $exportScript" }
 }
 
 Write-Host "Checking idf.py in current terminal..."
