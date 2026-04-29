@@ -27,6 +27,24 @@ cmd /k ".\Espressif\frameworks\esp-idf-v5.5.4\export.bat"
 idf.py -C project build
 ```
 
+If your current directory is `project`, use:
+
+```cmd
+idf.py build
+```
+
+## Verify setup script
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_env.ps1
+```
+
+Optional full checks:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_env.ps1 -RunInstall -RunBuildTest
+```
+
 ## Notes
 
 - `Espressif/` is intentionally ignored in Git. Each developer installs tools locally.
