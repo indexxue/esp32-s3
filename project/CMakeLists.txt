@@ -4,8 +4,8 @@ cmake_minimum_required(VERSION 3.16)
 
 # Allow loading custom components from repository-level component folders.
 set(EXTRA_COMPONENT_DIRS
-    "${CMAKE_CURRENT_LIST_DIR}/../libraries"
-    "${CMAKE_CURRENT_LIST_DIR}/../common"
+    "../common"
+    "../bsp_driver"
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

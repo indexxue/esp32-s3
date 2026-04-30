@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "src/gpio.c"
+        "src/uart.c"
+        "src/i2c.c"
+        "src/spi.c"
+        "src/adc.c"
+        "src/pwm.c"
+        "src/timer.c"
+    INCLUDE_DIRS "inc"
+    REQUIRES
+        esp_driver_gpio
+        esp_driver_uart
+        esp_driver_i2c
+        esp_driver_spi
+        esp_driver_ledc
+        esp_driver_gptimer
+        esp_adc
+)
