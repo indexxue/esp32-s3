@@ -15,19 +15,11 @@
 /** IO4 呼吸灯 PWM 频率（与 BoardInit 中配置一致） */
 #define BOARD_IO4_PWM_FREQ_HZ (5000U)
 
-/**
- * 板级基础初始化：GPIO 驱动与 IO5、PWM 与 IO4 通道、I2C 总线。
- * @return 任一步失败返回 FALSE，且已尽力回滚此前已成功的步骤。
- */
+/** 当前无外设初始化；后续接 GPIO/PWM/I2C 等时再在此实现。 */
 bool_t BoardInit(void);
 
-/** 与 BoardInit 对称，释放本模块初始化的外设（忽略未初始化状态） */
 void BoardDeinit(void);
 
-/**
- * 仅释放 I2C 总线（并同步内部状态）。在仍有任务使用 GPIO/PWM 时用于错误回滚，
- * 不可调用 BoardDeinit()。
- */
 void BoardDeinitI2cBus(void);
 
 #endif
