@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "project.c" "board.c"
+    SRCS "main.c" "start.c"
     INCLUDE_DIRS "."
-    REQUIRES common bsp_driver
+    REQUIRES cbb common bsp_driver
 )
