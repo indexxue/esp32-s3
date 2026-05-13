@@ -4,6 +4,8 @@
 /**
  * @file start.h
  * @brief 应用生命周期壳层：在 app_main 上下文中顺序执行 init → run（均允许为 NULL）。
+ *       `app_entry` 为本工程默认路径：板级与按键/灯效见 start.c，LCD/SD/IMU 等业务任务见 main.c。
+ *       约定说明见 doc/application_architecture.md。
  */
 
 #include "type.h"
@@ -37,6 +39,15 @@ typedef struct {
  *       run 非 NULL 且正常返回时，本函数返回 STATUS_OK（适用于 run 内另起任务后退出）。
  */
 status_t app_start(const app_lifecycle_t *lifecycle);
+
+/** 使用内置默认 `app_lifecycle_t` 启动本工程演示应用（等价于 `app_start` + 固定表）。 */
+status_t app_entry(void);
+
+/**
+ * 创建并启动业务 FreeRTOS 任务（LCD/SD/IMU 等），由 `start.c` 的默认 `app_run` 调用；实现在 `main.c`。
+ * 单独头文件非必需：声明放在此处即可让壳层与 `main.c` 共用一个入口 API 头文件。
+ */
+status_t application_start_modules_task(void);
 
 #ifdef __cplusplus
 }
