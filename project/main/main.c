@@ -4,7 +4,7 @@
  * @LastEditors: indexxue 2308039918@qq.com
  * @LastEditTime: 2026-05-02 10:16:34
  * @FilePath: \ESP32-S3\project\main\main.c
- * @Description: 应用入口 `app_main`；业务任务（LCD/SD/IMU 等）见本文件 `application_start_modules_task`。
+ * @Description: 应用入口 `app_main`；业务任务（LCD/SD/IMU 等）见本文件 `application_start_modules_task`。GPIO0 长按切换 OTA 启动槽在 `start.c` 的按键回调中处理。
  */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -36,7 +36,7 @@
 /** 略低于按键扫描任务，避免长 SPI 传输时饿死短周期人机逻辑。 */
 #define APP_MODULES_TASK_PRIORITY (4U)
 
-/** 轮询按键周期（毫秒）；用于图库切换，略快于姿态刷新。 */
+/** 轮询按键周期（毫秒）；用于图库切换，略快于姿态刷新。（GPIO0 长按切槽由 `start.c` 处理，此处仅处理单击。） */
 #define APP_GALLERY_BUTTON_POLL_MS (50U)
 
 static void app_lcd_update_tilt_line(float roll_deg, float pitch_deg)

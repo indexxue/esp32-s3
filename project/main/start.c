@@ -16,7 +16,9 @@
 #include "button.h"
 #include "flexible_button.h"
 #include "led_scene.h"
-#include "cmd.h"
+#include "boot_slot.h"
+
+#include "esp_ota_ops.h"
 
 /* ---------- 可调参数 ---------- */
 
@@ -63,10 +65,44 @@ status_t app_start(const app_lifecycle_t *lifecycle)
 
 /* ---------- 按键 ---------- */
 
+/** GPIO0 长按：将下次启动切到「当前运行槽」的另一槽并复位（长按时长见 `common/src/button.c` 中 `long_press_start_tick`）。 */
+static void app_button_switch_to_other_slot(void)
+{
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    status_t                 st;
+
+    if (run == NULL) {
+        LOG_ERROR("boot slot: no running partition");
+        return;
+    }
+
+    if (run->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) {
+        st = boot_slot_request_factory();
+    } else if (run->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1) {
+        st = boot_slot_request_app_a();
+    } else {
+        LOG_WARN("boot slot: unknown running subtype %u", (unsigned)run->subtype);
+        return;
+    }
+
+    if (st != ESP_OK) {
+        LOG_ERROR("boot slot: esp_ota_set_boot_partition failed: %d", (int)st);
+        return;
+    }
+
+    LOG_INFO("boot slot: next boot -> other slot, reset");
+    boot_slot_system_reset();
+}
+
 static void app_button_notify(btn_id_e id, const char *name, btn_permission_e permission, btn_event_e event)
 {
     (void)permission;
     LOG_INFO("key %s (%s): %s", button_id_to_str(id), (name != NULL) ? name : "?", button_event_to_str(event));
+
+    if ((id == BTN_ID_GPIO0) && (event == BTN_EVENT_LONG_PRESS)) {
+        app_button_switch_to_other_slot();
+        return;
+    }
 
     if (event != BTN_EVENT_SINGLE_CLICK) {
         return;
@@ -119,7 +155,7 @@ static status_t app_init_button_io(void)
         return STATUS_FAIL;
     }
 
-    LOG_INFO("buttons GPIO0/GPIO3, scan %d Hz; GPIO0 单击=灯效 trigger + SD 图库下一张, GPIO3 单击=灯效 success",
+    LOG_INFO("buttons GPIO0/GPIO3, scan %d Hz; GPIO0 单击=灯效 trigger + SD 图库下一张, GPIO0 长按=切换下次启动槽并复位, GPIO3 单击=灯效 success",
              FLEX_BTN_SCAN_FREQ_HZ);
 
     return STATUS_OK;
@@ -160,10 +196,6 @@ static status_t app_init(void)
     err = app_init_led_ui();
     if (err != STATUS_OK) {
         return err;
-    }
-
-    if (cmd_usb_line_service_start() != STATUS_OK) {
-        LOG_WARN("USB factory cmd line not started (check USB Serial/JTAG driver)");
     }
 
     return STATUS_OK;
