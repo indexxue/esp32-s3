@@ -20,6 +20,10 @@
 
 #include "esp_ota_ops.h"
 
+#if CONFIG_WEB_CTRL_AUTO_START
+#include "web_ctrl.h"
+#endif
+
 /* ---------- 可调参数 ---------- */
 
 #define BUTTON_SCAN_PERIOD_MS (1000 / FLEX_BTN_SCAN_FREQ_HZ)
@@ -141,6 +145,19 @@ static status_t app_init_platform(void)
         LOG_ERROR("BoardInit failed");
         return STATUS_FAIL;
     }
+
+#if CONFIG_WEB_CTRL_AUTO_START
+    {
+        web_ctrl_config_t wcfg;
+
+        web_ctrl_config_init_defaults(&wcfg);
+        web_ctrl_config_merge_nvs(&wcfg);
+        const esp_err_t werr = web_ctrl_start(&wcfg);
+        if (werr != ESP_OK) {
+            LOG_WARN("web_ctrl_start failed: %s", esp_err_to_name(werr));
+        }
+    }
+#endif
 
     return STATUS_OK;
 }

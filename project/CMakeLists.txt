@@ -7,6 +7,7 @@ set(EXTRA_COMPONENT_DIRS
     "../common"
     "../bsp_driver"
     "../cbb"
+    "../components"
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
