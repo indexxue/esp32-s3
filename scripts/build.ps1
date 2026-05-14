@@ -1,6 +1,10 @@
 param(
-    [ValidateSet("build", "reconfigure", "clean", "fullclean")]
-    [string]$Action = "build"
+    [ValidateSet("build", "reconfigure", "clean", "fullclean", "size", "size-components", "size-files")]
+    [string]$Action = "build",
+    # After a successful `build`, run idf.py size / size-components / size-files (firmware Flash/RAM usage).
+    [switch]$ShowSize,
+    [ValidateSet("summary", "components", "files")]
+    [string]$ShowSizeLevel = "summary"
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,12 +30,51 @@ $env:IDF_TOOLS_PATH = Join-Path $repoRoot "Espressif"
 $env:IDF_PYTHON_ENV_PATH = Split-Path $idfPython -Parent | Split-Path -Parent
 $env:PATH = "$cmakeBin;$ninjaBin;$env:PATH"
 
+. (Join-Path $PSScriptRoot "IdfSizeSummary.ps1")
+
 Write-Host "Using IDF_PATH: $env:IDF_PATH"
 Write-Host "Using Python : $idfPython"
 Write-Host "Action       : $Action"
+if ($ShowSize -and $Action -eq "build") {
+    Write-Host "ShowSize     : yes ($ShowSizeLevel after build)"
+}
+
+$sizeOnlyActions = @("size", "size-components", "size-files")
+if ($sizeOnlyActions -contains $Action) {
+    if ($Action -eq "size") {
+        Write-IdfSizeHumanSummary -ProjectPath $projectPath -IdfPython $idfPython -IdfPath $idfPath
+        exit 0
+    }
+    & $idfPython $idfPy -C $projectPath $Action
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        Write-Error "idf.py $Action failed with exit code $exitCode"
+    }
+    exit $exitCode
+}
 
 & $idfPython $idfPy -C $projectPath $Action
 $exitCode = $LASTEXITCODE
 if ($exitCode -ne 0) {
     Write-Error "idf.py $Action failed with exit code $exitCode"
+}
+
+if ($ShowSize -and $Action -eq "build" -and $exitCode -eq 0) {
+    if ($ShowSizeLevel -eq "summary") {
+        Write-IdfSizeHumanSummary -ProjectPath $projectPath -IdfPython $idfPython -IdfPath $idfPath
+    }
+    else {
+        $sizeCmd = switch ($ShowSizeLevel) {
+            "components" { "size-components" }
+            "files" { "size-files" }
+            default { "size-components" }
+        }
+        Write-Host ""
+        Write-Host "--- Firmware memory usage: idf.py $sizeCmd ---"
+        & $idfPython $idfPy -C $projectPath $sizeCmd
+        $sizeExit = $LASTEXITCODE
+        if ($sizeExit -ne 0) {
+            Write-Error "idf.py $sizeCmd failed with exit code $sizeExit"
+        }
+    }
 }

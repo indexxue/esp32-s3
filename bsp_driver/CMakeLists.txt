@@ -2,8 +2,11 @@ idf_component_register(
     SRCS
         "src/gpio.c"
         "src/uart.c"
+        "src/usb_serial_jtag.c"
         "src/i2c.c"
         "src/spi.c"
+        "src/sdio.c"
+        "src/dma.c"
         "src/adc.c"
         "src/pwm.c"
         "src/timer.c"
@@ -11,8 +14,11 @@ idf_component_register(
     REQUIRES
         esp_driver_gpio
         esp_driver_uart
+        esp_driver_usb_serial_jtag
         esp_driver_i2c
         esp_driver_spi
+        esp_driver_sdmmc
+        heap
         esp_driver_ledc
         esp_driver_gptimer
         esp_adc

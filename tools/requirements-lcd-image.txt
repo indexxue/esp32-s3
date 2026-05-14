@@ -1,0 +1,3 @@
+# Pillow: 命令行 lcd_rgb565_convert.py 与 GUI lcd_image_tool.py 共用
+# GUI 另需 Python 自带 tkinter（Windows 官方安装包通常已含）
+Pillow>=10.0.0

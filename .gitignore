@@ -5,8 +5,11 @@ python_env/
 # ESP-IDF build output
 build/
 project/build/
+factory/build/
 project/sdkconfig
+factory/sdkconfig
 project/sdkconfig.old
+factory/sdkconfig.old
 
 # Component manager (if used)
 project/dependencies.lock

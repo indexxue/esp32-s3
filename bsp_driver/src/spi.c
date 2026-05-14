@@ -85,6 +85,9 @@ bool_t SpiDriverInit(const SpiDriverConfig_t *config)
     if ((config->maxDeviceCount == 0U) || (config->maxDeviceCount > SPI_DEVICE_SLOTS_MAX)) {
         return spiSetLastErr(ESP_ERR_INVALID_ARG);
     }
+    if (DmaSpiBusChannelIsValid(config->dmaChannel) == FALSE) {
+        return spiSetLastErr(ESP_ERR_INVALID_ARG);
+    }
 
     busConfig.sclk_io_num = config->sclkPin;
     busConfig.mosi_io_num = config->mosiPin;
@@ -95,7 +98,13 @@ bool_t SpiDriverInit(const SpiDriverConfig_t *config)
     busConfig.intr_flags = config->intrFlags;
 
     s_spiHost = (spi_host_device_t)config->host;
-    ret = spi_bus_initialize(s_spiHost, &busConfig, (spi_dma_chan_t)config->dmaChannel);
+    {
+        s32_t dmaInitVal = DmaSpiBusChannelToSpiBusInitValue(config->dmaChannel);
+        if (dmaInitVal < 0) {
+            return spiSetLastErr(ESP_ERR_INVALID_ARG);
+        }
+        ret = spi_bus_initialize(s_spiHost, &busConfig, (spi_dma_chan_t)dmaInitVal);
+    }
     if (ret != ESP_OK) {
         return spiSetLastErr(ret);
     }
@@ -156,6 +165,7 @@ bool_t SpiRegisterDevice(const SpiDeviceConfig_t *config)
     if (config->queueSize == 0U) {
         return spiSetLastErr(ESP_ERR_INVALID_ARG);
     }
+    /* chipSelectPin 可为 -1：SPI 外设不接管 CS，由上层 GPIO 配合 TFT 类连续传输。 */
     if (spiFindDeviceSlotByCsPin(config->chipSelectPin) >= 0) {
         return spiSetLastErr(ESP_ERR_INVALID_STATE);
     }
@@ -268,6 +278,33 @@ bool_t SpiTransmitReceive(s32_t chipSelectPin, const u8_t *txBuffer, u8_t *rxBuf
 
     ret = spi_device_transmit(devHandle, &trans);
     return spiSetLastErr(ret);
+}
+
+bool_t SpiTransmitDma(s32_t chipSelectPin, const u8_t *txBuffer, usize_t txLength)
+{
+    if (DmaBufferIsBusCapable(txBuffer, txLength) == FALSE) {
+        return spiSetLastErr(ESP_ERR_INVALID_ARG);
+    }
+    return SpiTransmit(chipSelectPin, txBuffer, txLength);
+}
+
+bool_t SpiReceiveDma(s32_t chipSelectPin, u8_t *rxBuffer, usize_t rxLength)
+{
+    if (DmaBufferIsBusCapable(rxBuffer, rxLength) == FALSE) {
+        return spiSetLastErr(ESP_ERR_INVALID_ARG);
+    }
+    return SpiReceive(chipSelectPin, rxBuffer, rxLength);
+}
+
+bool_t SpiTransmitReceiveDma(s32_t chipSelectPin, const u8_t *txBuffer, u8_t *rxBuffer, usize_t length)
+{
+    if (DmaBufferIsBusCapable(txBuffer, length) == FALSE) {
+        return spiSetLastErr(ESP_ERR_INVALID_ARG);
+    }
+    if (DmaBufferIsBusCapable(rxBuffer, length) == FALSE) {
+        return spiSetLastErr(ESP_ERR_INVALID_ARG);
+    }
+    return SpiTransmitReceive(chipSelectPin, txBuffer, rxBuffer, length);
 }
 
 s32_t SpiGetLastError(void)

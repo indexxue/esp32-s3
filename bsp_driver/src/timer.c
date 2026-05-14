@@ -24,12 +24,12 @@ static bool_t timerSetLastErr(esp_err_t err)
     return (err == ESP_OK) ? TRUE : FALSE;
 }
 
-static bool_t timerIsHandleValid(TimerHandle_t handle)
+static bool_t timerIsHandleValid(GptimerHandle_t handle)
 {
     return (handle < TIMER_INSTANCE_MAX) ? TRUE : FALSE;
 }
 
-static bool_t timerGetSlotByHandle(TimerHandle_t handle, TimerSlot_t **slot)
+static bool_t timerGetSlotByHandle(GptimerHandle_t handle, TimerSlot_t **slot)
 {
     if (slot == NULL) {
         return timerSetLastErr(ESP_ERR_INVALID_ARG);
@@ -108,7 +108,7 @@ static bool IRAM_ATTR timerOnAlarmCallback(gptimer_handle_t timer,
     (void)eventData;
 
     if ((slot != NULL) && (slot->callback != NULL)) {
-        TimerHandle_t handle = (TimerHandle_t)(slot - &s_timerSlots[0]);
+        GptimerHandle_t handle = (GptimerHandle_t)(slot - &s_timerSlots[0]);
         slot->callback(handle, slot->callbackUserData);
     }
 
@@ -171,7 +171,7 @@ bool_t TimerDriverDeinit(void)
     return timerSetLastErr(ESP_OK);
 }
 
-bool_t TimerCreate(const TimerConfig_t *config, TimerHandle_t *outHandle)
+bool_t TimerCreate(const TimerConfig_t *config, GptimerHandle_t *outHandle)
 {
     gptimer_config_t gptimerConfig = {0};
     gptimer_clock_source_t clockSource = GPTIMER_CLK_SRC_DEFAULT;
@@ -216,11 +216,11 @@ bool_t TimerCreate(const TimerConfig_t *config, TimerHandle_t *outHandle)
     s_timerSlots[slotIndex].gptimerHandle = gptimerHandle;
     s_timerSlots[slotIndex].callback = NULL;
     s_timerSlots[slotIndex].callbackUserData = NULL;
-    *outHandle = (TimerHandle_t)slotIndex;
+    *outHandle = (GptimerHandle_t)slotIndex;
     return timerSetLastErr(ESP_OK);
 }
 
-bool_t TimerDelete(TimerHandle_t handle)
+bool_t TimerDelete(GptimerHandle_t handle)
 {
     TimerSlot_t *slot = NULL;
     esp_err_t ret = ESP_OK;
@@ -251,7 +251,7 @@ bool_t TimerDelete(TimerHandle_t handle)
     return timerSetLastErr(ESP_OK);
 }
 
-bool_t TimerSetAlarm(TimerHandle_t handle, const TimerAlarmConfig_t *alarmConfig)
+bool_t TimerSetAlarm(GptimerHandle_t handle, const TimerAlarmConfig_t *alarmConfig)
 {
     TimerSlot_t *slot = NULL;
     gptimer_alarm_config_t gptimerAlarmConfig = {0};
@@ -272,7 +272,7 @@ bool_t TimerSetAlarm(TimerHandle_t handle, const TimerAlarmConfig_t *alarmConfig
     return timerSetLastErr(ret);
 }
 
-bool_t TimerRegisterCallback(TimerHandle_t handle, TimerCallback_t callback, void *userData)
+bool_t TimerRegisterCallback(GptimerHandle_t handle, TimerCallback_t callback, void *userData)
 {
     TimerSlot_t *slot = NULL;
     gptimer_event_callbacks_t callbacks = {0};
@@ -293,7 +293,7 @@ bool_t TimerRegisterCallback(TimerHandle_t handle, TimerCallback_t callback, voi
     return timerSetLastErr(ESP_OK);
 }
 
-bool_t TimerStart(TimerHandle_t handle)
+bool_t TimerStart(GptimerHandle_t handle)
 {
     TimerSlot_t *slot = NULL;
     esp_err_t ret = ESP_OK;
@@ -311,7 +311,7 @@ bool_t TimerStart(TimerHandle_t handle)
     return timerSetLastErr(ret);
 }
 
-bool_t TimerStop(TimerHandle_t handle)
+bool_t TimerStop(GptimerHandle_t handle)
 {
     TimerSlot_t *slot = NULL;
     esp_err_t ret = ESP_OK;
@@ -333,7 +333,7 @@ bool_t TimerStop(TimerHandle_t handle)
     return timerSetLastErr(ESP_OK);
 }
 
-bool_t TimerSetCount(TimerHandle_t handle, u64_t countValue)
+bool_t TimerSetCount(GptimerHandle_t handle, u64_t countValue)
 {
     TimerSlot_t *slot = NULL;
     esp_err_t ret = ESP_OK;
@@ -346,7 +346,7 @@ bool_t TimerSetCount(TimerHandle_t handle, u64_t countValue)
     return timerSetLastErr(ret);
 }
 
-bool_t TimerGetCount(TimerHandle_t handle, u64_t *countValue)
+bool_t TimerGetCount(GptimerHandle_t handle, u64_t *countValue)
 {
     TimerSlot_t *slot = NULL;
     esp_err_t ret = ESP_OK;

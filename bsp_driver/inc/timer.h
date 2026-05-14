@@ -15,9 +15,10 @@ typedef enum {
     TIMER_COUNT_DOWN_E = 1
 } TimerCountDirection_t;
 
-typedef u8_t TimerHandle_t;
+/** 与 FreeRTOS 的 TimerHandle_t（软件定时器）区分 */
+typedef u8_t GptimerHandle_t;
 
-#define TIMER_HANDLE_INVALID ((TimerHandle_t)0xFFU)
+#define GPTIMER_HANDLE_INVALID ((GptimerHandle_t)0xFFU)
 
 typedef struct {
     TimerClockSource_t clockSource;
@@ -32,21 +33,21 @@ typedef struct {
     bool_t autoReload;
 } TimerAlarmConfig_t;
 
-typedef void (*TimerCallback_t)(TimerHandle_t handle, void *userData);
+typedef void (*TimerCallback_t)(GptimerHandle_t handle, void *userData);
 
 bool_t TimerDriverInit(void);
 bool_t TimerDriverDeinit(void);
 
-bool_t TimerCreate(const TimerConfig_t *config, TimerHandle_t *outHandle);
-bool_t TimerDelete(TimerHandle_t handle);
+bool_t TimerCreate(const TimerConfig_t *config, GptimerHandle_t *outHandle);
+bool_t TimerDelete(GptimerHandle_t handle);
 
-bool_t TimerSetAlarm(TimerHandle_t handle, const TimerAlarmConfig_t *alarmConfig);
-bool_t TimerRegisterCallback(TimerHandle_t handle, TimerCallback_t callback, void *userData);
+bool_t TimerSetAlarm(GptimerHandle_t handle, const TimerAlarmConfig_t *alarmConfig);
+bool_t TimerRegisterCallback(GptimerHandle_t handle, TimerCallback_t callback, void *userData);
 
-bool_t TimerStart(TimerHandle_t handle);
-bool_t TimerStop(TimerHandle_t handle);
-bool_t TimerSetCount(TimerHandle_t handle, u64_t countValue);
-bool_t TimerGetCount(TimerHandle_t handle, u64_t *countValue);
+bool_t TimerStart(GptimerHandle_t handle);
+bool_t TimerStop(GptimerHandle_t handle);
+bool_t TimerSetCount(GptimerHandle_t handle, u64_t countValue);
+bool_t TimerGetCount(GptimerHandle_t handle, u64_t *countValue);
 
 s32_t TimerGetLastError(void);
 

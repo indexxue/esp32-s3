@@ -1,12 +1,33 @@
 #include "gpio.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "driver/gpio.h"
 
 static bool_t s_gpioDriverInited = FALSE;
 static bool_t s_isrServiceInstalled = FALSE;
 static esp_err_t s_gpioLastErr = ESP_OK;
+
+/** 记录最近一次 GpioWritePin 成功的输出电平，供 GpioTogglePin 使用。
+ *  纯输出模式下 gpio_get_level 读到的输入路径不可靠，不能用来翻转。 */
+static uint64_t s_outLevelHighMask = 0ULL;
+
+static void gpioOutShadowSet(s32_t pin, u32_t level)
+{
+    u32_t u = (u32_t)pin;
+    if (level != 0U) {
+        s_outLevelHighMask |= (1ULL << u);
+    } else {
+        s_outLevelHighMask &= ~(1ULL << u);
+    }
+}
+
+static u32_t gpioOutShadowGet(s32_t pin)
+{
+    u32_t u = (u32_t)pin;
+    return (s_outLevelHighMask & (1ULL << u)) ? 1U : 0U;
+}
 
 static bool_t gpioSetLastErr(esp_err_t err)
 {
@@ -104,6 +125,7 @@ bool_t GpioDriverDeinit(void)
         s_isrServiceInstalled = FALSE;
     }
 
+    s_outLevelHighMask = 0ULL;
     s_gpioDriverInited = FALSE;
     return gpioSetLastErr(ESP_OK);
 }
@@ -139,7 +161,21 @@ bool_t GpioConfigurePin(const GpioPinConfig_t *config)
     gpioConfig.pin_bit_mask = (1ULL << (u32_t)config->pin);
 
     ret = gpio_config(&gpioConfig);
-    return gpioSetLastErr(ret);
+    if (ret != ESP_OK) {
+        return gpioSetLastErr(ret);
+    }
+
+    /* 推挽/开漏输出：配置后把 pad 拉到已知低电平并同步 shadow，避免 Toggle 依赖 gpio_get_level */
+    if ((config->mode == GPIO_MODE_OUTPUT_E) || (config->mode == GPIO_MODE_INPUT_OUTPUT_E) ||
+        (config->mode == GPIO_MODE_OUTPUT_OD_E) || (config->mode == GPIO_MODE_INPUT_OUTPUT_OD_E)) {
+        ret = gpio_set_level((gpio_num_t)config->pin, 0);
+        if (ret != ESP_OK) {
+            return gpioSetLastErr(ret);
+        }
+        gpioOutShadowSet(config->pin, 0U);
+    }
+
+    return gpioSetLastErr(ESP_OK);
 }
 
 bool_t GpioWritePin(s32_t pin, u32_t level)
@@ -155,6 +191,9 @@ bool_t GpioWritePin(s32_t pin, u32_t level)
     }
 
     ret = gpio_set_level((gpio_num_t)pin, (level != 0U) ? 1 : 0);
+    if (ret == ESP_OK) {
+        gpioOutShadowSet(pin, (level != 0U) ? 1U : 0U);
+    }
     return gpioSetLastErr(ret);
 }
 
@@ -178,10 +217,15 @@ bool_t GpioReadPin(s32_t pin, u32_t *level)
 bool_t GpioTogglePin(s32_t pin)
 {
     u32_t level = 0U;
-    if (GpioReadPin(pin, &level) == FALSE) {
+
+    if (!s_gpioDriverInited) {
+        return gpioSetLastErr(ESP_ERR_INVALID_STATE);
+    }
+    if (gpioCheckPinValid(pin) == FALSE) {
         return FALSE;
     }
 
+    level = gpioOutShadowGet(pin);
     return GpioWritePin(pin, (level == 0U) ? 1U : 0U);
 }
 

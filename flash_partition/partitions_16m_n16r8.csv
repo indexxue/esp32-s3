@@ -1,0 +1,8 @@
+# ESP32-S3 N16R8 — dual OTA slots (see flash_partition/partitions_16m_n16r8.md).
+# app 分区偏移须 64KiB 对齐；两槽等大且填满 16MiB 时单槽最大为 0x7E0000（末 64KiB 留白）。
+# Name,     Type, SubType, Offset,  Size,     Flags
+nvs,        data, nvs,     0x9000,  0x20000,
+otadata,    data, ota,     ,        0x2000,
+phy_init,   data, phy,     ,        0x1000,
+app_a,      app,  ota_0,   0x30000, 0x7E0000,
+app_b,      app,  ota_1,   ,        0x7E0000,

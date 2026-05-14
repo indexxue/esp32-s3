@@ -1,0 +1,216 @@
+/**
+ * @file factory.c
+ * @brief 厂测工程壳层：与量产 `start.c` 同源初始化链，run 阶段不拉起 LCD/SD/IMU 业务任务。
+ */
+
+#include "factory.h"
+
+#include "boot_slot.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "type.h"
+
+#include "log.h"
+#include "persist.h"
+#include "board.h"
+#include "button.h"
+#include "flexible_button.h"
+#include "led_scene.h"
+#include "cmd.h"
+
+#include "esp_ota_ops.h"
+
+#define BUTTON_SCAN_PERIOD_MS (1000 / FLEX_BTN_SCAN_FREQ_HZ)
+
+#define BTN_SCAN_TASK_STACK_WORDS (3072U)
+#define BTN_SCAN_TASK_PRIORITY (5U)
+
+static void app_idle_default(void)
+{
+    const TickType_t period = pdMS_TO_TICKS(APP_LIFECYCLE_IDLE_DELAY_MS);
+
+    for (;;) {
+        vTaskDelay(period);
+    }
+}
+
+status_t factory_lifecycle_start(const factory_lifecycle_t *lifecycle)
+{
+    status_t err;
+
+    if (lifecycle == NULL) {
+        return STATUS_INVALID_ARG;
+    }
+
+    if (lifecycle->init != NULL) {
+        err = lifecycle->init();
+        if (err != STATUS_OK) {
+            return err;
+        }
+    }
+
+    if (lifecycle->run != NULL) {
+        lifecycle->run();
+        return STATUS_OK;
+    }
+
+    app_idle_default();
+    return STATUS_OK;
+}
+
+/** GPIO0 长按：下次启动切到当前运行槽的另一槽并复位（长按时长见 `common/src/button.c` 的 `long_press_start_tick`）。 */
+static void app_button_switch_to_other_slot(void)
+{
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    status_t                 st;
+
+    if (run == NULL) {
+        LOG_ERROR("boot slot: no running partition");
+        return;
+    }
+
+    if (run->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) {
+        st = boot_slot_request_factory();
+    } else if (run->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1) {
+        st = boot_slot_request_app_a();
+    } else {
+        LOG_WARN("boot slot: unknown running subtype %u", (unsigned)run->subtype);
+        return;
+    }
+
+    if (st != ESP_OK) {
+        LOG_ERROR("boot slot: esp_ota_set_boot_partition failed: %d", (int)st);
+        return;
+    }
+
+    LOG_INFO("boot slot: next boot -> other slot, reset");
+    boot_slot_system_reset();
+}
+
+static void app_button_notify(btn_id_e id, const char *name, btn_permission_e permission, btn_event_e event)
+{
+    (void)permission;
+    LOG_INFO("key %s (%s): %s", button_id_to_str(id), (name != NULL) ? name : "?", button_event_to_str(event));
+
+    if ((id == BTN_ID_GPIO0) && (event == BTN_EVENT_LONG_PRESS)) {
+        app_button_switch_to_other_slot();
+        return;
+    }
+
+    if (event != BTN_EVENT_SINGLE_CLICK) {
+        return;
+    }
+
+    if (id == BTN_ID_GPIO0) {
+        led_scene_run(LED_SCENE_ID_TRIGGER);
+    } else if (id == BTN_ID_GPIO3) {
+        led_scene_run(LED_SCENE_ID_SUCCESS);
+    }
+}
+
+static void button_scan_task(void *arg)
+{
+    (void)arg;
+    const TickType_t period = pdMS_TO_TICKS(BUTTON_SCAN_PERIOD_MS);
+
+    for (;;) {
+        button_schedule();
+        vTaskDelay(period);
+    }
+}
+
+static status_t app_init_platform(void)
+{
+    if (log_init(NULL) != STATUS_OK) {
+        return STATUS_FAIL;
+    }
+
+    nvs_init();
+
+    if (BoardInit() != STATUS_OK) {
+        LOG_ERROR("BoardInit failed");
+        return STATUS_FAIL;
+    }
+
+    return STATUS_OK;
+}
+
+static status_t app_init_button_io(void)
+{
+    button_init(app_button_notify);
+
+    if (xTaskCreate(button_scan_task, "btn_scan", BTN_SCAN_TASK_STACK_WORDS, NULL,
+                    BTN_SCAN_TASK_PRIORITY, NULL) != pdPASS) {
+        LOG_ERROR("create btn_scan task failed");
+        return STATUS_FAIL;
+    }
+
+    LOG_INFO("buttons: GPIO0 单击=灯效 trigger, GPIO0 长按=切换下次启动槽并复位, GPIO3 单击=灯效 success");
+
+    return STATUS_OK;
+}
+
+static status_t app_init_led_ui(void)
+{
+    status_t err = led_scene_init();
+    if (err != STATUS_OK) {
+        LOG_ERROR("led_scene_init failed: %s", status_to_str(err));
+        return err;
+    }
+
+    err = led_scene_start_update_task();
+    if (err != STATUS_OK) {
+        LOG_ERROR("led_scene_start_update_task failed: %s", status_to_str(err));
+        return err;
+    }
+
+    led_scene_run(LED_SCENE_ID_BOOTUP);
+
+    return STATUS_OK;
+}
+
+static status_t app_init(void)
+{
+    status_t err = app_init_platform();
+    if (err != STATUS_OK) {
+        return err;
+    }
+
+    err = app_init_button_io();
+    if (err != STATUS_OK) {
+        return err;
+    }
+
+    err = app_init_led_ui();
+    if (err != STATUS_OK) {
+        return err;
+    }
+
+    if (cmd_usb_line_service_start() != STATUS_OK) {
+        LOG_WARN("USB factory cmd line not started");
+    }
+
+    return STATUS_OK;
+}
+
+static void app_run(void)
+{
+    char buf[128];
+
+    if (boot_slot_format_status(buf, sizeof(buf)) == STATUS_OK) {
+        LOG_INFO("[factory] %s — 在 main.c 增加厂测项", buf);
+    }
+
+    app_idle_default();
+}
+
+static const factory_lifecycle_t s_factory_lifecycle = {
+    .init = app_init,
+    .run = app_run,
+};
+
+status_t factory_entry(void)
+{
+    return factory_lifecycle_start(&s_factory_lifecycle);
+}

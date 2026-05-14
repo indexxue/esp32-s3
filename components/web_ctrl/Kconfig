@@ -1,0 +1,24 @@
+menu "Web Control Library (web_ctrl)"
+
+    config WEB_CTRL_AUTO_START
+        bool "Auto-start SoftAP + HTTP server after board init"
+        default n
+        help
+            When enabled, application calls web_ctrl_start() with defaults after BoardInit().
+            Default SoftAP SSID is ESP32-WebCtrl; change credentials in menuconfig or in code.
+
+    config WEB_CTRL_CMD_SYNC_TIMEOUT_MS
+        int "POST /api/cmd: max wait for command execution (ms)"
+        default 3000
+        range 500 60000
+        help
+            HTTP handler blocks until the web_ctrl_cmd task finishes cmd_process_line_for_web or times out (504).
+
+    config WEB_CTRL_STA_CONNECT_TIMEOUT_MS
+        int "STA connect wait before SoftAP fallback (ms), strategy A"
+        default 15000
+        range 3000 120000
+        help
+            When NVS has sta_ssid, web_ctrl_start tries STA first and waits this long for DHCP before falling back to SoftAP.
+
+endmenu
