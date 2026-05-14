@@ -22,6 +22,7 @@
 #include "button.h"
 #include "lcd_gallery.h"
 #include "net_wifi.h"
+#include "persist.h"
 
 /* ---------- 可调参数（业务任务） ---------- */
 
@@ -74,9 +75,19 @@ static void application_modules_task(void *arg)
     st7789_t *lcd = BoardSt7789();
 
     if (st7789_is_initialized(lcd) && (sdcard_get_card() != NULL)) {
+        char      boot_name[NVS_LCD_GAL_BOOT_SIZE];
+        uint8_t   start_idx = 0U;
+
         lcd_gallery_rescan();
         if (lcd_gallery_count() > 0U) {
-            (void)lcd_gallery_show_index(lcd, 0U);
+            if (nvs_lcd_gallery_boot_name_get(boot_name, sizeof(boot_name)) && (boot_name[0] != '\0')) {
+                uint8_t fi = lcd_gallery_find_index_by_basename(boot_name);
+
+                if (fi != LCD_GALLERY_INDEX_NONE) {
+                    start_idx = fi;
+                }
+            }
+            (void)lcd_gallery_show_index(lcd, start_idx);
         }
     } else if (sdcard_get_card() == NULL) {
         LOG_WARN("SD gallery: card not mounted, skip scan");

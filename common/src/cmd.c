@@ -8,6 +8,7 @@
 #include "board.h"
 #include "i2c.h"
 #include "lcd.h"
+#include "lcd_gallery.h"
 #include "led_scene.h"
 #include "log.h"
 #include "persist.h"
@@ -643,6 +644,100 @@ static void cmd_lcdbench(int argc, const char *argv[])
     cmd_reply_ok("lcdbench", val);
 }
 
+static void cmd_lcdbmp(int argc, const char *argv[])
+{
+    st7789_t *lcd;
+    status_t  st;
+    const char *path;
+
+    (void)argc;
+    if (argc < 2) {
+        cmd_reply_ng();
+        return;
+    }
+    path = argv[1];
+    lcd  = BoardSt7789();
+
+    if (!st7789_is_initialized(lcd)) {
+        cmd_reply_ok("lcdbmp", "no_lcd");
+        return;
+    }
+    if (sdcard_get_card() == NULL) {
+        cmd_reply_ok("lcdbmp", "no_sd");
+        return;
+    }
+
+    st = lcd_gallery_show_bmp_path(lcd, path);
+    if (st == STATUS_OK) {
+        cmd_reply_ok("lcdbmp", "ok");
+        return;
+    }
+    if (st == STATUS_INVALID_ARG) {
+        cmd_reply_ok("lcdbmp", "bad_bmp");
+        return;
+    }
+    if (st == STATUS_NOT_SUPPORTED) {
+        cmd_reply_ok("lcdbmp", "not_supported");
+        return;
+    }
+    if (st == STATUS_NO_MEM) {
+        cmd_reply_ok("lcdbmp", "no_mem");
+        return;
+    }
+    cmd_reply_ok("lcdbmp", "fail");
+}
+
+static void cmd_lcdshow(int argc, const char *argv[])
+{
+    st7789_t *lcd;
+    status_t  st;
+    const char *path;
+    uint8_t   ix;
+
+    (void)argc;
+    if (argc < 2) {
+        cmd_reply_ng();
+        return;
+    }
+    path = argv[1];
+    lcd  = BoardSt7789();
+
+    if (!st7789_is_initialized(lcd)) {
+        cmd_reply_ok("lcdshow", "no_lcd");
+        return;
+    }
+    if (sdcard_get_card() == NULL) {
+        cmd_reply_ok("lcdshow", "no_sd");
+        return;
+    }
+
+    st = lcd_gallery_show_path(lcd, path);
+    if (st == STATUS_OK) {
+        const char *bn = strrchr(path, '/');
+
+        bn = (bn != NULL) ? (bn + 1) : path;
+        ix = lcd_gallery_find_index_by_basename(bn);
+        if (ix != LCD_GALLERY_INDEX_NONE) {
+            lcd_gallery_set_current_index(ix);
+        }
+        cmd_reply_ok("lcdshow", "ok");
+        return;
+    }
+    if (st == STATUS_INVALID_ARG) {
+        cmd_reply_ok("lcdshow", "bad_file");
+        return;
+    }
+    if (st == STATUS_NOT_SUPPORTED) {
+        cmd_reply_ok("lcdshow", "not_supported");
+        return;
+    }
+    if (st == STATUS_NO_MEM) {
+        cmd_reply_ok("lcdshow", "no_mem");
+        return;
+    }
+    cmd_reply_ok("lcdshow", "fail");
+}
+
 static void cmd_sdtest(int argc, const char *argv[])
 {
     (void)argc;
@@ -1050,6 +1145,8 @@ void cmd_register_defaults(void)
     (void)cmd_register("i2c", cmd_i2c, "scan I2C0..1 (port:addr)");
     (void)cmd_register("version", cmd_version, "app version string from NVS");
     (void)cmd_register("lcdbench", cmd_lcdbench, "ST7789 SPI DMA fill bench [frames 1-200]");
+    (void)cmd_register("lcdbmp", cmd_lcdbmp, "show BMP on LCD: lcdbmp <absolute_path>");
+    (void)cmd_register("lcdshow", cmd_lcdshow, "show BMP or BIN on LCD: lcdshow <absolute_path>");
     (void)cmd_register("sdtest", cmd_sdtest, "SD FAT smoke + DMA throughput log");
     (void)cmd_register("webcfg", cmd_webcfg,
                        "wifi: sta,set,tune then save (need staged_ok)");

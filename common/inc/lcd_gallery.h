@@ -28,6 +28,22 @@ void lcd_gallery_next(void);
 /** 当前索引（0 .. count-1；count 为 0 时为 0）。 */
 uint8_t lcd_gallery_current(void);
 
+/** 校验路径下 BMP 头与字段（BI_RGB 24/32），不刷屏。 */
+status_t lcd_gallery_probe_bmp(const char *path);
+
+/** 全屏显示指定 BMP（与图库 BMP 子集规则一致）；须 LCD 已初始化且 SD 已挂载。 */
+status_t lcd_gallery_show_bmp_path(st7789_t *lcd, const char *path);
+
+/** 全屏显示 SD 上 `.bmp`（BI_RGB）或 `.bin`（RGB565）；与图库规则一致。 */
+status_t lcd_gallery_show_path(st7789_t *lcd, const char *path);
+
+/** 在已扫描列表中按根文件名（不含路径）查找，未找到返回 `LCD_GALLERY_INDEX_NONE`。 */
+#define LCD_GALLERY_INDEX_NONE (0xFFU)
+uint8_t lcd_gallery_find_index_by_basename(const char *basename);
+
+/** 设置当前图库索引（仅按键切图语义；`count==0` 时不修改）。 */
+void lcd_gallery_set_current_index(uint8_t idx);
+
 #ifdef __cplusplus
 }
 #endif

@@ -18,8 +18,8 @@
 /** 记录已挂载 VFS 路径的缓冲区大小（字节，含结尾空字符）。 */
 #define SDCARD_MOUNT_PATH_CAP 32U
 
-/** VFS 同时打开文件数上限。 */
-#define SDCARD_VFS_MAX_OPEN_FILES 5
+/** VFS 同时打开文件数上限（过小会导致网页上传等 `fopen` 报 EMFILE）。 */
+#define SDCARD_VFS_MAX_OPEN_FILES 16
 
 /** FAT 分配单元（字节）；与簇相关，影响格式化与元数据占用。 */
 #define SDCARD_VFS_ALLOCATION_UNIT_BYTES (16U * 1024U)

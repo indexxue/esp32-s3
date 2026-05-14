@@ -32,6 +32,12 @@
 
 #define BMP_MAX_ROW_STRIDE (32768U)
 
+/** 图库条带单次 `DmaMalloc` 字节上限（仍为用整行 RGB565 对齐的倍数）。全板 `BOARD_ST7789_SPI_MAX_TX` 常为 32KiB，
+ *  与 WiFi 等共用 `MALLOC_CAP_DMA` 时易分配失败；缩小条带仅增加 SPI 批次、不改变显示结果。 */
+#ifndef LCD_GALLERY_STRIP_BYTES_MAX
+#define LCD_GALLERY_STRIP_BYTES_MAX (8192U)
+#endif
+
 static char    s_paths[LCD_GALLERY_MAX_FILES][LCD_GALLERY_PATH_MAX];
 static uint8_t s_count;
 static uint8_t s_index;
@@ -50,6 +56,17 @@ static bool path_suffix_icase(const char *path, const char *suf)
         return false;
     }
     return strcasecmp(path + (lp - ls), suf) == 0;
+}
+
+static const char *gallery_path_basename(const char *path)
+{
+    const char *s;
+
+    if (path == NULL) {
+        return "";
+    }
+    s = strrchr(path, '/');
+    return (s != NULL) ? (s + 1) : path;
 }
 
 static bool bin_hdr_valid(const uint8_t *hdr, uint16_t expect_w, uint16_t expect_h)
@@ -81,6 +98,10 @@ static uint32_t rgb565_strip_bytes(uint16_t dst_w)
 {
     uint32_t row_b = (uint32_t)dst_w * 2U;
     uint32_t strip_max = (uint32_t)BOARD_ST7789_SPI_MAX_TX;
+
+    if (strip_max > LCD_GALLERY_STRIP_BYTES_MAX) {
+        strip_max = LCD_GALLERY_STRIP_BYTES_MAX;
+    }
     strip_max = (strip_max / row_b) * row_b;
     if (strip_max == 0U) {
         strip_max = row_b;
@@ -244,10 +265,8 @@ static status_t show_bmp_file(st7789_t *lcd, uint16_t dst_w, uint16_t dst_h, con
     uint32_t       bpp;
     uint32_t       row_stride;
     uint32_t       strip_max;
-    uint8_t       *blk = NULL;
-    uint8_t       *rowb;
-    uint8_t       *stripb;
-    usize_t        blk_sz;
+    uint8_t       *rowb   = NULL;
+    uint8_t       *stripb = NULL;
     uint32_t       y;
     uint32_t       out_used = 0U;
     const uint32_t row_out  = (uint32_t)dst_w * 2U;
@@ -318,18 +337,24 @@ static status_t show_bmp_file(st7789_t *lcd, uint16_t dst_w, uint16_t dst_h, con
     }
 
     strip_max = rgb565_strip_bytes(dst_w);
-    blk_sz    = (usize_t)row_stride + (usize_t)strip_max;
-    blk       = (uint8_t *)DmaMalloc(blk_sz);
-    if (blk == NULL) {
+    /* 源行只需 fread，不必 DMA；条带输出走 SPI，保留 DmaMalloc，避免 row_stride 大时占满 DMA 堆 */
+    rowb = (uint8_t *)malloc((size_t)row_stride);
+    if (rowb == NULL) {
         (void)fclose(fp);
-        LOG_ERROR("lcd_gallery: bmp DmaMalloc %u failed", (unsigned int)blk_sz);
+        LOG_ERROR("lcd_gallery: bmp malloc row %u failed", (unsigned int)row_stride);
         return STATUS_NO_MEM;
     }
-    rowb   = blk;
-    stripb = blk + row_stride;
+    stripb = (uint8_t *)DmaMalloc((usize_t)strip_max);
+    if (stripb == NULL) {
+        free(rowb);
+        (void)fclose(fp);
+        LOG_ERROR("lcd_gallery: bmp DmaMalloc strip %u failed", (unsigned int)strip_max);
+        return STATUS_NO_MEM;
+    }
 
     if (st7789_set_window(lcd, 0U, 0U, (uint16_t)(dst_w - 1U), (uint16_t)(dst_h - 1U)) != ST7789_OK) {
-        DmaFree(blk);
+        DmaFree(stripb);
+        free(rowb);
         (void)fclose(fp);
         return STATUS_FAIL;
     }
@@ -341,7 +366,8 @@ static status_t show_bmp_file(st7789_t *lcd, uint16_t dst_w, uint16_t dst_h, con
         if (out_used + row_out > strip_max) {
             if (st7789_write_pixel_bytes(lcd, stripb, out_used) != ST7789_OK) {
                 st7789_end_write(lcd);
-                DmaFree(blk);
+                DmaFree(stripb);
+                free(rowb);
                 (void)fclose(fp);
                 return STATUS_FAIL;
             }
@@ -352,14 +378,16 @@ static status_t show_bmp_file(st7789_t *lcd, uint16_t dst_w, uint16_t dst_h, con
         pos = (long)offbits + (long)sy * (long)row_stride;
         if (fseek(fp, pos, SEEK_SET) != 0) {
             st7789_end_write(lcd);
-            DmaFree(blk);
+            DmaFree(stripb);
+            free(rowb);
             (void)fclose(fp);
             LOG_WARN("lcd_gallery: bmp fseek fail");
             return STATUS_FAIL;
         }
         if (fread(rowb, 1U, (size_t)row_stride, fp) != (size_t)row_stride) {
             st7789_end_write(lcd);
-            DmaFree(blk);
+            DmaFree(stripb);
+            free(rowb);
             (void)fclose(fp);
             LOG_WARN("lcd_gallery: bmp row fread fail");
             return STATUS_FAIL;
@@ -384,16 +412,183 @@ static status_t show_bmp_file(st7789_t *lcd, uint16_t dst_w, uint16_t dst_h, con
     if (out_used > 0U) {
         if (st7789_write_pixel_bytes(lcd, stripb, out_used) != ST7789_OK) {
             st7789_end_write(lcd);
-            DmaFree(blk);
+            DmaFree(stripb);
+            free(rowb);
             (void)fclose(fp);
             return STATUS_FAIL;
         }
     }
 
     st7789_end_write(lcd);
-    DmaFree(blk);
+    DmaFree(stripb);
+    free(rowb);
     (void)fclose(fp);
     return STATUS_OK;
+}
+
+status_t lcd_gallery_probe_bmp(const char *path)
+{
+    FILE          *fp;
+    uint8_t        file54[54];
+    size_t         got;
+    int32_t        biw;
+    int32_t        bih;
+    uint16_t       planes;
+    uint16_t       bitcount;
+    uint32_t       comp;
+    uint32_t       bmp_w;
+    uint32_t       abs_h;
+    uint32_t       bpp;
+    uint32_t       row_stride;
+
+    if ((path == NULL) || (path[0] == '\0')) {
+        return STATUS_INVALID_ARG;
+    }
+
+    fp = fopen(path, "rb");
+    if (fp == NULL) {
+        LOG_WARN("lcd_gallery: probe fopen %s errno %d", path, (int)errno);
+        return STATUS_FAIL;
+    }
+
+    got = fread(file54, 1U, sizeof(file54), fp);
+    (void)fclose(fp);
+    if (got != sizeof(file54)) {
+        LOG_WARN("lcd_gallery: probe short header %s", path);
+        return STATUS_FAIL;
+    }
+    if ((file54[0] != 0x42U) || (file54[1] != 0x4DU)) {
+        LOG_WARN("lcd_gallery: probe not BM %s", path);
+        return STATUS_FAIL;
+    }
+
+    biw      = (int32_t)((int32_t)file54[18] | ((int32_t)file54[19] << 8) | ((int32_t)file54[20] << 16) | ((int32_t)file54[21] << 24));
+    bih      = (int32_t)((int32_t)file54[22] | ((int32_t)file54[23] << 8) | ((int32_t)file54[24] << 16) | ((int32_t)file54[25] << 24));
+    planes   = (uint16_t)((uint16_t)file54[26] | ((uint16_t)file54[27] << 8));
+    bitcount = (uint16_t)((uint16_t)file54[28] | ((uint16_t)file54[29] << 8));
+    comp     = (uint32_t)file54[30] | ((uint32_t)file54[31] << 8) | ((uint32_t)file54[32] << 16) | ((uint32_t)file54[33] << 24);
+
+    if ((biw <= 0) || (bih == 0)) {
+        LOG_WARN("lcd_gallery: probe invalid dimensions");
+        return STATUS_INVALID_ARG;
+    }
+    if ((planes != 1U) || (comp != 0U)) {
+        LOG_WARN("lcd_gallery: probe only BI_RGB (planes=%u comp=%u)", (unsigned int)planes, (unsigned int)comp);
+        return STATUS_NOT_SUPPORTED;
+    }
+    if ((bitcount != 24U) && (bitcount != 32U)) {
+        LOG_WARN("lcd_gallery: probe bitcount %u", (unsigned int)bitcount);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    bmp_w = (uint32_t)biw;
+    if (bih < 0) {
+        if (bih == INT32_MIN) {
+            return STATUS_INVALID_ARG;
+        }
+        abs_h = (uint32_t)(-bih);
+    } else {
+        abs_h = (uint32_t)bih;
+    }
+    (void)abs_h;
+
+    bpp        = (uint32_t)bitcount / 8U;
+    row_stride = (bmp_w * bpp + 3U) & ~3U;
+    if ((row_stride == 0U) || (row_stride > BMP_MAX_ROW_STRIDE)) {
+        LOG_WARN("lcd_gallery: probe row_stride %u", (unsigned int)row_stride);
+        return STATUS_INVALID_ARG;
+    }
+
+    return STATUS_OK;
+}
+
+status_t lcd_gallery_show_bmp_path(st7789_t *lcd, const char *path)
+{
+    uint16_t dst_w;
+    uint16_t dst_h;
+    status_t st;
+
+    if ((lcd == NULL) || !st7789_is_initialized(lcd)) {
+        return STATUS_INVALID_STATE;
+    }
+    if (sdcard_get_card() == NULL) {
+        return STATUS_INVALID_STATE;
+    }
+    if ((path == NULL) || (path[0] == '\0')) {
+        return STATUS_INVALID_ARG;
+    }
+
+    dst_w = st7789_display_width(lcd);
+    dst_h = st7789_display_height(lcd);
+    if (((uint32_t)dst_w * (uint32_t)dst_h * 2U) != LCD_GALLERY_RGB565_FULL_BYTES) {
+        LOG_ERROR("lcd_gallery: show_bmp_path panel not 240x135 full-frame mode");
+        return STATUS_INVALID_ARG;
+    }
+
+    st = lcd_gallery_probe_bmp(path);
+    if (st != STATUS_OK) {
+        return st;
+    }
+
+    st = show_bmp_file(lcd, dst_w, dst_h, path);
+    if (st == STATUS_OK) {
+        LOG_INFO("lcd_gallery: web/show path %s", path);
+    }
+    return st;
+}
+
+status_t lcd_gallery_show_path(st7789_t *lcd, const char *path)
+{
+    uint16_t dst_w;
+    uint16_t dst_h;
+
+    if ((lcd == NULL) || !st7789_is_initialized(lcd)) {
+        return STATUS_INVALID_STATE;
+    }
+    if (sdcard_get_card() == NULL) {
+        return STATUS_INVALID_STATE;
+    }
+    if ((path == NULL) || (path[0] == '\0')) {
+        return STATUS_INVALID_ARG;
+    }
+
+    dst_w = st7789_display_width(lcd);
+    dst_h = st7789_display_height(lcd);
+    if (((uint32_t)dst_w * (uint32_t)dst_h * 2U) != LCD_GALLERY_RGB565_FULL_BYTES) {
+        LOG_ERROR("lcd_gallery: show_path panel not 240x135 full-frame mode");
+        return STATUS_INVALID_ARG;
+    }
+
+    if (path_suffix_icase(path, ".bmp")) {
+        return lcd_gallery_show_bmp_path(lcd, path);
+    }
+    if (path_suffix_icase(path, ".bin")) {
+        return show_rgb565_bin_file(lcd, dst_w, dst_h, path);
+    }
+    return STATUS_INVALID_ARG;
+}
+
+uint8_t lcd_gallery_find_index_by_basename(const char *basename)
+{
+    uint8_t i;
+
+    if ((basename == NULL) || (basename[0] == '\0') || (s_count == 0U)) {
+        return LCD_GALLERY_INDEX_NONE;
+    }
+    for (i = 0U; i < s_count; i++) {
+        if (strcasecmp(gallery_path_basename(s_paths[i]), basename) == 0) {
+            return i;
+        }
+    }
+    return LCD_GALLERY_INDEX_NONE;
+}
+
+void lcd_gallery_set_current_index(uint8_t idx)
+{
+    if (s_count == 0U) {
+        return;
+    }
+    s_index = (uint8_t)(idx % s_count);
 }
 
 static void gallery_sort_paths(void)

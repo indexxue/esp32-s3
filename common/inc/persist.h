@@ -29,6 +29,8 @@ extern "C" {
 #define NVS_APP_VERSION_SIZE 24
 #define NVS_FACTORY_VERSION_SIZE 24
 #define NVS_REGION_SIZE 8
+/** SD 图库开机默认图：根目录文件名（如 `W01A2B3C.BMP`），与 `lcd_gallery` 扫描名一致。 */
+#define NVS_LCD_GAL_BOOT_SIZE 121
 
 #define NVS_DEFAULT_MAC                                                                                              \
     { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08 }
@@ -138,6 +140,11 @@ bool nvs_web_ctrl_settings_set(const nvs_web_ctrl_settings_t *cfg);
 /** 清空 NVS 中 STA 路由器 SSID/密码，保留 SoftAP/端口等其余字段；写入失败返回 false。 */
 bool nvs_web_ctrl_settings_clear_sta_credentials(void);
 bool nvs_web_ctrl_settings_delete(void);
+
+/** 写入开机默认图文件名（仅 basename）；`name` 为空或 `NULL` 表示清除。 */
+bool nvs_lcd_gallery_boot_name_set(const char *name);
+/** 读取已存的开机默认图文件名；未配置返回 `false` 且 `out[0]` 为 NUL。 */
+bool nvs_lcd_gallery_boot_name_get(char *out, size_t out_cap);
 
 #ifdef __cplusplus
 }

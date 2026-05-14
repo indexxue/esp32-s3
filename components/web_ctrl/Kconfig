@@ -21,4 +21,18 @@ menu "Web Control Library (web_ctrl)"
         help
             When NVS has sta_ssid, web_ctrl_start tries STA first and waits this long for DHCP before falling back to SoftAP.
 
+    config WEB_CTRL_BMP_UPLOAD_MAX
+        int "POST /api/upload/bmp: max multipart body size (bytes)"
+        default 1048576
+        range 65536 8388608
+        help
+            Entire multipart body limit (headers + file + boundaries). BMP payload is typically far smaller.
+
+    config WEB_CTRL_BMP_CMD_TIMEOUT_MS
+        int "After BMP upload: max wait for optional lcdbmp on LCD (ms)"
+        default 25000
+        range 3000 120000
+        help
+            Used only when upload URL query includes display=1 (or on/yes).
+
 endmenu

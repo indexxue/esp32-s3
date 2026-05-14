@@ -14,3 +14,6 @@ factory/sdkconfig.old
 # Component manager (if used)
 project/dependencies.lock
 project/managed_components/
+
+# PyInstaller: LCD 图转工具 Windows 打包中间目录
+tools/build_pyinstaller/

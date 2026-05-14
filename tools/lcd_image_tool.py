@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-LCD 图片可视化转换工具（Tk GUI）
+LCD 图片可视化转换工具（Tk GUI）- 独立单文件版
 
 将 PNG / JPEG / BMP 等常见格式转为：
-  - RGB565 裸 .bin 或带 RGBH 头的 .bin（与 `project/tools/lcd_rgb565_convert.py` 一致）
-  - Windows BI_RGB 24 位 .bmp（自下而上扫描行，供固件 `lcd_gallery` 解码）
-  - 可先旋转 0/90/180/270°（逆时针，Pillow）再按 Fit 缩放到目标横屏分辨率。
+  - RGB565 裸 .bin 或带 RGBH 头的 .bin
+  - Windows BI_RGB 24 位 .bmp（自下而上扫描行）
+  - 可先旋转 0/90/180/270° 再按 Fit 缩放到目标横屏分辨率。
 
-输出目录：与本脚本同级目录（仓库根下 `tools/`）。
+输出目录：与本脚本同级目录。
 输出文件名：短格式 `l{MMDDHHMMSS}_{slug6}.bmp` / `.bin`；非 0° 旋转时中间名带 `_r{角度}`；RGBH 头为 `…h.bin`。
 
-依赖：Pillow（见同目录 `requirements-lcd-image.txt`）；Tk 为 Python 自带（Windows 安装器通常已包含）。
+依赖：Pillow（如未安装会提示并退出）；Tk 为 Python 自带。
+双击运行：脚本所在目录即为输出目录，无需额外文件。
 """
 
 from __future__ import annotations
@@ -20,36 +21,114 @@ import struct
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Tuple
 
-# 复用 project/tools 中的编码与缩放逻辑
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_PROJECT_TOOLS = _REPO_ROOT / "project" / "tools"
-if _PROJECT_TOOLS.is_dir():
-    sys.path.insert(0, str(_PROJECT_TOOLS))
+# ------------------------------------------------------------
+# 内嵌 lcd_rgb565_convert.py 的核心逻辑（不再依赖外部文件）
+# ------------------------------------------------------------
+from PIL import Image
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+def fit_resize_image(im: Image.Image, target_w: int, target_h: int, mode: str = "cover") -> Image.Image:
+    """
+    将图片缩放到目标尺寸，保持宽高比。
+    mode: "cover"   - 裁剪填充（居中裁剪，填满目标）
+          "contain" - 完整容纳（留黑边）
+          "stretch" - 拉伸变形（严格匹配宽高）
+    """
+    if mode == "stretch":
+        return im.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
-# 预览区逻辑尺寸（约 240:135）；实际像素随窗口 Configure 更新
-_PREVIEW_BASE_W = 360
-_PREVIEW_BASE_H = int(round(_PREVIEW_BASE_W * 135 / 240))
+    orig_w, orig_h = im.size
+    target_ratio = target_w / target_h
+    orig_ratio = orig_w / orig_h
 
+    if mode == "cover":
+        # 缩放使得至少一个维度填满，然后居中裁剪
+        if orig_ratio > target_ratio:
+            # 原图更宽，按高度缩放
+            scale = target_h / orig_h
+            new_w = int(round(orig_w * scale))
+            new_h = target_h
+            resized = im.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            # 裁剪宽度
+            crop_x = (new_w - target_w) // 2
+            return resized.crop((crop_x, 0, crop_x + target_w, target_h))
+        else:
+            scale = target_w / orig_w
+            new_w = target_w
+            new_h = int(round(orig_h * scale))
+            resized = im.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            crop_y = (new_h - target_h) // 2
+            return resized.crop((0, crop_y, target_w, crop_y + target_h))
 
-def apply_rotation_deg(im, deg: int):
+    else:  # "contain" - 完整包含，留黑边
+        scale = min(target_w / orig_w, target_h / orig_h)
+        new_w = int(round(orig_w * scale))
+        new_h = int(round(orig_h * scale))
+        resized = im.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        # 创建黑色背景
+        bg = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+        offset_x = (target_w - new_w) // 2
+        offset_y = (target_h - new_h) // 2
+        bg.paste(resized, (offset_x, offset_y))
+        return bg
+
+def image_to_rgb565_bytes(
+    im: Image.Image,
+    order: str = "row",
+    swap_rb: bool = True,
+) -> bytes:
+    """
+    将 RGB 图片转换为 RGB565 字节流。
+    order: "row"    - 行优先（先存完整第0行，再第1行...）
+           "column" - 列优先（先存完整第0列，再第1列...）
+    swap_rb: True  - 输出 BGR565 顺序（MADCTL_BGR 模式）
+             False - 输出 RGB565 顺序
+    """
+    if im.mode != "RGB":
+        im = im.convert("RGB")
+    w, h = im.size
+    pixels = im.load()
+    # 预分配字节数组 (每个像素2字节)
+    data = bytearray(w * h * 2)
+    idx = 0
+    if order == "row":
+        for y in range(h):
+            for x in range(w):
+                r, g, b = pixels[x, y]
+                if swap_rb:
+                    r, b = b, r
+                rgb565 = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+                data[idx] = (rgb565 >> 8) & 0xFF
+                data[idx + 1] = rgb565 & 0xFF
+                idx += 2
+    else:  # column
+        for x in range(w):
+            for y in range(h):
+                r, g, b = pixels[x, y]
+                if swap_rb:
+                    r, b = b, r
+                rgb565 = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+                data[idx] = (rgb565 >> 8) & 0xFF
+                data[idx + 1] = rgb565 & 0xFF
+                idx += 2
+    return bytes(data)
+
+# ------------------------------------------------------------
+# 工具函数
+# ------------------------------------------------------------
+def apply_rotation_deg(im: Image.Image, deg: int) -> Image.Image:
     """在 Fit 缩放之前旋转整图。deg 为 Pillow 约定：正数 = 逆时针；expand 便于竖图转横构图。"""
-    from PIL import Image
-
     d = int(deg) % 360
     if d == 0:
         return im
     return im.rotate(d, expand=True, resample=Image.Resampling.BICUBIC, fillcolor=(0, 0, 0))
-
 
 def _slug_from_stem(stem: str, max_len: int = 6) -> str:
     s = re.sub(r"[^0-9A-Za-z]+", "", stem).lower()
     if not s:
         s = "x"
     return s[:max_len]
-
 
 def _build_output_basename(*, stem: str, kind: str, rotate_deg: int = 0) -> str:
     """短文件名；rotate_deg≠0 时插入 `_r{角度}` 便于区分横竖处理。"""
@@ -63,8 +142,7 @@ def _build_output_basename(*, stem: str, kind: str, rotate_deg: int = 0) -> str:
         return f"l{mid}h.bin"
     return f"l{mid}.bin"
 
-
-def write_bmp24_bottom_up(path: Path, rgb_img) -> None:
+def write_bmp24_bottom_up(path: Path, rgb_img: Image.Image) -> None:
     """RGB 图写入标准 BMP，24 位 BI_RGB，自下而上（与常见 BMP 一致，固件按正高度解析）。"""
     if rgb_img.mode != "RGB":
         rgb_img = rgb_img.convert("RGB")
@@ -104,6 +182,11 @@ def write_bmp24_bottom_up(path: Path, rgb_img) -> None:
     )
     path.write_bytes(file_hdr + dib + bytes(pixel_bytes))
 
+# ------------------------------------------------------------
+# GUI 应用类
+# ------------------------------------------------------------
+PREVIEW_BASE_W = 360
+PREVIEW_BASE_H = int(round(PREVIEW_BASE_W * 135 / 240))
 
 class LcdImageToolApp:
     def __init__(self) -> None:
@@ -116,14 +199,21 @@ class LcdImageToolApp:
         self._ttk = ttk
 
         self.root = tk.Tk()
-        self.root.title("LCD 图片转换 — 输出 tools/")
+        self.root.title("LCD 图片转换 — 输出脚本所在目录")
         self.root.minsize(480, 520)
+        # 窗口居中
+        self.root.update_idletasks()
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        x = (self.root.winfo_screenwidth() // 2) - (w // 2)
+        y = (self.root.winfo_screenheight() // 2) - (h // 2)
+        self.root.geometry(f"+{x}+{y}")
 
         self.src_path: Path | None = None
         self._preview_ref = None
         self._preview_job: str | None = None
-        self._preview_cw = _PREVIEW_BASE_W
-        self._preview_ch = _PREVIEW_BASE_H
+        self._preview_cw = PREVIEW_BASE_W
+        self._preview_ch = PREVIEW_BASE_H
 
         frm = ttk.Frame(self.root, padding=10)
         frm.pack(fill=tk.BOTH, expand=True)
@@ -138,8 +228,8 @@ class LcdImageToolApp:
         prev_fr.columnconfigure(0, weight=1)
         self.canvas = tk.Canvas(
             prev_fr,
-            width=_PREVIEW_BASE_W,
-            height=_PREVIEW_BASE_H,
+            width=PREVIEW_BASE_W,
+            height=PREVIEW_BASE_H,
             bg="#1e1e1e",
             highlightthickness=1,
             highlightbackground="#444",
@@ -226,6 +316,7 @@ class LcdImageToolApp:
 
         self._draw_preview_placeholder()
 
+    # ---------- 预览相关 ----------
     def _on_preview_configure(self, event) -> None:
         if event.widget is not self.canvas:
             return
@@ -259,10 +350,10 @@ class LcdImageToolApp:
         )
 
     def _log(self, msg: str) -> None:
-        self.txt_log.configure(state=tk.NORMAL)
+        self.txt_log.configure(state=self._tk.NORMAL)
         self.txt_log.insert(self._tk.END, msg + "\n")
         self.txt_log.see(self._tk.END)
-        self.txt_log.configure(state=tk.DISABLED)
+        self.txt_log.configure(state=self._tk.DISABLED)
 
     def _pick_file(self) -> None:
         p = self._filedialog.askopenfilename(
@@ -290,14 +381,12 @@ class LcdImageToolApp:
 
         try:
             from PIL import Image, ImageTk
-
-            from lcd_rgb565_convert import fit_resize_image, image_to_rgb565_bytes
         except ImportError as e:
             tk = self._tk
             cw = max(80, int(self.canvas.winfo_width() or self._preview_cw))
             ch = max(60, int(self.canvas.winfo_height() or self._preview_ch))
             self.canvas.create_text(
-                cw // 2, ch // 2, text=f"缺少依赖:\n{e}", fill="#c44", font=("", 10), justify=tk.CENTER
+                cw // 2, ch // 2, text=f"缺少 Pillow 库:\n{e}\n请运行: pip install Pillow", fill="#c44", font=("", 10), justify=tk.CENTER
             )
             return
 
@@ -382,18 +471,17 @@ class LcdImageToolApp:
         self._preview_ref = ImageTk.PhotoImage(thumb)
         self.canvas.create_image(cw // 2, ch // 2, image=self._preview_ref)
 
+    # ---------- 转换 ----------
     def _convert(self) -> None:
         if self.src_path is None or not self.src_path.is_file():
             self._messagebox.showwarning("提示", "请先选择图片文件。")
             return
         try:
             from PIL import Image
-
-            from lcd_rgb565_convert import fit_resize_image, image_to_rgb565_bytes
         except ImportError:
             self._messagebox.showerror(
                 "缺少依赖",
-                "请安装 Pillow，例如：\n  python -m pip install -r tools/requirements-lcd-image.txt",
+                "请安装 Pillow 库：\n  pip install Pillow\n然后重新运行本工具。"
             )
             return
 
@@ -422,8 +510,10 @@ class LcdImageToolApp:
         im = apply_rotation_deg(im, rot_deg)
         resized = fit_resize_image(im, tw, th, fit)
 
+        # 输出目录：脚本所在目录
+        script_dir = Path(__file__).resolve().parent
         base = _build_output_basename(stem=self.src_path.stem, kind=out_kind, rotate_deg=rot_deg)
-        out_path = SCRIPT_DIR / base
+        out_path = script_dir / base
 
         try:
             if out_kind == "bmp24":
@@ -447,28 +537,55 @@ class LcdImageToolApp:
             self._log(f"[ERR] {e}")
             return
 
-        self._messagebox.showinfo("完成", f"已保存:\n{out_path.name}\n目录: {SCRIPT_DIR}")
+        self._messagebox.showinfo("完成", f"已保存:\n{out_path.name}\n目录: {script_dir}")
         self._log(f"完整路径: {out_path}")
 
     def run(self) -> None:
         self.root.mainloop()
 
-
+# ------------------------------------------------------------
+# 入口
+# ------------------------------------------------------------
 def main() -> int:
+    # 检查 tkinter
     try:
-        import tkinter as tk  # noqa: F401
+        import tkinter as tk
     except ImportError:
         print("当前 Python 未包含 tkinter，无法启动 GUI。", file=sys.stderr)
         print("Windows：请勾选安装器的 tcl/tk；或换用带 Tk 的 Python。", file=sys.stderr)
+        input("按回车键退出...")
         return 1
 
-    if not _PROJECT_TOOLS.is_dir():
-        print(f"未找到 {_PROJECT_TOOLS}，请在仓库根目录运行本脚本。", file=sys.stderr)
+    # 检查 Pillow
+    try:
+        from PIL import Image
+    except ImportError:
+        root = tk.Tk()
+        root.withdraw()  # 隐藏主窗口
+        from tkinter import messagebox
+        messagebox.showerror(
+            "缺少依赖",
+            "未找到 Pillow 库。\n\n请打开命令提示符（cmd）并运行：\n    pip install Pillow\n\n然后重新双击本脚本。"
+        )
+        root.destroy()
         return 2
 
-    LcdImageToolApp().run()
+    # 启动 GUI（异常统一捕获）
+    try:
+        app = LcdImageToolApp()
+        app.run()
+    except Exception as e:
+        # 捕获未预料的异常，弹窗显示
+        import traceback
+        error_msg = f"程序运行出错：\n{str(e)}\n\n详细：\n{traceback.format_exc()}"
+        try:
+            from tkinter import messagebox
+            messagebox.showerror("错误", error_msg)
+        except:
+            print(error_msg, file=sys.stderr)
+            input("按回车键退出...")
+        return 3
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

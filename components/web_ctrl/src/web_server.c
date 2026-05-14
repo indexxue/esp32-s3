@@ -19,6 +19,7 @@
 #include "esp_log.h"
 
 #include "web_ctrl_cmd.h"
+#include "web_bmp_upload.h"
 
 #include "cmd.h"
 
@@ -88,6 +89,15 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         ".modal-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}"
         ".scan-h{font-size:.8rem;color:var(--muted);min-height:1.2em}"
         ".cmd-row{display:flex;gap:8px;flex-wrap:wrap}.cmd-row .inp{flex:1;min-width:200px}"
+        ".gal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(136px,1fr));gap:12px;margin-top:8px}"
+        ".gal-item{background:#0d1218;border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center}"
+        ".gal-item img{max-width:100%;max-height:96px;object-fit:contain;border-radius:4px;background:rgba(0,0,0,.15);display:block;margin:0 auto}"
+        ".gal-ph{height:96px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.85rem}"
+        ".gal-item .nm{font-size:.72rem;color:var(--muted);word-break:break-all;margin:8px 0 4px;line-height:1.3}"
+        ".gal-item .gal-by{font-size:.68rem;color:var(--muted)}"
+        ".gal-actions{display:flex;flex-direction:column;gap:6px;margin-top:10px}"
+        ".gal-actions .btn{padding:6px 8px;font-size:.74rem;width:100%}"
+        ".gal-tag{font-size:.65rem;color:var(--ok);margin-top:2px;text-align:center}"
         "</style></head><body><div class='wrap'>"
         "<header class='top'><h1>设备控制</h1><p>网络配网与串口命令（与 USB <code>cmd</code> 一致）</p></header>"
         "<section class='card' id='card-wifi'>"
@@ -115,7 +125,23 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<div class='card-b'><div class='cmd-row'>"
         "<input class='inp' id='l' type='text' value='version' placeholder='输入命令，例如 version'/>"
         "<button type='button' class='btn btn-primary' id='btn-run' onclick='run()'>执行</button></div>"
-        "<pre class='log' id='o' hidden></pre></div></section></div>"
+        "<pre class='log' id='o' hidden></pre></div></section>"
+        "<section class='card' id='card-bmp'>"
+        "<div class='card-h'><h2>BMP 上传</h2></div>"
+        "<div class='card-b'>"
+        "<p class='hint' style='margin-top:0'>选择 BI_RGB 无压缩 24/32 位 BMP；每次上传保存为 SD 根目录下唯一短文件名（如 <code>W01A2B3C.BMP</code>，FAT 8.3）。可勾选上传后在 LCD 全屏显示。</p>"
+        "<div class='field'><label for='bf'>图片文件</label><input class='inp' id='bf' type='file' accept='.bmp,image/bmp'/></div>"
+        "<label class='row' style='cursor:pointer'><input type='checkbox' id='lcdisp'/> <span>上传后在 LCD 显示</span></label>"
+        "<div class='row' style='margin-top:12px'>"
+        "<button type='button' class='btn btn-primary' id='btn-up-bmp' onclick='uploadBmp()'>上传</button></div>"
+        "<pre class='log' id='bo' hidden></pre></div></section>"
+        "<section class='card' id='card-gal'><div class='card-h'><h2>SD 图库</h2><div class='row'>"
+        "<button type='button' class='btn btn-ghost' id='btn-gal-refresh' onclick='loadGallery()'>刷新列表</button>"
+        "<button type='button' class='btn btn-ghost' id='btn-gal-clear-boot' onclick='clearGalBoot()'>清除开机默认</button></div></div>"
+        "<div class='card-b'><p class='hint' style='margin-top:0'>根目录下 .bmp / .bin（与 LCD 图库相同，最多 24 个）。"
+        "<strong>LCD 显示</strong>立即全屏出图；<strong>设为开机默认</strong>写入 NVS，下次上电优先显示该文件（须仍在卡上）。</p>"
+        "<div id='gal-h' class='scan-h'>加载中…</div><div class='gal-grid' id='gal-grid'></div>"
+        "<pre class='log' id='gl' hidden></pre></div></section></div>"
         "<div class='modal-wrap' id='modal-disconnect' role='dialog' aria-modal='true'>"
         "<div class='modal'><h3>确认清除 Wi‑Fi？</h3>"
         "<p>将断开 STA、删除已保存的路由器账号并立即重启。此页面会暂时无法访问。</p>"
@@ -125,7 +151,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "</div></div></div>"
         "<script>"
         "function esc(t){return String(t===undefined||t===null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;');}"
-        "function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-run','btn-disconnect','modal-confirm-dc'].forEach(function(id){"
+        "function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-run','btn-up-bmp','btn-gal-refresh','btn-gal-clear-boot','btn-disconnect','modal-confirm-dc'].forEach(function(id){"
         "var el=document.getElementById(id);if(el)el.disabled=b;});}"
         "function showLog(id,txt,show){var el=document.getElementById(id);if(!el)return;if(!txt){el.hidden=true;el.textContent='';return;}"
         "el.hidden=!show;el.textContent=txt;}"
@@ -193,9 +219,85 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "}catch(e){showLog('o',String(e),true);}"
         "finally{setBusy(false);}"
         "}"
+        "async function uploadBmp(){"
+        "var inp=document.getElementById('bf');var f=inp&&inp.files&&inp.files[0];"
+        "if(!f){showLog('bo','请先选择 .bmp 文件',true);return;}"
+        "var q=document.getElementById('lcdisp')&&document.getElementById('lcdisp').checked?'?display=1':'';"
+        "var fd=new FormData();fd.append('file',f);"
+        "showLog('bo','上传中…',true);setBusy(true);"
+        "try{"
+        "var r=await fetch('/api/upload/bmp'+q,{method:'POST',body:fd});"
+        "var t=await r.text();"
+        "showLog('bo',r.status+' '+t,true);"
+        "if(r.ok){try{var j=JSON.parse(t);if(j.ok)loadGallery();}catch(x){}}"
+        "}catch(e){showLog('bo',String(e),true);}"
+        "finally{setBusy(false);}"
+        "}"
+        "function galFmtBytes(n){if(typeof n!=='number')return'';if(n>=1048576)return(n/1048576).toFixed(1)+' MB';"
+        "if(n>=1024)return(n/1024).toFixed(1)+' KB';return n+' B';}"
+        "var sGalBoot='';"
+        "async function loadGallery(){"
+        "var g=document.getElementById('gal-grid'),h=document.getElementById('gal-h');"
+        "if(!g||!h)return;showLog('gl','',false);h.textContent='加载中…';g.innerHTML='';"
+        "try{"
+        "var ra=await Promise.all([fetch('/api/gallery/list'),fetch('/api/gallery/prefs')]);"
+        "var j=await ra[0].json();var pj=await ra[1].json();"
+        "sGalBoot=(pj&&pj.ok&&pj.boot_name)?String(pj.boot_name):'';"
+        "if(!j.ok){h.textContent='';showLog('gl',JSON.stringify(j),true);return;}"
+        "var fs=j.files||[];"
+        "h.textContent=fs.length?('共 '+fs.length+' 个文件'+(sGalBoot?('；开机默认：'+sGalBoot):'；未设开机默认（上电首张）')):('暂无 .bmp / .bin');"
+        "fs.forEach(function(f){"
+        "var d=document.createElement('div');d.className='gal-item';"
+        "if(f.kind==='bmp'){var im=document.createElement('img');im.alt=f.name;im.loading='lazy';"
+        "im.src='/api/gallery/bmp?name='+encodeURIComponent(f.name);d.appendChild(im);}"
+        "else{var ph=document.createElement('div');ph.className='gal-ph';ph.textContent='BIN';d.appendChild(ph);}"
+        "var nm=document.createElement('div');nm.className='nm';nm.textContent=f.name;d.appendChild(nm);"
+        "var by=document.createElement('div');by.className='gal-by';by.textContent=galFmtBytes(f.bytes);d.appendChild(by);"
+        "var act=document.createElement('div');act.className='gal-actions';"
+        "var bLcd=document.createElement('button');bLcd.type='button';bLcd.className='btn btn-primary';bLcd.textContent='LCD 显示';"
+        "bLcd.onclick=function(){showGalOnLcd(f.name);};act.appendChild(bLcd);"
+        "var bBoot=document.createElement('button');bBoot.type='button';bBoot.className='btn btn-ghost';bBoot.textContent='设为开机默认';"
+        "bBoot.onclick=function(){setGalBootDefault(f.name);};act.appendChild(bBoot);"
+        "if(sGalBoot===f.name){var tg=document.createElement('div');tg.className='gal-tag';tg.textContent='当前开机默认';act.appendChild(tg);}"
+        "d.appendChild(act);"
+        "var del=document.createElement('button');del.type='button';del.className='btn btn-danger';"
+        "del.style.cssText='margin-top:8px;width:100%;padding:7px;font-size:.78rem';del.textContent='删除';"
+        "del.onclick=function(){delGalFile(f.name);};d.appendChild(del);g.appendChild(d);});"
+        "}catch(e){h.textContent='';showLog('gl',String(e),true);}"
+        "}"
+        "async function showGalOnLcd(name){"
+        "showLog('gl','',false);setBusy(true);"
+        "try{var r=await fetch('/api/gallery/show?name='+encodeURIComponent(name),{method:'POST'});"
+        "var t=await r.text();showLog('gl',r.status+' '+t,true);}"
+        "catch(e){showLog('gl',String(e),true);}"
+        "finally{setBusy(false);}"
+        "}"
+        "async function setGalBootDefault(name){"
+        "showLog('gl','',false);setBusy(true);"
+        "try{var r=await fetch('/api/gallery/prefs?boot_name='+encodeURIComponent(name),{method:'POST'});"
+        "var t=await r.text();showLog('gl',r.status+' '+t,true);await loadGallery();}"
+        "catch(e){showLog('gl',String(e),true);}"
+        "finally{setBusy(false);}"
+        "}"
+        "async function clearGalBoot(){"
+        "if(!confirm('清除开机默认图？下次上电将显示排序后的第一张。'))return;"
+        "showLog('gl','',false);setBusy(true);"
+        "try{var r=await fetch('/api/gallery/prefs?boot_name=',{method:'POST'});"
+        "var t=await r.text();showLog('gl',r.status+' '+t,true);await loadGallery();}"
+        "catch(e){showLog('gl',String(e),true);}"
+        "finally{setBusy(false);}"
+        "}"
+        "async function delGalFile(name){"
+        "if(!confirm('确定删除「'+name+'」？不可恢复。'))return;"
+        "showLog('gl','',false);setBusy(true);"
+        "try{var r=await fetch('/api/gallery/delete?name='+encodeURIComponent(name),{method:'POST'});"
+        "var t=await r.text();showLog('gl',r.status+' '+t,true);await loadGallery();}"
+        "catch(e){showLog('gl',String(e),true);}"
+        "finally{setBusy(false);}"
+        "}"
         "document.getElementById('modal-disconnect').addEventListener('click',function(ev){"
         "if(ev.target.id==='modal-disconnect')closeDisconnectModal();});"
-        "refreshStatus();setInterval(refreshStatus,2500);"
+        "refreshStatus();loadGallery();setInterval(refreshStatus,2500);"
         "</script></body></html>";
 
     (void)httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -421,7 +523,7 @@ esp_err_t web_server_start(uint16_t port)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = (port == 0U) ? 80U : port;
     /* 默认 8 槽：`web_server` 3 个 + `web_ctrl_wifi_api` 7 个会溢出，须加大。 */
-    config.max_uri_handlers = 16U;
+    config.max_uri_handlers = 24U;
     /* 默认栈 4096：`wifi_scan_result_get_handler` 等单帧 JSON 约 4KB，会栈溢出破坏 httpd 会话表。 */
     config.stack_size = 12288U;
 
@@ -470,6 +572,14 @@ esp_err_t web_server_start(uint16_t port)
     err = httpd_register_uri_handler(s_server, &uri_cmd);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "register /api/cmd failed: %s", esp_err_to_name(err));
+        (void)httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = web_bmp_upload_register(s_server);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register /api/upload/bmp failed: %s", esp_err_to_name(err));
         (void)httpd_stop(s_server);
         s_server = NULL;
         return err;

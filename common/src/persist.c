@@ -28,6 +28,7 @@ static const char *const TAG = "persist";
 #define NVS_KEY_BUZZ_DUR "buzz_dur"
 #define NVS_KEY_ATT_LEVEL "att_lvl"
 #define NVS_KEY_WEB_CTRL "web_ctrl"
+#define NVS_KEY_LCD_GAL_BOOT "lcd_gal_boot"
 
 nvs_ctx_t g_nvs_handle;
 
@@ -491,6 +492,40 @@ bool nvs_region_get(char *region)
         region[NVS_REGION_SIZE - 1U] = '\0';
         return true;
     }
+    return false;
+}
+
+bool nvs_lcd_gallery_boot_name_set(const char *name)
+{
+    nvs_status_t st;
+
+    if (!g_nvs_handle.initialized) {
+        return false;
+    }
+    if ((name == NULL) || (name[0] == '\0')) {
+        st = nvs_delete(&g_nvs_handle, NVS_KEY_LCD_GAL_BOOT);
+        return (st == NVS_OK) || (st == NVS_ERROR_NOT_FOUND);
+    }
+    if (strlen(name) >= NVS_LCD_GAL_BOOT_SIZE) {
+        LOG_ERROR("NVS: lcd_gal_boot name too long");
+        return false;
+    }
+    return (nvs_set(&g_nvs_handle, NVS_KEY_LCD_GAL_BOOT, name, strlen(name) + 1U) == NVS_OK);
+}
+
+bool nvs_lcd_gallery_boot_name_get(char *out, size_t out_cap)
+{
+    size_t len;
+
+    if (!g_nvs_handle.initialized || (out == NULL) || (out_cap == 0U)) {
+        return false;
+    }
+    len = out_cap;
+    if (nvs_get(&g_nvs_handle, NVS_KEY_LCD_GAL_BOOT, out, &len) == NVS_OK) {
+        out[out_cap - 1U] = '\0';
+        return true;
+    }
+    out[0] = '\0';
     return false;
 }
 
