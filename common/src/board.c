@@ -228,6 +228,30 @@ static status_t board_st7789_init(void)
     }
 }
 
+#if BOARD_I2C_BUS1_SCAN_ON_BOOT
+static void board_i2c1_scan_device_cb(void *user_ctx, u16_t address7bit)
+{
+    (void)user_ctx;
+    LOG_INFO("I2C1 scan: ACK at 7-bit addr 0x%02X", (unsigned int)address7bit);
+}
+
+static void board_i2c_bus1_scan_log(void)
+{
+    u16_t n;
+
+    LOG_INFO("I2C1 scan: port %d SDA=GPIO%d SCL=GPIO%d, range 0x08..0x77",
+             (int)BOARD_I2C_BUS1_HW_PORT,
+             (int)BOARD_I2C_BUS1_PIN_SDA,
+             (int)BOARD_I2C_BUS1_PIN_SCL);
+    n = I2cScanBus7Bit((s32_t)BOARD_I2C_BUS1_HW_PORT, board_i2c1_scan_device_cb, NULL);
+    if (n == 0U) {
+        LOG_WARN("I2C1 scan: no device responded (check wiring / pull-ups / bus power)");
+    } else {
+        LOG_INFO("I2C1 scan: total %u device(s)", (unsigned int)n);
+    }
+}
+#endif
+
 static status_t board_init_i2c(void)
 {
     I2cDriverConfig_t bus1Cfg = {0};
@@ -266,6 +290,10 @@ static status_t board_init_i2c(void)
                   (int)I2cGetLastError());
         return STATUS_FAIL;
     }
+
+#if BOARD_I2C_BUS1_SCAN_ON_BOOT
+    board_i2c_bus1_scan_log();
+#endif
 
     qmiCfg.port = BOARD_I2C_QMI8658A_PORT;
     qmiCfg.deviceAddress7bit = BOARD_I2C_QMI8658A_ADDR;

@@ -27,6 +27,14 @@
 #define BOARD_I2C_MAX_DEVICES (8U)
 #define BOARD_I2C_GLITCH_IGNORE (7U)
 
+/**
+ * 上电后对 I²C1（GPIO4/5）做 7-bit 地址扫描 0x08..0x77 并打日志。
+ * 量产可编译前 `#define BOARD_I2C_BUS1_SCAN_ON_BOOT 0` 关闭以缩短启动时间。
+ */
+#ifndef BOARD_I2C_BUS1_SCAN_ON_BOOT
+#define BOARD_I2C_BUS1_SCAN_ON_BOOT (1)
+#endif
+
 /** QMI8658A：接在 I2C2 上，7-bit 地址 0x6A（SA0 接 GND 时常用）。 */
 #define BOARD_I2C_QMI8658A_PORT BOARD_I2C_BUS2_HW_PORT
 #define BOARD_I2C_QMI8658A_ADDR (0x6AU)

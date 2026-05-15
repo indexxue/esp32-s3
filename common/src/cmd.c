@@ -462,6 +462,87 @@ static void cmd_led(int argc, const char *argv[])
     cmd_reply_ng();
 }
 
+static bool ledfx_name_to_id(const char *name, led_scene_id_e *out_id)
+{
+    static const struct
+    {
+        const char     *n;
+        led_scene_id_e id;
+    } map[] = {
+        {"bootup", LED_SCENE_ID_BOOTUP},
+        {"pairing", LED_SCENE_ID_PAIRING},
+        {"trigger", LED_SCENE_ID_TRIGGER},
+        {"error", LED_SCENE_ID_ERROR},
+        {"success", LED_SCENE_ID_SUCCESS},
+        {"net_offline", LED_SCENE_ID_NET_OFFLINE},
+        {"working", LED_SCENE_ID_WORKING},
+        {"alarm", LED_SCENE_ID_ALARM},
+        {"net_online", LED_SCENE_ID_NET_ONLINE},
+        {"config", LED_SCENE_ID_CONFIG},
+        {"charging", LED_SCENE_ID_CHARGING},
+        {"low_battery", LED_SCENE_ID_LOW_BATTERY},
+    };
+
+    if ((name == NULL) || (out_id == NULL)) {
+        return false;
+    }
+    for (size_t i = 0U; i < (sizeof(map) / sizeof(map[0])); i++) {
+        if (strcmp(name, map[i].n) == 0) {
+            *out_id = map[i].id;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void cmd_ledfx(int argc, const char *argv[])
+{
+    if (argc < 2) {
+        cmd_reply_ng();
+        return;
+    }
+    if (strcmp(argv[1], "run") == 0) {
+        led_scene_id_e id;
+
+        if (argc < 3) {
+            cmd_reply_ng();
+            return;
+        }
+        if (!ledfx_name_to_id(argv[2], &id)) {
+            cmd_reply_ng();
+            return;
+        }
+        led_scene_run(id);
+        cmd_reply_ok("ledfx", "ok");
+        return;
+    }
+    if (strcmp(argv[1], "cancel") == 0) {
+        if (argc < 3) {
+            cmd_reply_ng();
+            return;
+        }
+        if (strcmp(argv[2], "all") == 0) {
+            for (unsigned i = 0U; i < (unsigned)LED_SCENE_ID_MAX_NUM; i++) {
+                led_scene_cancel((led_scene_id_e)i);
+            }
+            cmd_reply_ok("ledfx", "ok");
+            return;
+        }
+        {
+            led_scene_id_e id;
+
+            if (!ledfx_name_to_id(argv[2], &id)) {
+                cmd_reply_ng();
+                return;
+            }
+            led_scene_cancel(id);
+            cmd_reply_ok("ledfx", "ok");
+        }
+        return;
+    }
+    cmd_reply_ng();
+}
+
 static void cmd_reboot(int argc, const char *argv[])
 {
     (void)argc;
@@ -1137,6 +1218,9 @@ void cmd_register_defaults(void)
     (void)cmd_register("devtype", cmd_devtype, "read device type byte");
     (void)cmd_register("mac", cmd_mac, "get/set mac blob (set: 8 decimal digits)");
     (void)cmd_register("led", cmd_led, "led r|b|all on|off");
+    (void)cmd_register("ledfx", cmd_ledfx,
+                       "ledfx run|cancel <scene>|all (scene: bootup pairing trigger error success net_offline working "
+                       "alarm net_online config charging low_battery)");
     (void)cmd_register("reboot", cmd_reboot, "software reset");
     (void)cmd_register("boot_a", cmd_boot_a, "next boot app_a (ota_0) + reset");
     (void)cmd_register("boot_b", cmd_boot_b, "next boot app_b (ota_1) + reset");
