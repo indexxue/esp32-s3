@@ -23,6 +23,7 @@
 
 #include "lwip/sockets.h"
 
+#include "battery.h"
 #include "net_wifi.h"
 #include "persist.h"
 
@@ -215,16 +216,32 @@ static const char *net_mode_to_str(net_wifi_mode_t m)
 
 static esp_err_t wifi_status_get_handler(httpd_req_t *req)
 {
-    char                 json[420];
+    char                 json[512];
     char                 ipbuf[20];
     const net_wifi_mode_t m = net_wifi_get_mode();
     int                   n;
+    battery_info_t        bi;
+    battery_voltage_t     bv;
+    bool_t                bat_ok;
 
     (void)net_wifi_format_ipv4_for_display(ipbuf, sizeof(ipbuf));
-    n = snprintf(json, sizeof(json),
-                 "{\"ok\":true,\"mode\":\"%s\",\"wifi_started\":%s,\"sta_has_ip\":%s,\"softap\":%s,\"ip\":\"%s\"}",
-                 net_mode_to_str(m), net_wifi_is_started() ? "true" : "false",
-                 net_wifi_sta_has_ipv4() ? "true" : "false", net_wifi_is_softap_mode() ? "true" : "false", ipbuf);
+
+    bat_ok = battery_percent_update();
+    if ((bat_ok != FALSE) && (battery_info_read(&bi, &bv) != FALSE)) {
+        n = snprintf(json, sizeof(json),
+                     "{\"ok\":true,\"mode\":\"%s\",\"wifi_started\":%s,\"sta_has_ip\":%s,\"softap\":%s,\"ip\":\"%s\","
+                     "\"battery\":{\"valid\":true,\"percent\":%u,\"mv\":%u,\"charging\":%s,\"level\":%u}}",
+                     net_mode_to_str(m), net_wifi_is_started() ? "true" : "false",
+                     net_wifi_sta_has_ipv4() ? "true" : "false", net_wifi_is_softap_mode() ? "true" : "false", ipbuf,
+                     (unsigned int)bi.percent, (unsigned int)bv.current_mv, (bi.charging != FALSE) ? "true" : "false",
+                     (unsigned int)bi.level);
+    } else {
+        n = snprintf(json, sizeof(json),
+                     "{\"ok\":true,\"mode\":\"%s\",\"wifi_started\":%s,\"sta_has_ip\":%s,\"softap\":%s,\"ip\":\"%s\","
+                     "\"battery\":{\"valid\":false}}",
+                     net_mode_to_str(m), net_wifi_is_started() ? "true" : "false",
+                     net_wifi_sta_has_ipv4() ? "true" : "false", net_wifi_is_softap_mode() ? "true" : "false", ipbuf);
+    }
     if ((n <= 0) || ((size_t)n >= sizeof(json))) {
         (void)httpd_resp_set_status(req, "500 Internal Server Error");
         (void)httpd_resp_set_type(req, "application/json");

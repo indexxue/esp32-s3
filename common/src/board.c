@@ -1,5 +1,7 @@
 #include "board.h"
 
+#include "battery.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -290,6 +292,8 @@ status_t BoardInit(void)
     if (board_st7789_init() != STATUS_OK) {
         return STATUS_FAIL;
     }
+
+    battery_init();
 
     if (board_qmi8658_init() != STATUS_OK) {
         return STATUS_FAIL;

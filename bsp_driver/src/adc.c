@@ -1,10 +1,23 @@
 #include "adc.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
+
+/**
+ * 无 efuse/曲线校准时，`adc_oneshot_read` 得到的是码值而非 mV。
+ * 在 ADC_ATTEN_DB_12、12bit 量程下，用约 3100mV 满量程做线性近似（与 IDF 文档量级一致，略差于校准）。
+ */
+static int adc_uncali_raw_to_mv_db12(int raw)
+{
+    if (raw < 0) {
+        raw = 0;
+    }
+    return (int)(((int64_t)raw * 3100) / 4095);
+}
 
 static bool_t s_adcDriverInited = FALSE;
 static adc_unit_t s_adcUnit = ADC_UNIT_1;
@@ -268,7 +281,7 @@ bool_t AdcReadVoltageMv(AdcChannel_t channel, s32_t *voltageMv)
         }
         *voltageMv = (s32_t)voltage;
     } else {
-        *voltageMv = (s32_t)raw;
+        *voltageMv = (s32_t)adc_uncali_raw_to_mv_db12(raw);
     }
 
     return adcSetLastErr(ESP_OK);

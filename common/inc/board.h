@@ -67,6 +67,13 @@
 #define BOARD_SDCARD_HOST_FLAGS_EXTRA (0U)
 #define BOARD_SDCARD_MOUNT_POINT "/sdcard"
 
+/**
+ * 锂电池分压采样：GPIO6 高电平使能分压/采样电路；GPIO1 接 ADC（ESP32-S3 ADC1_CH0）。
+ * 默认与 STM32 工程一致为 100K+100K 分压时，电池电压 Vbat = 2 * Vadc。
+ */
+#define BOARD_BATTERY_PIN_ENABLE (6)
+#define BOARD_BATTERY_PIN_ADC (1)
+
 /** IO4 呼吸灯 PWM 频率（与 BoardInit 中配置一致） */
 #define BOARD_IO4_PWM_FREQ_HZ (5000U)
 

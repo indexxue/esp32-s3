@@ -10,6 +10,7 @@ idf_component_register(
         "src/lcd_gallery.c"
         "src/persist.c"
         "src/boot_slot.c"
+        "src/battery.c"
         "src/cmd.c"
     INCLUDE_DIRS "inc"
     REQUIRES log bsp_driver cbb freertos fatfs vfs esp_driver_sdmmc esp_timer sdmmc nvs_flash app_update
