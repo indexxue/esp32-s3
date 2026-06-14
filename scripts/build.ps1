@@ -28,6 +28,14 @@ if (-not (Test-Path $ninjaBin)) { Write-Error "Missing Ninja tools path: $ninjaB
 $env:IDF_PATH = $idfPath
 $env:IDF_TOOLS_PATH = Join-Path $repoRoot "Espressif"
 $env:IDF_PYTHON_ENV_PATH = Split-Path $idfPython -Parent | Split-Path -Parent
+
+Push-Location $idfPath
+try {
+    . (Join-Path $idfPath "export.ps1")
+} finally {
+    Pop-Location
+}
+
 $env:PATH = "$cmakeBin;$ninjaBin;$env:PATH"
 
 . (Join-Path $PSScriptRoot "IdfSizeSummary.ps1")
@@ -37,6 +45,15 @@ Write-Host "Using Python : $idfPython"
 Write-Host "Action       : $Action"
 if ($ShowSize -and $Action -eq "build") {
     Write-Host "ShowSize     : yes ($ShowSizeLevel after build)"
+}
+
+$sdkconfig = Join-Path $projectPath "sdkconfig"
+if ((-not (Test-Path $sdkconfig)) -and (($Action -eq "build") -or ($Action -eq "reconfigure"))) {
+    Write-Host "No sdkconfig: idf.py set-target esp32s3 (once)"
+    & $idfPython $idfPy -C $projectPath set-target esp32s3
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "set-target esp32s3 failed with exit code $LASTEXITCODE"
+    }
 }
 
 $sizeOnlyActions = @("size", "size-components", "size-files")
