@@ -11,3 +11,6 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../flash_partition/partitions_16m_n16r8.
 
 # Auto-start SoftAP + HTTP after BoardInit (see components/web_ctrl/README.md).
 CONFIG_WEB_CTRL_AUTO_START=y
+
+# BoardInit + web_ctrl_start() run on app_main before other tasks; 3584 B was too tight.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

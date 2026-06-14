@@ -128,6 +128,8 @@ status_t led_scene_start_update_task(void);
 
 void led_scene_update(void);
 void led_scene_run(led_scene_id_e id);
+/** 停止其它场景并强制显示 id（网页预览等，不受优先级抢占） */
+void led_scene_run_force(led_scene_id_e id);
 void led_scene_cancel(led_scene_id_e id);
 void led_scene_led_direct_set(led_scene_led_e led, bool on);
 

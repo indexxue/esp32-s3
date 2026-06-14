@@ -660,6 +660,27 @@ void led_scene_led_direct_set(led_scene_led_e led, bool on)
     (void)ws2812b_refresh(dev);
 }
 
+static void led_scene_reset_state(led_scene_state_t *state, const led_scene_t *scene)
+{
+    state->running = true;
+    state->current_cycle = 0;
+    state->current_action = 0;
+    state->action_cycle = 0;
+    state->action_time = 0;
+    state->rainbow_hue = 0;
+    state->current_rgb.r = 0;
+    state->current_rgb.g = 0;
+    state->current_rgb.b = 0;
+    if (scene != NULL && scene->num > 0U)
+    {
+        const led_scene_action_t *first = &scene->action[0];
+        if (first->type == ACTION_FADE)
+        {
+            state->current_rgb = first->sub.fade.start_value;
+        }
+    }
+}
+
 void led_scene_run(led_scene_id_e id)
 {
     if (id >= LED_SCENE_ID_MAX_NUM)
@@ -685,15 +706,7 @@ void led_scene_run(led_scene_id_e id)
         return;
     }
 
-    state->running = true;
-    state->current_cycle = 0;
-    state->current_action = 0;
-    state->action_cycle = 0;
-    state->action_time = 0;
-    state->rainbow_hue = 0;
-    state->current_rgb.r = 0;
-    state->current_rgb.g = 0;
-    state->current_rgb.b = 0;
+    led_scene_reset_state(state, scene);
 
     led_scene_id_e new_scene = led_scene_find_highest_priority();
     if (new_scene != self.active_scene)
@@ -707,21 +720,38 @@ void led_scene_run(led_scene_id_e id)
 
     if (self.active_scene < LED_SCENE_ID_MAX_NUM)
     {
-        led_scene_state_t *active_state = &self.states[self.active_scene];
-        active_state->current_cycle = 0;
-        active_state->current_action = 0;
-        active_state->action_cycle = 0;
-        active_state->action_time = 0;
-        active_state->rainbow_hue = 0;
-        active_state->current_rgb.r = 0;
-        active_state->current_rgb.g = 0;
-        active_state->current_rgb.b = 0;
-        const led_scene_action_t *first = &scene_table[self.active_scene].scene->action[0];
-        if (first->type == ACTION_FADE)
+        led_scene_reset_state(&self.states[self.active_scene], scene_table[self.active_scene].scene);
+    }
+}
+
+void led_scene_run_force(led_scene_id_e id)
+{
+    if (id >= LED_SCENE_ID_MAX_NUM)
+    {
+        return;
+    }
+
+    if (!self.initialized)
+    {
+        return;
+    }
+
+    const led_scene_t *scene = scene_table[id].scene;
+    if (scene == NULL)
+    {
+        return;
+    }
+
+    for (uint8_t i = 0; i < LED_SCENE_ID_MAX_NUM; i++)
+    {
+        if (i != id)
         {
-            active_state->current_rgb = first->sub.fade.start_value;
+            self.states[i].running = false;
         }
     }
+
+    self.active_scene = id;
+    led_scene_reset_state(&self.states[id], scene);
 }
 
 void led_scene_cancel(led_scene_id_e id)

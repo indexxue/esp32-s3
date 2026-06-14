@@ -495,13 +495,21 @@ static bool ledfx_name_to_id(const char *name, led_scene_id_e *out_id)
     return false;
 }
 
+static void cmd_ledfx_switch(led_scene_id_e id)
+{
+    for (unsigned i = 0U; i < (unsigned)LED_SCENE_ID_MAX_NUM; i++) {
+        led_scene_cancel((led_scene_id_e)i);
+    }
+    led_scene_run_force(id);
+}
+
 static void cmd_ledfx(int argc, const char *argv[])
 {
     if (argc < 2) {
         cmd_reply_ng();
         return;
     }
-    if (strcmp(argv[1], "run") == 0) {
+    if (strcmp(argv[1], "switch") == 0) {
         led_scene_id_e id;
 
         if (argc < 3) {
@@ -512,7 +520,30 @@ static void cmd_ledfx(int argc, const char *argv[])
             cmd_reply_ng();
             return;
         }
-        led_scene_run(id);
+        cmd_ledfx_switch(id);
+        cmd_reply_ok("ledfx", "ok");
+        return;
+    }
+    if (strcmp(argv[1], "run") == 0) {
+        led_scene_id_e id;
+        bool force = false;
+
+        if (argc < 3) {
+            cmd_reply_ng();
+            return;
+        }
+        if (!ledfx_name_to_id(argv[2], &id)) {
+            cmd_reply_ng();
+            return;
+        }
+        if ((argc >= 4) && (strcmp(argv[3], "force") == 0)) {
+            force = true;
+        }
+        if (force) {
+            led_scene_run_force(id);
+        } else {
+            led_scene_run(id);
+        }
         cmd_reply_ok("ledfx", "ok");
         return;
     }
@@ -1219,7 +1250,7 @@ void cmd_register_defaults(void)
     (void)cmd_register("mac", cmd_mac, "get/set mac blob (set: 8 decimal digits)");
     (void)cmd_register("led", cmd_led, "led r|b|all on|off");
     (void)cmd_register("ledfx", cmd_ledfx,
-                       "ledfx run|cancel <scene>|all (scene: bootup pairing trigger error success net_offline working "
+                       "ledfx run|switch|cancel <scene>|all [force] (scene: bootup pairing trigger error success net_offline working "
                        "alarm net_online config charging low_battery)");
     (void)cmd_register("reboot", cmd_reboot, "software reset");
     (void)cmd_register("boot_a", cmd_boot_a, "next boot app_a (ota_0) + reset");
