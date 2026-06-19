@@ -5,8 +5,7 @@
  * 传感器驱动仍在 cbb，本模块仅做数学与滤波，不移动 cbb 源码。
  */
 
-#ifndef COMMON_ATTITUDE_H
-#define COMMON_ATTITUDE_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -53,5 +52,3 @@ float attitude_fused_pitch_deg(const attitude_complementary_deg_t *st);
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* COMMON_ATTITUDE_H */

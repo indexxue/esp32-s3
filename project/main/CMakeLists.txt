@@ -6,6 +6,7 @@ idf_component_register(
         "source/attitude.c"
         "source/lcd_gallery.c"
         "source/lcd_video.c"
+        "source/cmd_lcd_media.c"
     INCLUDE_DIRS "." "source"
     EMBED_FILES "source/www/index.html"
     REQUIRES cbb common bsp_driver esp_timer app_update web_ctrl esp_new_jpeg

@@ -19,8 +19,6 @@
 #include "esp_log.h"
 
 #include "web_ctrl_cmd.h"
-#include "web_bmp_upload.h"
-#include "web_video.h"
 
 #include "cmd.h"
 
@@ -304,22 +302,6 @@ esp_err_t web_server_start(uint16_t port, web_root_handler_fn root_get_handler)
     err = httpd_register_uri_handler(s_server, &uri_cmd);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "register /api/cmd failed: %s", esp_err_to_name(err));
-        (void)httpd_stop(s_server);
-        s_server = NULL;
-        return err;
-    }
-
-    err = web_bmp_upload_register(s_server);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "register /api/upload/bmp failed: %s", esp_err_to_name(err));
-        (void)httpd_stop(s_server);
-        s_server = NULL;
-        return err;
-    }
-
-    err = web_video_register(s_server);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "register video API failed: %s", esp_err_to_name(err));
         (void)httpd_stop(s_server);
         s_server = NULL;
         return err;

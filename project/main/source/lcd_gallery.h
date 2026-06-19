@@ -2,8 +2,8 @@
  * @file lcd_gallery.h
  * @brief SD 卡全屏图库：扫描 `.bin`（RGB565）与 `.bmp`（BI_RGB 24/32 位），切换与显示。
  */
-#ifndef COMMON_LCD_GALLERY_H
-#define COMMON_LCD_GALLERY_H
+
+#pragma once
 
 #include "type.h"
 
@@ -67,5 +67,3 @@ bool lcd_gallery_take_pending_show(char *path_out, size_t path_cap);
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* COMMON_LCD_GALLERY_H */

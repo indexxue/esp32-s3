@@ -2,8 +2,8 @@
  * @file lcd_video.h
  * @brief SD 卡 MJPEG-in-AVI 视频播放（240×135 RGB565 条带推屏）。
  */
-#ifndef COMMON_LCD_VIDEO_H
-#define COMMON_LCD_VIDEO_H
+
+#pragma once
 
 #include "type.h"
 
@@ -76,5 +76,3 @@ status_t lcd_video_read_first_jpeg(const char *path, uint8_t *buf, size_t buf_ca
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* COMMON_LCD_VIDEO_H */

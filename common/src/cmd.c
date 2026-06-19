@@ -8,8 +8,6 @@
 #include "board.h"
 #include "i2c.h"
 #include "lcd.h"
-#include "lcd_gallery.h"
-#include "lcd_video.h"
 #include "led_scene.h"
 #include "log.h"
 #include "persist.h"
@@ -37,6 +35,8 @@ static int s_cmd_count;
 static SemaphoreHandle_t s_uart_mutex;
 static TaskHandle_t s_reader_task;
 static cmd_web_capture_t *s_web_capture;
+static void (*s_project_register_fn)(void);
+static bool s_project_register_done;
 /** 当前行原始文本（`trim_and_tokenize` 前，保留 SSID/密码大小写），供 `webcfg` 解析。 */
 static char s_cmd_raw_line[CMD_LINE_MAX];
 
@@ -758,98 +758,18 @@ static void cmd_lcdbench(int argc, const char *argv[])
     cmd_reply_ok("lcdbench", val);
 }
 
-static void cmd_lcdbmp(int argc, const char *argv[])
+void cmd_set_project_register_fn(void (*fn)(void))
 {
-    st7789_t *lcd;
-    status_t  st;
-    const char *path;
-
-    (void)argc;
-    if (argc < 2) {
-        cmd_reply_ng();
-        return;
-    }
-    path = argv[1];
-    lcd  = BoardSt7789();
-
-    if (!st7789_is_initialized(lcd)) {
-        cmd_reply_ok("lcdbmp", "no_lcd");
-        return;
-    }
-    if (sdcard_get_card() == NULL) {
-        cmd_reply_ok("lcdbmp", "no_sd");
-        return;
-    }
-
-    st = lcd_gallery_show_bmp_path(lcd, path);
-    if (st == STATUS_OK) {
-        cmd_reply_ok("lcdbmp", "ok");
-        return;
-    }
-    if (st == STATUS_INVALID_ARG) {
-        cmd_reply_ok("lcdbmp", "bad_bmp");
-        return;
-    }
-    if (st == STATUS_NOT_SUPPORTED) {
-        cmd_reply_ok("lcdbmp", "not_supported");
-        return;
-    }
-    if (st == STATUS_NO_MEM) {
-        cmd_reply_ok("lcdbmp", "no_mem");
-        return;
-    }
-    cmd_reply_ok("lcdbmp", "fail");
+    s_project_register_fn = fn;
 }
 
-static void cmd_lcdshow(int argc, const char *argv[])
+static void cmd_invoke_project_register_once(void)
 {
-    st7789_t *lcd;
-    status_t  st;
-    const char *path;
-    uint8_t   ix;
-
-    (void)argc;
-    if (argc < 2) {
-        cmd_reply_ng();
+    if (s_project_register_done || (s_project_register_fn == NULL)) {
         return;
     }
-    path = argv[1];
-    lcd  = BoardSt7789();
-
-    if (!st7789_is_initialized(lcd)) {
-        cmd_reply_ok("lcdshow", "no_lcd");
-        return;
-    }
-    if (sdcard_get_card() == NULL) {
-        cmd_reply_ok("lcdshow", "no_sd");
-        return;
-    }
-
-    st = lcd_gallery_show_path(lcd, path);
-    if (st == STATUS_OK) {
-        const char *bn = strrchr(path, '/');
-
-        bn = (bn != NULL) ? (bn + 1) : path;
-        ix = lcd_gallery_find_index_by_basename(bn);
-        if (ix != LCD_GALLERY_INDEX_NONE) {
-            lcd_gallery_set_current_index(ix);
-        }
-        cmd_reply_ok("lcdshow", "ok");
-        return;
-    }
-    if (st == STATUS_INVALID_ARG) {
-        cmd_reply_ok("lcdshow", "bad_file");
-        return;
-    }
-    if (st == STATUS_NOT_SUPPORTED) {
-        cmd_reply_ok("lcdshow", "not_supported");
-        return;
-    }
-    if (st == STATUS_NO_MEM) {
-        cmd_reply_ok("lcdshow", "no_mem");
-        return;
-    }
-    cmd_reply_ok("lcdshow", "fail");
+    s_project_register_fn();
+    s_project_register_done = true;
 }
 
 static void cmd_mem(int argc, const char *argv[])
@@ -862,122 +782,6 @@ static void cmd_mem(int argc, const char *argv[])
                    (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                    (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cmd_reply_ok("mem", val);
-}
-
-static void cmd_videolist(int argc, const char *argv[])
-{
-    char val[CMD_STATUS_BUF_SIZE];
-    int  n;
-
-    (void)argc;
-    (void)argv;
-
-    if (sdcard_get_card() == NULL) {
-        cmd_reply_ok("video", "no_sd");
-        return;
-    }
-    (void)lcd_video_scan();
-    n = (int)lcd_video_count();
-    if (n <= 0) {
-        cmd_reply_ok("video", "empty");
-        return;
-    }
-    val[0] = '\0';
-    for (int i = 0; i < n; i++) {
-        char path[320];
-        const char *bn;
-
-        if (lcd_video_path_at((uint8_t)i, path, sizeof(path)) != STATUS_OK) {
-            continue;
-        }
-        bn = strrchr(path, '/');
-        bn = (bn != NULL) ? (bn + 1) : path;
-        if (val[0] != '\0') {
-            (void)strncat(val, ",", sizeof(val) - strlen(val) - 1U);
-        }
-        (void)strncat(val, bn, sizeof(val) - strlen(val) - 1U);
-    }
-    cmd_reply_ok("video", val);
-}
-
-static void cmd_videoplay(int argc, const char *argv[])
-{
-    if (argc < 2) {
-        cmd_reply_ng();
-        return;
-    }
-    if (sdcard_get_card() == NULL) {
-        cmd_reply_ok("video", "no_sd");
-        return;
-    }
-    if (!lcd_video_post_play_path(argv[1])) {
-        cmd_reply_ok("video", "busy");
-        return;
-    }
-    cmd_reply_ok("video", "queued");
-}
-
-static void cmd_videoplay_i(int argc, const char *argv[])
-{
-    long ix;
-
-    if (argc < 2) {
-        cmd_reply_ng();
-        return;
-    }
-    if (sdcard_get_card() == NULL) {
-        cmd_reply_ok("video", "no_sd");
-        return;
-    }
-    ix = strtol(argv[1], NULL, 10);
-    if ((ix < 0) || (ix > 255)) {
-        cmd_reply_ok("video", "bad_idx");
-        return;
-    }
-    if (!lcd_video_post_play_index((uint8_t)ix)) {
-        cmd_reply_ok("video", "busy");
-        return;
-    }
-    cmd_reply_ok("video", "queued");
-}
-
-static void cmd_videostop(int argc, const char *argv[])
-{
-    (void)argc;
-    (void)argv;
-    lcd_video_request_stop();
-    cmd_reply_ok("video", "stop");
-}
-
-static void cmd_videobench(int argc, const char *argv[])
-{
-    const char *path;
-    uint32_t    frames = 100U;
-
-    if (argc < 2) {
-        cmd_reply_ng();
-        return;
-    }
-    path = argv[1];
-    if (argc >= 3) {
-        long n = strtol(argv[2], NULL, 10);
-        if ((n > 0) && (n <= 10000)) {
-            frames = (uint32_t)n;
-        }
-    }
-    if (sdcard_get_card() == NULL) {
-        cmd_reply_ok("video", "no_sd");
-        return;
-    }
-    if (!BoardSt7789() || !st7789_is_initialized(BoardSt7789())) {
-        cmd_reply_ok("video", "no_lcd");
-        return;
-    }
-    if (!lcd_video_post_benchmark(path, frames)) {
-        cmd_reply_ok("video", "busy");
-        return;
-    }
-    cmd_reply_ok("video", "bench_queued");
 }
 
 static void cmd_sdtest(int argc, const char *argv[])
@@ -1390,14 +1194,7 @@ void cmd_register_defaults(void)
     (void)cmd_register("i2c", cmd_i2c, "scan I2C0..1 (port:addr)");
     (void)cmd_register("version", cmd_version, "app version string from NVS");
     (void)cmd_register("lcdbench", cmd_lcdbench, "ST7789 SPI DMA fill bench [frames 1-200]");
-    (void)cmd_register("lcdbmp", cmd_lcdbmp, "show BMP on LCD: lcdbmp <absolute_path>");
-    (void)cmd_register("lcdshow", cmd_lcdshow, "show BMP or BIN on LCD: lcdshow <absolute_path>");
     (void)cmd_register("mem", cmd_mem, "free heap: internal + SPIRAM bytes");
-    (void)cmd_register("video", cmd_videolist, "list videos under /sdcard/videos");
-    (void)cmd_register("videoplay", cmd_videoplay, "queue play: videoplay <name|path>");
-    (void)cmd_register("videoplay_i", cmd_videoplay_i, "queue play by index: videoplay_i <n>");
-    (void)cmd_register("videostop", cmd_videostop, "request stop video playback");
-    (void)cmd_register("videobench", cmd_videobench, "FPS bench: videobench <name|path> [frames]");
     (void)cmd_register("sdtest", cmd_sdtest, "SD FAT smoke + DMA throughput log");
     (void)cmd_register("webcfg", cmd_webcfg,
                        "wifi: sta,set,tune then save (need staged_ok)");
@@ -1410,6 +1207,7 @@ void cmd_embed_register_defaults_if_needed(void)
     }
     cmd_init(cmd_write_discard, NULL);
     cmd_register_defaults();
+    cmd_invoke_project_register_once();
 }
 
 #define CMD_READER_STACK_WORDS (4096U)
@@ -1462,6 +1260,7 @@ status_t cmd_usb_line_service_start(void)
     }
     cmd_init(cmd_write_usb, NULL);
     cmd_register_defaults();
+    cmd_invoke_project_register_once();
     if (xTaskCreate(cmd_reader_task, "cmd_usb", CMD_READER_STACK_WORDS, NULL, CMD_READER_PRIORITY, &s_reader_task) !=
         pdPASS) {
         LOG_ERROR("cmd: create reader task failed");

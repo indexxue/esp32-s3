@@ -73,6 +73,9 @@ void cmd_embed_register_defaults_if_needed(void);
 
 void cmd_register_defaults(void);
 
+/** 应用层在 `cmd_register_defaults` 之后追加注册的回调（可 NULL，仅注册一次）。 */
+void cmd_set_project_register_fn(void (*fn)(void));
+
 void cmd_uart_lock(void);
 
 void cmd_uart_unlock(void);

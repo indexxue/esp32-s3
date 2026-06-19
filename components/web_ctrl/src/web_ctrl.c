@@ -176,6 +176,28 @@ start_http_stack:
             return err;
         }
 
+        if (cfg.gallery_http_register != NULL) {
+            err = cfg.gallery_http_register(web_server_get_handle());
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "gallery HTTP register failed: %s", esp_err_to_name(err));
+                (void)web_server_stop();
+                (void)web_ctrl_cmd_stop();
+                (void)net_wifi_stop();
+                return err;
+            }
+        }
+
+        if (cfg.video_http_register != NULL) {
+            err = cfg.video_http_register(web_server_get_handle());
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "video HTTP register failed: %s", esp_err_to_name(err));
+                (void)web_server_stop();
+                (void)web_ctrl_cmd_stop();
+                (void)net_wifi_stop();
+                return err;
+            }
+        }
+
         err = web_ctrl_wifi_api_register(web_server_get_handle());
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "web_ctrl_wifi_api_register failed: %s", esp_err_to_name(err));
