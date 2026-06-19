@@ -168,7 +168,7 @@ start_http_stack:
             return err;
         }
 
-        err = web_server_start(port);
+        err = web_server_start(port, cfg.root_get_handler);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "web_server_start failed, stopping Wi-Fi: %s", esp_err_to_name(err));
             (void)web_ctrl_cmd_stop();

@@ -20,6 +20,8 @@ typedef struct {
     net_wifi_config_t wifi;
     /** HTTP 监听端口；0 表示默认 80。 */
     uint16_t http_port;
+    /** 应用层 `GET /` 页面处理器；`NULL` 则不注册根路径（仅 REST API）。 */
+    web_root_handler_fn root_get_handler;
 } web_ctrl_config_t;
 
 void web_ctrl_config_init_defaults(web_ctrl_config_t *cfg);
