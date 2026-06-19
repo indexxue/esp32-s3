@@ -3,6 +3,7 @@ idf_component_register(
         "src/net_wifi.c"
         "src/web_ctrl_cmd.c"
         "src/web_bmp_upload.c"
+        "src/web_video.c"
         "src/web_server.c"
         "src/web_ctrl_wifi_api.c"
         "src/web_ctrl.c"

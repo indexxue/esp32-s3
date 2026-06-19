@@ -21,13 +21,16 @@
 #include "sdcard.h"
 #include "st7789.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #define LCD_GALLERY_RGB565_FULL_BYTES (64800U)
 #define LCD_GALLERY_BIN_HDR_BYTES     (16U)
 #define LCD_GALLERY_HDR_FLAG_ORDER_COLUMN (1u << 0u)
 
 #define LCD_GALLERY_MAX_FILES (24U)
 
-/** `BOARD_SDCARD_MOUNT_POINT` + `/` + 长文件名（VFAT LFN 常见上限 255）+ 余量 */
+/** `BOARD_SDCARD_MOUNT_POINT` + `/picture/` + 长文件名（VFAT LFN 常见上限 255）+ 余量 */
 #define LCD_GALLERY_PATH_MAX (320U)
 
 #define BMP_MAX_ROW_STRIDE (32768U)
@@ -41,6 +44,27 @@
 static char    s_paths[LCD_GALLERY_MAX_FILES][LCD_GALLERY_PATH_MAX];
 static uint8_t s_count;
 static uint8_t s_index;
+
+static SemaphoreHandle_t s_show_mutex;
+static bool              s_show_pending;
+static char              s_show_path[LCD_GALLERY_PATH_MAX];
+
+const char *lcd_gallery_dir_path(void)
+{
+    static char s_dir[64];
+
+    (void)snprintf(s_dir, sizeof(s_dir), "%s%s", BOARD_SDCARD_MOUNT_POINT, LCD_GALLERY_DIR_SUFFIX);
+    return s_dir;
+}
+
+static void gallery_ensure_dir(void)
+{
+    struct stat st;
+
+    if (stat(lcd_gallery_dir_path(), &st) != 0) {
+        (void)mkdir(lcd_gallery_dir_path(), 0755);
+    }
+}
 
 static bool path_suffix_icase(const char *path, const char *suf)
 {
@@ -591,6 +615,106 @@ void lcd_gallery_set_current_index(uint8_t idx)
     s_index = (uint8_t)(idx % s_count);
 }
 
+static void gallery_show_pending_init_once(void)
+{
+    if (s_show_mutex == NULL) {
+        s_show_mutex = xSemaphoreCreateMutex();
+    }
+}
+
+static status_t gallery_resolve_show_path(const char *path_in, char *path_out, size_t out_cap)
+{
+    struct stat st;
+
+    if ((path_in == NULL) || (path_out == NULL) || (out_cap == 0U)) {
+        return STATUS_INVALID_ARG;
+    }
+    if (path_in[0] == '/') {
+        (void)snprintf(path_out, out_cap, "%s", path_in);
+    } else {
+        (void)snprintf(path_out, out_cap, "%s/%s", lcd_gallery_dir_path(), path_in);
+    }
+    if (stat(path_out, &st) != 0) {
+        const char *bn = gallery_path_basename(path_in);
+
+        (void)snprintf(path_out, out_cap, "%s/%s", lcd_gallery_dir_path(), bn);
+    }
+    if (stat(path_out, &st) != 0) {
+        return STATUS_FAIL;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        return STATUS_INVALID_ARG;
+    }
+    return STATUS_OK;
+}
+
+bool lcd_gallery_post_show_path(const char *path)
+{
+    char resolved[LCD_GALLERY_PATH_MAX];
+
+    gallery_show_pending_init_once();
+    if ((path == NULL) || (path[0] == '\0')) {
+        return false;
+    }
+    if (gallery_resolve_show_path(path, resolved, sizeof(resolved)) != STATUS_OK) {
+        return false;
+    }
+    if (s_show_mutex == NULL) {
+        return false;
+    }
+    if (xSemaphoreTake(s_show_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+    s_show_pending = true;
+    (void)snprintf(s_show_path, sizeof(s_show_path), "%s", resolved);
+    xSemaphoreGive(s_show_mutex);
+    return true;
+}
+
+bool lcd_gallery_post_show_name(const char *name)
+{
+    if ((name == NULL) || (name[0] == '\0')) {
+        return false;
+    }
+    return lcd_gallery_post_show_path(name);
+}
+
+bool lcd_gallery_peek_pending_show(void)
+{
+    bool pending;
+
+    gallery_show_pending_init_once();
+    if (s_show_mutex == NULL) {
+        return false;
+    }
+    if (xSemaphoreTake(s_show_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return false;
+    }
+    pending = s_show_pending;
+    xSemaphoreGive(s_show_mutex);
+    return pending;
+}
+
+bool lcd_gallery_take_pending_show(char *path_out, size_t path_cap)
+{
+    gallery_show_pending_init_once();
+    if ((path_out == NULL) || (path_cap == 0U) || (s_show_mutex == NULL)) {
+        return false;
+    }
+    if (xSemaphoreTake(s_show_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return false;
+    }
+    if (!s_show_pending) {
+        xSemaphoreGive(s_show_mutex);
+        return false;
+    }
+    (void)snprintf(path_out, path_cap, "%s", s_show_path);
+    s_show_pending  = false;
+    s_show_path[0]  = '\0';
+    xSemaphoreGive(s_show_mutex);
+    return true;
+}
+
 static void gallery_sort_paths(void)
 {
     uint8_t i;
@@ -612,15 +736,18 @@ void lcd_gallery_rescan(void)
 {
     DIR           *dir;
     struct dirent *ent;
+    const char    *gdir = lcd_gallery_dir_path();
 
     s_count = 0U;
     if (sdcard_get_card() == NULL) {
         return;
     }
 
-    dir = opendir(BOARD_SDCARD_MOUNT_POINT);
+    gallery_ensure_dir();
+
+    dir = opendir(gdir);
     if (dir == NULL) {
-        LOG_WARN("lcd_gallery: opendir %s failed errno %d", BOARD_SDCARD_MOUNT_POINT, (int)errno);
+        LOG_WARN("lcd_gallery: opendir %s failed errno %d", gdir, (int)errno);
         return;
     }
 
@@ -639,7 +766,7 @@ void lcd_gallery_rescan(void)
         if (s_count >= LCD_GALLERY_MAX_FILES) {
             break;
         }
-        (void)snprintf(s_paths[s_count], sizeof(s_paths[s_count]), "%s/%s", BOARD_SDCARD_MOUNT_POINT, ent->d_name);
+        (void)snprintf(s_paths[s_count], sizeof(s_paths[s_count]), "%s/%s", gdir, ent->d_name);
         if (stat(s_paths[s_count], &st) != 0) {
             continue;
         }
@@ -655,9 +782,9 @@ void lcd_gallery_rescan(void)
         if (s_index >= s_count) {
             s_index = 0U;
         }
-        LOG_INFO("lcd_gallery: %u files under %s", (unsigned int)s_count, BOARD_SDCARD_MOUNT_POINT);
+        LOG_INFO("lcd_gallery: %u files under %s", (unsigned int)s_count, gdir);
     } else {
-        LOG_WARN("lcd_gallery: no .bin/.bmp under %s", BOARD_SDCARD_MOUNT_POINT);
+        LOG_WARN("lcd_gallery: no .bin/.bmp under %s", gdir);
     }
 }
 

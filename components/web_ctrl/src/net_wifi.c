@@ -239,14 +239,12 @@ static esp_err_t start_softap(const net_wifi_config_t *cfg)
     }
 
     wifi_config_t wifi_config = {0};
-    (void)strncpy((char *)wifi_config.ap.ssid, cfg->softap_ssid, sizeof(wifi_config.ap.ssid) - 1U);
-    wifi_config.ap.ssid[sizeof(wifi_config.ap.ssid) - 1U] = '\0';
+    (void)snprintf((char *)wifi_config.ap.ssid, sizeof(wifi_config.ap.ssid), "%.31s", cfg->softap_ssid);
     wifi_config.ap.ssid_len = (uint8_t)strnlen((const char *)wifi_config.ap.ssid, sizeof(wifi_config.ap.ssid));
 
     const size_t pass_len = strnlen(cfg->softap_password, sizeof(cfg->softap_password));
     if (pass_len >= k_softap_wpa2_min_pass_len) {
-        (void)strncpy((char *)wifi_config.ap.password, cfg->softap_password, sizeof(wifi_config.ap.password) - 1U);
-        wifi_config.ap.password[sizeof(wifi_config.ap.password) - 1U] = '\0';
+        (void)snprintf((char *)wifi_config.ap.password, sizeof(wifi_config.ap.password), "%.63s", cfg->softap_password);
         wifi_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
     } else {
         wifi_config.ap.authmode = WIFI_AUTH_OPEN;
@@ -347,10 +345,8 @@ static esp_err_t start_sta(const net_wifi_config_t *cfg)
     }
 
     wifi_config_t wifi_config = {0};
-    (void)strncpy((char *)wifi_config.sta.ssid, cfg->sta_ssid, sizeof(wifi_config.sta.ssid) - 1U);
-    wifi_config.sta.ssid[sizeof(wifi_config.sta.ssid) - 1U] = '\0';
-    (void)strncpy((char *)wifi_config.sta.password, cfg->sta_password, sizeof(wifi_config.sta.password) - 1U);
-    wifi_config.sta.password[sizeof(wifi_config.sta.password) - 1U] = '\0';
+    (void)snprintf((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "%.31s", cfg->sta_ssid);
+    (void)snprintf((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), "%.63s", cfg->sta_password);
     {
         const size_t sta_pass_len = strnlen(cfg->sta_password, sizeof(cfg->sta_password));
         if (sta_pass_len > 0U) {

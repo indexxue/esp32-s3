@@ -19,6 +19,7 @@
 #include "board.h"
 #include "cmd.h"
 #include "lcd_gallery.h"
+#include "lcd_video.h"
 #include "persist.h"
 #include "sdcard.h"
 #include "web_ctrl_cmd.h"
@@ -376,12 +377,17 @@ static esp_err_t bmp_stream_finish(bmp_stream_t *s)
     return ESP_OK;
 }
 
-/** 8.3：`W` + 7 位十六进制 + `.BMP`；若重名则换号重试。 */
+/** 8.3：`W` + 7 位十六进制 + `.BMP`；若重名则换号重试。保存至 `/sdcard/picture/`。 */
 static esp_err_t bmp_open_unique_upload_wb(FILE **out_fp, char *path, size_t path_max)
 {
     static uint32_t s_salt;
     int             attempt;
     struct stat     st;
+    const char     *gdir = lcd_gallery_dir_path();
+
+    if (stat(gdir, &st) != 0) {
+        (void)mkdir(gdir, 0755);
+    }
 
     for (attempt = 0; attempt < 64; attempt++) {
         uint32_t tag = ((uint32_t)esp_timer_get_time() ^ (uint32_t)++s_salt ^ ((uint32_t)attempt * 0x9E3779B9U)) & 0x0FFFFFFFU;
@@ -389,7 +395,7 @@ static esp_err_t bmp_open_unique_upload_wb(FILE **out_fp, char *path, size_t pat
         if (tag == 0U) {
             tag = (uint32_t)(attempt + 1U);
         }
-        if (snprintf(path, path_max, "%s/W%07lX.BMP", BOARD_SDCARD_MOUNT_POINT, (unsigned long)tag) >= (int)path_max) {
+        if (snprintf(path, path_max, "%s/W%07lX.BMP", gdir, (unsigned long)tag) >= (int)path_max) {
             return ESP_ERR_INVALID_SIZE;
         }
         if ((stat(path, &st) == 0) && S_ISREG(st.st_mode)) {
@@ -615,26 +621,17 @@ static esp_err_t bmp_upload_post_handler(httpd_req_t *req)
     lcd_gallery_rescan();
 
     {
-        char  json[384];
-        char  disp[48] = "skipped";
-        char  reply[WEB_CTRL_CMD_REPLY_MAX];
-        size_t rlen = 0U;
+        char json[384];
+        char disp[48] = "skipped";
 
         if (want_display) {
-            char line[CMD_LINE_MAX];
-
-            (void)snprintf(line, sizeof(line), "lcdbmp %s", path);
-            err = web_ctrl_cmd_execute_sync(line, reply, sizeof(reply), &rlen, WEB_CTRL_BMP_CMD_TIMEOUT_MS);
-            if (err == ESP_ERR_INVALID_STATE) {
-                (void)strncpy(disp, "busy", sizeof(disp) - 1U);
-            } else if (err == ESP_ERR_TIMEOUT) {
-                (void)strncpy(disp, "timeout", sizeof(disp) - 1U);
-            } else if (err != ESP_OK) {
-                (void)strncpy(disp, "error", sizeof(disp) - 1U);
-            } else if ((strstr(reply, "lcdbmp:ok") != NULL) || (strstr(reply, ":ok") != NULL)) {
-                (void)strncpy(disp, "ok", sizeof(disp) - 1U);
+            if (lcd_video_is_playing()) {
+                lcd_video_request_stop();
+            }
+            if (lcd_gallery_post_show_path(path)) {
+                (void)strncpy(disp, "queued", sizeof(disp) - 1U);
             } else {
-                (void)snprintf(disp, sizeof(disp), "cmd:%.*s", (int)((rlen < 40U) ? rlen : 40U), reply);
+                (void)strncpy(disp, "busy", sizeof(disp) - 1U);
             }
         }
 
@@ -694,7 +691,7 @@ static bool web_path_suffix_icase(const char *path, const char *suf)
     return strcasecmp(path + (lp - ls), suf) == 0;
 }
 
-/** 仅允许根目录单层文件名：字母数字与 `._-`，且后缀为 `.bmp` / `.bin`。 */
+/** 仅允许 `picture/` 下单层文件名：字母数字与 `._-~`（FAT 8.3 短名），且后缀为 `.bmp` / `.bin`。 */
 static bool web_gallery_basename_ok(const char *name)
 {
     size_t i;
@@ -710,7 +707,7 @@ static bool web_gallery_basename_ok(const char *name)
     for (i = 0U; i < len; i++) {
         const unsigned char c = (unsigned char)name[i];
 
-        if ((isalnum(c) != 0) || (c == '.') || (c == '_') || (c == '-')) {
+        if ((isalnum(c) != 0) || (c == '.') || (c == '_') || (c == '-') || (c == '~')) {
             continue;
         }
         return false;
@@ -719,6 +716,33 @@ static bool web_gallery_basename_ok(const char *name)
         return false;
     }
     return true;
+}
+
+/** 去掉 `picture/` 或路径前缀，只保留 basename。 */
+static void web_gallery_normalize_name(const char *in, char *out, size_t out_cap)
+{
+    const char *base;
+    const char *slash;
+
+    if ((out == NULL) || (out_cap == 0U)) {
+        return;
+    }
+    out[0] = '\0';
+    if (in == NULL) {
+        return;
+    }
+    base = in;
+    if (strncasecmp(in, "picture/", 8) == 0) {
+        base = in + 8;
+    } else if (strncasecmp(in, "/sdcard/picture/", 16) == 0) {
+        base = in + 16;
+    } else {
+        slash = strrchr(in, '/');
+        if (slash != NULL) {
+            base = slash + 1;
+        }
+    }
+    (void)snprintf(out, out_cap, "%.*s", (int)WEB_GALLERY_NAME_MAX, base);
 }
 
 static void web_gallery_sort_entries(web_gallery_entry_t *ents, size_t n)
@@ -755,7 +779,7 @@ static esp_err_t gallery_list_get_handler(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"no_sd\"}", HTTPD_RESP_USE_STRLEN);
     }
 
-    dir = opendir(BOARD_SDCARD_MOUNT_POINT);
+    dir = opendir(lcd_gallery_dir_path());
     if (dir == NULL) {
         (void)httpd_resp_set_status(req, "500 Internal Server Error");
         (void)httpd_resp_set_type(req, "application/json");
@@ -765,6 +789,7 @@ static esp_err_t gallery_list_get_handler(httpd_req_t *req)
     while ((ent = readdir(dir)) != NULL) {
         struct stat st;
         char        full[WEB_BMP_PATH_MAX];
+        const char *gdir = lcd_gallery_dir_path();
 
         if ((ent->d_name[0] == '\0') || (strcmp(ent->d_name, ".") == 0) || (strcmp(ent->d_name, "..") == 0)) {
             continue;
@@ -775,7 +800,7 @@ static esp_err_t gallery_list_get_handler(httpd_req_t *req)
         if (nents >= WEB_GALLERY_MAX_FILES) {
             break;
         }
-        if (snprintf(full, sizeof(full), "%s/%s", BOARD_SDCARD_MOUNT_POINT, ent->d_name) >= (int)sizeof(full)) {
+        if (snprintf(full, sizeof(full), "%s/%s", gdir, ent->d_name) >= (int)sizeof(full)) {
             continue;
         }
         if (stat(full, &st) != 0) {
@@ -785,8 +810,7 @@ static esp_err_t gallery_list_get_handler(httpd_req_t *req)
             continue;
         }
         (void)memset(&ents[nents], 0, sizeof(ents[nents]));
-        (void)strncpy(ents[nents].name, ent->d_name, WEB_GALLERY_NAME_MAX);
-        ents[nents].name[WEB_GALLERY_NAME_MAX] = '\0';
+        (void)snprintf(ents[nents].name, sizeof(ents[nents].name), "%.*s", (int)WEB_GALLERY_NAME_MAX, ent->d_name);
         ents[nents].size_bytes                 = (unsigned long)st.st_size;
         ents[nents].is_bmp                     = web_path_suffix_icase(ent->d_name, ".bmp");
         nents++;
@@ -865,7 +889,7 @@ static esp_err_t gallery_bmp_get_handler(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"bad_name\"}", HTTPD_RESP_USE_STRLEN);
     }
 
-    if (snprintf(path, sizeof(path), "%s/%s", BOARD_SDCARD_MOUNT_POINT, name) >= (int)sizeof(path)) {
+    if (snprintf(path, sizeof(path), "%s/%s", lcd_gallery_dir_path(), name) >= (int)sizeof(path)) {
         (void)httpd_resp_set_status(req, "400 Bad Request");
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"path\"}", HTTPD_RESP_USE_STRLEN);
@@ -939,7 +963,7 @@ static esp_err_t gallery_delete_post_handler(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"bad_name\"}", HTTPD_RESP_USE_STRLEN);
     }
 
-    if (snprintf(path, sizeof(path), "%s/%s", BOARD_SDCARD_MOUNT_POINT, name) >= (int)sizeof(path)) {
+    if (snprintf(path, sizeof(path), "%s/%s", lcd_gallery_dir_path(), name) >= (int)sizeof(path)) {
         (void)httpd_resp_set_status(req, "400 Bad Request");
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"path\"}", HTTPD_RESP_USE_STRLEN);
@@ -1031,7 +1055,7 @@ static esp_err_t gallery_prefs_post_handler(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"no_sd\"}", HTTPD_RESP_USE_STRLEN);
     }
 
-    if (snprintf(path, sizeof(path), "%s/%s", BOARD_SDCARD_MOUNT_POINT, boot) >= (int)sizeof(path)) {
+    if (snprintf(path, sizeof(path), "%s/%s", lcd_gallery_dir_path(), boot) >= (int)sizeof(path)) {
         (void)httpd_resp_set_status(req, "400 Bad Request");
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"path\"}", HTTPD_RESP_USE_STRLEN);
@@ -1063,17 +1087,11 @@ static esp_err_t gallery_prefs_post_handler(httpd_req_t *req)
 
 static esp_err_t gallery_show_post_handler(httpd_req_t *req)
 {
-    char         qry[192];
-    char         name[WEB_GALLERY_NAME_MAX + 1U];
-    char         path[WEB_BMP_PATH_MAX];
-    char         line[CMD_LINE_MAX];
-    char         reply[WEB_CTRL_CMD_REPLY_MAX];
-    char         detail[40];
-    char         jerr[128];
-    size_t       rlen = 0U;
-    esp_err_t    ex;
-    const char  *rp;
-    size_t       di;
+    char        qry[192];
+    char        raw[WEB_GALLERY_NAME_MAX + 1U];
+    char        name[WEB_GALLERY_NAME_MAX + 1U];
+    char        path[WEB_BMP_PATH_MAX];
+    struct stat st;
 
     if (req->content_len > 0) {
         discard_post_remainder(req, 0U);
@@ -1090,76 +1108,41 @@ static esp_err_t gallery_show_post_handler(httpd_req_t *req)
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"need_name\"}", HTTPD_RESP_USE_STRLEN);
     }
-    if (httpd_query_key_value(qry, "name", name, sizeof(name)) != ESP_OK) {
+    if (httpd_query_key_value(qry, "name", raw, sizeof(raw)) != ESP_OK) {
         (void)httpd_resp_set_status(req, "400 Bad Request");
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"need_name\"}", HTTPD_RESP_USE_STRLEN);
     }
+    web_gallery_normalize_name(raw, name, sizeof(name));
     if (!web_gallery_basename_ok(name)) {
         (void)httpd_resp_set_status(req, "400 Bad Request");
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"bad_name\"}", HTTPD_RESP_USE_STRLEN);
     }
 
-    if (snprintf(path, sizeof(path), "%s/%s", BOARD_SDCARD_MOUNT_POINT, name) >= (int)sizeof(path)) {
+    if (snprintf(path, sizeof(path), "%s/%s", lcd_gallery_dir_path(), name) >= (int)sizeof(path)) {
         (void)httpd_resp_set_status(req, "400 Bad Request");
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"path\"}", HTTPD_RESP_USE_STRLEN);
     }
-
-    if (snprintf(line, sizeof(line), "lcdshow %s", path) >= (int)sizeof(line)) {
-        (void)httpd_resp_set_status(req, "400 Bad Request");
+    if ((stat(path, &st) != 0) || !S_ISREG(st.st_mode)) {
+        (void)httpd_resp_set_status(req, "404 Not Found");
         (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"cmd_line\"}", HTTPD_RESP_USE_STRLEN);
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"not_found\"}", HTTPD_RESP_USE_STRLEN);
     }
 
-    ex = web_ctrl_cmd_execute_sync(line, reply, sizeof(reply), &rlen, WEB_CTRL_BMP_CMD_TIMEOUT_MS);
-    if (ex == ESP_ERR_INVALID_STATE) {
+    if (lcd_video_is_playing()) {
+        lcd_video_request_stop();
+    }
+    if (!lcd_gallery_post_show_name(name)) {
         (void)httpd_resp_set_status(req, "503 Service Unavailable");
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"busy\"}", HTTPD_RESP_USE_STRLEN);
     }
-    if (ex == ESP_ERR_TIMEOUT) {
-        (void)httpd_resp_set_status(req, "504 Gateway Timeout");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"timeout\"}", HTTPD_RESP_USE_STRLEN);
-    }
-    if (ex != ESP_OK) {
-        (void)httpd_resp_set_status(req, "500 Internal Server Error");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"exec\"}", HTTPD_RESP_USE_STRLEN);
-    }
 
-    if (strstr(reply, "lcdshow:ok") != NULL) {
-        (void)httpd_resp_set_status(req, "200 OK");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":true,\"display\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
-    }
-
-    ESP_LOGW(TAG, "gallery show cmd reply: %.*s", (int)((rlen < 120U) ? rlen : 120U), reply);
-    (void)memset(detail, 0, sizeof(detail));
-    rp = strstr(reply, "lcdshow:");
-    if (rp != NULL) {
-        rp += 8U;
-        di = 0U;
-        while ((di + 1U < sizeof(detail)) && (*rp != '\0') && (*rp != '\r') && (*rp != '\n')) {
-            const unsigned char c = (unsigned char)*rp++;
-
-            if ((isalnum(c) != 0) || (c == (unsigned char)'_')) {
-                detail[di++] = (char)c;
-            } else {
-                break;
-            }
-        }
-    }
-    if (detail[0] == '\0') {
-        (void)strncpy(detail, "unknown", sizeof(detail) - 1U);
-    }
-    (void)snprintf(jerr, sizeof(jerr), "{\"ok\":false,\"error\":\"lcd_cmd\",\"detail\":\"%s\"}", detail);
-    jerr[sizeof(jerr) - 1U] = '\0';
-    (void)httpd_resp_set_status(req, "400 Bad Request");
+    (void)httpd_resp_set_status(req, "200 OK");
     (void)httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, jerr, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(req, "{\"ok\":true,\"display\":\"queued\"}", HTTPD_RESP_USE_STRLEN);
 }
 
 esp_err_t web_bmp_upload_register(httpd_handle_t server)

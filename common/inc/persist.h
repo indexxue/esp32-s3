@@ -29,7 +29,7 @@ extern "C" {
 #define NVS_APP_VERSION_SIZE 24
 #define NVS_FACTORY_VERSION_SIZE 24
 #define NVS_REGION_SIZE 8
-/** SD 图库开机默认图：根目录文件名（如 `W01A2B3C.BMP`），与 `lcd_gallery` 扫描名一致。 */
+/** SD 图库开机默认图：`picture/` 下文件名（如 `W01A2B3C.BMP`），与 `lcd_gallery` 扫描名一致。 */
 #define NVS_LCD_GAL_BOOT_SIZE 121
 
 #define NVS_DEFAULT_MAC                                                                                              \

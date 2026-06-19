@@ -35,4 +35,11 @@ menu "Web Control Library (web_ctrl)"
         help
             Used only when upload URL query includes display=1 (or on/yes).
 
+    config WEB_CTRL_VIDEO_UPLOAD_MAX
+        int "POST /api/upload/video: max multipart body size (bytes)"
+        default 16777216
+        range 1048576 33554432
+        help
+            Entire multipart body limit for MJPEG AVI upload to /sdcard/videos/.
+
 endmenu

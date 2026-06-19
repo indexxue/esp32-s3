@@ -20,6 +20,7 @@
 
 #include "web_ctrl_cmd.h"
 #include "web_bmp_upload.h"
+#include "web_video.h"
 
 #include "cmd.h"
 
@@ -95,6 +96,9 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         ".gal-ph{height:96px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.85rem}"
         ".gal-item .nm{font-size:.72rem;color:var(--muted);word-break:break-all;margin:8px 0 4px;line-height:1.3}"
         ".gal-item .gal-by{font-size:.68rem;color:var(--muted)}"
+        ".gal-item .vid-thumb{position:relative}"
+        ".gal-item .vid-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"
+        "font-size:2rem;color:rgba(255,255,255,.85);text-shadow:0 2px 8px rgba(0,0,0,.6);pointer-events:none}"
         ".gal-actions{display:flex;flex-direction:column;gap:6px;margin-top:10px}"
         ".gal-actions .btn{padding:6px 8px;font-size:.74rem;width:100%}"
         ".gal-tag{font-size:.65rem;color:var(--ok);margin-top:2px;text-align:center}"
@@ -153,19 +157,32 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "<section class='card' id='card-bmp'>"
         "<div class='card-h'><h2>BMP 上传</h2></div>"
         "<div class='card-b'>"
-        "<p class='hint' style='margin-top:0'>选择 BI_RGB 无压缩 24/32 位 BMP；每次上传保存为 SD 根目录下唯一短文件名（如 <code>W01A2B3C.BMP</code>，FAT 8.3）。可勾选上传后在 LCD 全屏显示。</p>"
+        "<p class='hint' style='margin-top:0'>选择 BI_RGB 无压缩 24/32 位 BMP；每次上传保存至 <code>/sdcard/picture/</code> 下唯一短文件名（如 <code>W01A2B3C.BMP</code>，FAT 8.3）。可勾选上传后在 LCD 全屏显示。</p>"
         "<div class='field'><label for='bf'>图片文件</label><input class='inp' id='bf' type='file' accept='.bmp,image/bmp'/></div>"
         "<label class='row' style='cursor:pointer'><input type='checkbox' id='lcdisp'/> <span>上传后在 LCD 显示</span></label>"
         "<div class='row' style='margin-top:12px'>"
         "<button type='button' class='btn btn-primary' id='btn-up-bmp' onclick='uploadBmp()'>上传</button></div>"
         "<pre class='log' id='bo' hidden></pre></div></section>"
-        "<section class='card' id='card-gal'><div class='card-h'><h2>SD 图库</h2><div class='row'>"
+        "<section class='card' id='card-gal'><div class='card-h'><h2>SD 图片</h2><div class='row'>"
         "<button type='button' class='btn btn-ghost' id='btn-gal-refresh' onclick='loadGallery()'>刷新列表</button>"
         "<button type='button' class='btn btn-ghost' id='btn-gal-clear-boot' onclick='clearGalBoot()'>清除开机默认</button></div></div>"
-        "<div class='card-b'><p class='hint' style='margin-top:0'>根目录下 .bmp / .bin（与 LCD 图库相同，最多 24 个）。"
+        "<div class='card-b'><p class='hint' style='margin-top:0'><code>/sdcard/picture/</code> 下 .bmp / .bin（与 LCD 图库相同，最多 24 个）。"
         "<strong>LCD 显示</strong>立即全屏出图；<strong>设为开机默认</strong>写入 NVS，下次上电优先显示该文件（须仍在卡上）。</p>"
         "<div id='gal-h' class='scan-h'>加载中…</div><div class='gal-grid' id='gal-grid'></div>"
-        "<pre class='log' id='gl' hidden></pre></div></section></div>"
+        "<pre class='log' id='gl' hidden></pre></div></section>"
+        "<section class='card' id='card-vid'><div class='card-h'><h2>SD 视频</h2><div class='row'>"
+        "<button type='button' class='btn btn-ghost' id='btn-vid-refresh' onclick='loadVideos()'>刷新列表</button>"
+        "<button type='button' class='btn btn-danger' id='btn-vid-stop' onclick='stopVideo()'>停止播放</button></div></div>"
+        "<div class='card-b'>"
+        "<p class='hint' style='margin-top:0'>目录 <code>/sdcard/videos/</code> 下 MJPEG AVI（240×135，无音轨）。"
+        "封面为视频首帧；<strong>LCD 播放</strong>在设备屏循环播放，GPIO0 单击可停止。</p>"
+        "<div class='field'><label for='vf'>上传视频 (.avi)</label>"
+        "<input class='inp' id='vf' type='file' accept='.avi,video/x-msvideo,video/avi'/></div>"
+        "<label class='row' style='cursor:pointer;margin-bottom:12px'><input type='checkbox' id='vidplay'/> "
+        "<span>上传后在 LCD 播放</span></label>"
+        "<div class='row'><button type='button' class='btn btn-primary' id='btn-up-vid' onclick='uploadVideo()'>上传视频</button></div>"
+        "<div id='vid-h' class='scan-h' style='margin-top:16px'>加载中…</div><div class='gal-grid' id='vid-grid'></div>"
+        "<pre class='log' id='vl' hidden></pre></div></section></div>"
         "<div class='modal-wrap' id='modal-disconnect' role='dialog' aria-modal='true'>"
         "<div class='modal'><h3>确认清除 Wi‑Fi？</h3>"
         "<p>将断开 STA、删除已保存的路由器账号并立即重启。此页面会暂时无法访问。</p>"
@@ -175,7 +192,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "</div></div></div>"
         "<script>"
         "function esc(t){return String(t===undefined||t===null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;');}"
-        "function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-run','btn-up-bmp','btn-gal-refresh','btn-gal-clear-boot','btn-disconnect','modal-confirm-dc'].forEach(function(id){"
+        "function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-run','btn-up-bmp','btn-gal-refresh','btn-gal-clear-boot','btn-disconnect','modal-confirm-dc','btn-vid-refresh','btn-vid-stop','btn-up-vid'].forEach(function(id){"
         "var el=document.getElementById(id);if(el)el.disabled=b;});"
         "document.querySelectorAll('.fx-busy').forEach(function(el){el.disabled=b;});}"
         "function showLog(id,txt,show){var el=document.getElementById(id);if(!el)return;if(!txt){el.hidden=true;el.textContent='';return;}"
@@ -352,9 +369,71 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         "catch(e){showLog('gl',String(e),true);}"
         "finally{setBusy(false);}"
         "}"
+        "async function uploadVideo(){"
+        "var inp=document.getElementById('vf');var f=inp&&inp.files&&inp.files[0];"
+        "if(!f){showLog('vl','请先选择 .avi 文件',true);return;}"
+        "var q=document.getElementById('vidplay')&&document.getElementById('vidplay').checked?'?play=1':'';"
+        "var fd=new FormData();fd.append('file',f);"
+        "showLog('vl','上传中（大文件请耐心等待）…',true);setBusy(true);"
+        "try{"
+        "var r=await fetch('/api/upload/video'+q,{method:'POST',body:fd});"
+        "var t=await r.text();showLog('vl',r.status+' '+t,true);"
+        "if(r.ok){try{var j=JSON.parse(t);if(j.ok)loadVideos();}catch(x){}}"
+        "}catch(e){showLog('vl',String(e),true);}"
+        "finally{setBusy(false);}"
+        "}"
+        "async function loadVideos(){"
+        "var g=document.getElementById('vid-grid'),h=document.getElementById('vid-h');"
+        "if(!g||!h)return;showLog('vl','',false);h.textContent='加载中…';g.innerHTML='';"
+        "try{"
+        "var r=await fetch('/api/video/list');var j=await r.json();"
+        "if(!j.ok){h.textContent='';showLog('vl',JSON.stringify(j),true);return;}"
+        "var fs=j.files||[];"
+        "h.textContent=fs.length?('共 '+fs.length+' 个视频'+(j.playing?'（LCD 播放中）':'')):'暂无 .avi 视频';"
+        "fs.forEach(function(f){"
+        "var d=document.createElement('div');d.className='gal-item';"
+        "var wrap=document.createElement('div');wrap.className='vid-thumb';"
+        "var im=document.createElement('img');im.alt=f.name;im.loading='lazy';"
+        "im.src='/api/video/thumbnail?name='+encodeURIComponent(f.name);"
+        "im.onerror=function(){this.style.display='none';};"
+        "wrap.appendChild(im);"
+        "var ov=document.createElement('div');ov.className='vid-play';ov.textContent='\\u25B6';wrap.appendChild(ov);"
+        "d.appendChild(wrap);"
+        "var nm=document.createElement('div');nm.className='nm';nm.textContent=f.name;d.appendChild(nm);"
+        "var by=document.createElement('div');by.className='gal-by';by.textContent=galFmtBytes(f.bytes);d.appendChild(by);"
+        "var act=document.createElement('div');act.className='gal-actions';"
+        "var bPlay=document.createElement('button');bPlay.type='button';bPlay.className='btn btn-primary';bPlay.textContent='LCD 播放';"
+        "bPlay.onclick=function(){playVideoOnLcd(f.name);};act.appendChild(bPlay);d.appendChild(act);"
+        "var del=document.createElement('button');del.type='button';del.className='btn btn-danger';"
+        "del.style.cssText='margin-top:8px;width:100%;padding:7px;font-size:.78rem';del.textContent='删除';"
+        "del.onclick=function(){delVideoFile(f.name);};d.appendChild(del);g.appendChild(d);});"
+        "}catch(e){h.textContent='';showLog('vl',String(e),true);}"
+        "}"
+        "async function playVideoOnLcd(name){"
+        "showLog('vl','',false);setBusy(true);"
+        "try{var r=await fetch('/api/video/play?name='+encodeURIComponent(name),{method:'POST'});"
+        "var t=await r.text();showLog('vl',r.status+' '+t,true);await loadVideos();}"
+        "catch(e){showLog('vl',String(e),true);}"
+        "finally{setBusy(false);}"
+        "}"
+        "async function stopVideo(){"
+        "showLog('vl','',false);setBusy(true);"
+        "try{var r=await fetch('/api/video/stop',{method:'POST'});"
+        "var t=await r.text();showLog('vl',r.status+' '+t,true);await loadVideos();}"
+        "catch(e){showLog('vl',String(e),true);}"
+        "finally{setBusy(false);}"
+        "}"
+        "async function delVideoFile(name){"
+        "if(!confirm('确定删除视频「'+name+'」？不可恢复。'))return;"
+        "showLog('vl','',false);setBusy(true);"
+        "try{var r=await fetch('/api/video/delete?name='+encodeURIComponent(name),{method:'POST'});"
+        "var t=await r.text();showLog('vl',r.status+' '+t,true);await loadVideos();}"
+        "catch(e){showLog('vl',String(e),true);}"
+        "finally{setBusy(false);}"
+        "}"
         "document.getElementById('modal-disconnect').addEventListener('click',function(ev){"
         "if(ev.target.id==='modal-disconnect')closeDisconnectModal();});"
-        "initFxGrid();refreshStatus();loadGallery();setInterval(refreshStatus,2500);"
+        "initFxGrid();refreshStatus();loadGallery();loadVideos();setInterval(refreshStatus,2500);"
         "</script></body></html>";
 
     (void)httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -581,7 +660,7 @@ esp_err_t web_server_start(uint16_t port)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = (port == 0U) ? 80U : port;
     /* 默认 8 槽：`web_server` 3 个 + `web_ctrl_wifi_api` 7 个会溢出，须加大。 */
-    config.max_uri_handlers = 24U;
+    config.max_uri_handlers = 32U;
     /* 默认栈 4096：`wifi_scan_result_get_handler` 等单帧 JSON 约 4KB，会栈溢出破坏 httpd 会话表。 */
     config.stack_size = 12288U;
 
@@ -638,6 +717,14 @@ esp_err_t web_server_start(uint16_t port)
     err = web_bmp_upload_register(s_server);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "register /api/upload/bmp failed: %s", esp_err_to_name(err));
+        (void)httpd_stop(s_server);
+        s_server = NULL;
+        return err;
+    }
+
+    err = web_video_register(s_server);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register video API failed: %s", esp_err_to_name(err));
         (void)httpd_stop(s_server);
         s_server = NULL;
         return err;

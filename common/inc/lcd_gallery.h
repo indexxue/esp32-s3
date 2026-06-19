@@ -9,11 +9,20 @@
 
 #include "st7789.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** 扫描挂载点下 `.bin` / `.bmp`（不区分大小写），按路径名排序；无卡或未挂载时清空列表。 */
+/** SD 卡图片目录（`BOARD_SDCARD_MOUNT_POINT/picture`）。 */
+#define LCD_GALLERY_DIR_SUFFIX "/picture"
+
+/** 返回图库目录绝对路径（内部静态缓冲，非线程安全）。 */
+const char *lcd_gallery_dir_path(void);
+
+/** 扫描 `picture/` 下 `.bin` / `.bmp`（不区分大小写），按路径名排序；无卡或未挂载时清空列表。 */
 void lcd_gallery_rescan(void);
 
 /** 当前列表条目数（可为 0）。 */
@@ -43,6 +52,17 @@ uint8_t lcd_gallery_find_index_by_basename(const char *basename);
 
 /** 设置当前图库索引（仅按键切图语义；`count==0` 时不修改）。 */
 void lcd_gallery_set_current_index(uint8_t idx);
+
+/** 投递全屏显示请求（`app_mod` 执行；播放视频时会先停止视频）。 */
+bool lcd_gallery_post_show_path(const char *path);
+
+/** 按 `picture/` 下文件名投递显示（可仅 basename）。 */
+bool lcd_gallery_post_show_name(const char *name);
+
+bool lcd_gallery_peek_pending_show(void);
+
+/** 取走一条待显示路径（非阻塞）。 */
+bool lcd_gallery_take_pending_show(char *path_out, size_t path_cap);
 
 #ifdef __cplusplus
 }

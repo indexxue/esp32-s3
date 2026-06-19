@@ -9,6 +9,7 @@
 #include "i2c.h"
 #include "lcd.h"
 #include "lcd_gallery.h"
+#include "lcd_video.h"
 #include "led_scene.h"
 #include "log.h"
 #include "persist.h"
@@ -17,6 +18,7 @@
 #include "usb_serial_jtag.h"
 
 #include "esp_system.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
@@ -850,6 +852,134 @@ static void cmd_lcdshow(int argc, const char *argv[])
     cmd_reply_ok("lcdshow", "fail");
 }
 
+static void cmd_mem(int argc, const char *argv[])
+{
+    char val[CMD_STATUS_BUF_SIZE];
+
+    (void)argc;
+    (void)argv;
+    (void)snprintf(val, sizeof(val), "int=%u spiram=%u",
+                   (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                   (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    cmd_reply_ok("mem", val);
+}
+
+static void cmd_videolist(int argc, const char *argv[])
+{
+    char val[CMD_STATUS_BUF_SIZE];
+    int  n;
+
+    (void)argc;
+    (void)argv;
+
+    if (sdcard_get_card() == NULL) {
+        cmd_reply_ok("video", "no_sd");
+        return;
+    }
+    (void)lcd_video_scan();
+    n = (int)lcd_video_count();
+    if (n <= 0) {
+        cmd_reply_ok("video", "empty");
+        return;
+    }
+    val[0] = '\0';
+    for (int i = 0; i < n; i++) {
+        char path[320];
+        const char *bn;
+
+        if (lcd_video_path_at((uint8_t)i, path, sizeof(path)) != STATUS_OK) {
+            continue;
+        }
+        bn = strrchr(path, '/');
+        bn = (bn != NULL) ? (bn + 1) : path;
+        if (val[0] != '\0') {
+            (void)strncat(val, ",", sizeof(val) - strlen(val) - 1U);
+        }
+        (void)strncat(val, bn, sizeof(val) - strlen(val) - 1U);
+    }
+    cmd_reply_ok("video", val);
+}
+
+static void cmd_videoplay(int argc, const char *argv[])
+{
+    if (argc < 2) {
+        cmd_reply_ng();
+        return;
+    }
+    if (sdcard_get_card() == NULL) {
+        cmd_reply_ok("video", "no_sd");
+        return;
+    }
+    if (!lcd_video_post_play_path(argv[1])) {
+        cmd_reply_ok("video", "busy");
+        return;
+    }
+    cmd_reply_ok("video", "queued");
+}
+
+static void cmd_videoplay_i(int argc, const char *argv[])
+{
+    long ix;
+
+    if (argc < 2) {
+        cmd_reply_ng();
+        return;
+    }
+    if (sdcard_get_card() == NULL) {
+        cmd_reply_ok("video", "no_sd");
+        return;
+    }
+    ix = strtol(argv[1], NULL, 10);
+    if ((ix < 0) || (ix > 255)) {
+        cmd_reply_ok("video", "bad_idx");
+        return;
+    }
+    if (!lcd_video_post_play_index((uint8_t)ix)) {
+        cmd_reply_ok("video", "busy");
+        return;
+    }
+    cmd_reply_ok("video", "queued");
+}
+
+static void cmd_videostop(int argc, const char *argv[])
+{
+    (void)argc;
+    (void)argv;
+    lcd_video_request_stop();
+    cmd_reply_ok("video", "stop");
+}
+
+static void cmd_videobench(int argc, const char *argv[])
+{
+    const char *path;
+    uint32_t    frames = 100U;
+
+    if (argc < 2) {
+        cmd_reply_ng();
+        return;
+    }
+    path = argv[1];
+    if (argc >= 3) {
+        long n = strtol(argv[2], NULL, 10);
+        if ((n > 0) && (n <= 10000)) {
+            frames = (uint32_t)n;
+        }
+    }
+    if (sdcard_get_card() == NULL) {
+        cmd_reply_ok("video", "no_sd");
+        return;
+    }
+    if (!BoardSt7789() || !st7789_is_initialized(BoardSt7789())) {
+        cmd_reply_ok("video", "no_lcd");
+        return;
+    }
+    if (!lcd_video_post_benchmark(path, frames)) {
+        cmd_reply_ok("video", "busy");
+        return;
+    }
+    cmd_reply_ok("video", "bench_queued");
+}
+
 static void cmd_sdtest(int argc, const char *argv[])
 {
     (void)argc;
@@ -1262,6 +1392,12 @@ void cmd_register_defaults(void)
     (void)cmd_register("lcdbench", cmd_lcdbench, "ST7789 SPI DMA fill bench [frames 1-200]");
     (void)cmd_register("lcdbmp", cmd_lcdbmp, "show BMP on LCD: lcdbmp <absolute_path>");
     (void)cmd_register("lcdshow", cmd_lcdshow, "show BMP or BIN on LCD: lcdshow <absolute_path>");
+    (void)cmd_register("mem", cmd_mem, "free heap: internal + SPIRAM bytes");
+    (void)cmd_register("video", cmd_videolist, "list videos under /sdcard/videos");
+    (void)cmd_register("videoplay", cmd_videoplay, "queue play: videoplay <name|path>");
+    (void)cmd_register("videoplay_i", cmd_videoplay_i, "queue play by index: videoplay_i <n>");
+    (void)cmd_register("videostop", cmd_videostop, "request stop video playback");
+    (void)cmd_register("videobench", cmd_videobench, "FPS bench: videobench <name|path> [frames]");
     (void)cmd_register("sdtest", cmd_sdtest, "SD FAT smoke + DMA throughput log");
     (void)cmd_register("webcfg", cmd_webcfg,
                        "wifi: sta,set,tune then save (need staged_ok)");
