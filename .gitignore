@@ -6,10 +6,13 @@ python_env/
 build/
 project/build/
 factory/build/
+ballot_guard/build/
 project/sdkconfig
 factory/sdkconfig
+ballot_guard/sdkconfig
 project/sdkconfig.old
 factory/sdkconfig.old
+ballot_guard/sdkconfig.old
 
 # Component manager (if used)
 project/dependencies.lock
