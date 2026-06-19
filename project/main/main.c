@@ -21,6 +21,7 @@
 #include "lcd.h"
 #include "button.h"
 #include "lcd_gallery.h"
+#include "lcd_video.h"
 #include "net_wifi.h"
 #include "persist.h"
 #include "battery.h"
@@ -34,7 +35,7 @@
  */
 #define APP_LCD_STATUS_TEXT_BG (LCD_COLOR_BLACK)
 
-#define APP_MODULES_TASK_STACK_WORDS (4096U)
+#define APP_MODULES_TASK_STACK_WORDS (8192U)
 /** 略低于按键扫描任务，避免长 SPI 传输时饿死短周期人机逻辑。 */
 #define APP_MODULES_TASK_PRIORITY (4U)
 
@@ -117,6 +118,69 @@ static void app_lcd_draw_top_status(st7789_t *lcd)
     lcd_show_string(lcd, x_batt, 4U, (const uint8_t *)batt, LCD_COLOR_WHITE, APP_LCD_STATUS_TEXT_BG, 16U, 0U);
 }
 
+static lcd_ui_mode_t s_lcd_ui_mode = LCD_UI_MODE_GALLERY;
+
+static void app_lcd_restore_gallery(st7789_t *lcd)
+{
+    if (!st7789_is_initialized(lcd) || (sdcard_get_card() == NULL)) {
+        return;
+    }
+    if (lcd_gallery_count() > 0U) {
+        (void)lcd_gallery_show_index(lcd, lcd_gallery_current());
+    }
+    app_lcd_draw_top_status(lcd);
+}
+
+static void app_lcd_run_pending_gallery_show(st7789_t *lcd)
+{
+    char       path[320];
+    uint8_t    ix;
+    const char *bn;
+
+    if (!lcd_gallery_take_pending_show(path, sizeof(path))) {
+        return;
+    }
+    if (lcd_gallery_show_path(lcd, path) != STATUS_OK) {
+        LOG_WARN("app_lcd: gallery show failed %s", path);
+        return;
+    }
+    bn = strrchr(path, '/');
+    bn = (bn != NULL) ? (bn + 1) : path;
+    ix = lcd_gallery_find_index_by_basename(bn);
+    if (ix != LCD_GALLERY_INDEX_NONE) {
+        lcd_gallery_set_current_index(ix);
+    }
+    s_lcd_ui_mode = LCD_UI_MODE_GALLERY;
+    app_lcd_draw_top_status(lcd);
+}
+
+static void app_lcd_run_pending_video(st7789_t *lcd)
+{
+    lcd_video_pending_kind_t kind;
+    char                     path[320];
+    uint8_t                  idx;
+    uint32_t                 bench_frames = 0U;
+
+    if (lcd_gallery_peek_pending_show()) {
+        return;
+    }
+
+    if (!lcd_video_take_pending_play(&kind, path, sizeof(path), &idx, &bench_frames)) {
+        return;
+    }
+
+    s_lcd_ui_mode = LCD_UI_MODE_VIDEO;
+    if (kind == LCD_VIDEO_PENDING_PLAY_INDEX) {
+        (void)lcd_video_play_index(lcd, idx);
+    } else if (kind == LCD_VIDEO_PENDING_BENCH) {
+        (void)lcd_video_benchmark(lcd, path, bench_frames);
+    } else {
+        (void)lcd_video_play_path(lcd, path);
+    }
+    s_lcd_ui_mode = LCD_UI_MODE_GALLERY;
+    app_lcd_restore_gallery(lcd);
+}
+
 static void application_modules_task(void *arg)
 {
     (void)arg;
@@ -128,6 +192,7 @@ static void application_modules_task(void *arg)
         uint8_t   start_idx = 0U;
 
         lcd_gallery_rescan();
+        (void)lcd_video_scan();
         if (lcd_gallery_count() > 0U) {
             if (nvs_lcd_gallery_boot_name_get(boot_name, sizeof(boot_name)) && (boot_name[0] != '\0')) {
                 uint8_t fi = lcd_gallery_find_index_by_basename(boot_name);
@@ -153,18 +218,33 @@ static void application_modules_task(void *arg)
         lcd = BoardSt7789();
 
         button_last_event_get(&bid, &bev);
-        if ((bev == BTN_EVENT_SINGLE_CLICK) && (bid == BTN_ID_GPIO0) && st7789_is_initialized(lcd) &&
-            (sdcard_get_card() != NULL) && (lcd_gallery_count() > 0U)) {
+        if ((s_lcd_ui_mode == LCD_UI_MODE_GALLERY) && (bev == BTN_EVENT_SINGLE_CLICK) && (bid == BTN_ID_GPIO0) &&
+            st7789_is_initialized(lcd) && (sdcard_get_card() != NULL) && (lcd_gallery_count() > 0U)) {
             button_last_event_clear();
             lcd_gallery_next();
             (void)lcd_gallery_show_index(lcd, lcd_gallery_current());
             app_lcd_draw_top_status(lcd);
+        } else if ((s_lcd_ui_mode == LCD_UI_MODE_VIDEO) && (bev == BTN_EVENT_SINGLE_CLICK) && (bid == BTN_ID_GPIO0)) {
+            button_last_event_clear();
+            lcd_video_request_stop();
         }
 
-        s_net_poll++;
-        if (s_net_poll >= APP_LCD_NET_REFRESH_POLLS) {
-            s_net_poll = 0U;
-            app_lcd_draw_top_status(lcd);
+        app_lcd_run_pending_video(lcd);
+
+        if (lcd_gallery_peek_pending_show()) {
+            if (lcd_video_is_playing()) {
+                lcd_video_request_stop();
+            } else {
+                app_lcd_run_pending_gallery_show(lcd);
+            }
+        }
+
+        if (s_lcd_ui_mode == LCD_UI_MODE_GALLERY) {
+            s_net_poll++;
+            if (s_net_poll >= APP_LCD_NET_REFRESH_POLLS) {
+                s_net_poll = 0U;
+                app_lcd_draw_top_status(lcd);
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(APP_GALLERY_BUTTON_POLL_MS));

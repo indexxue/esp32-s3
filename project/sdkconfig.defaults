@@ -12,5 +12,19 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../flash_partition/partitions_16m_n16r8.
 # Auto-start SoftAP + HTTP after BoardInit (see components/web_ctrl/README.md).
 CONFIG_WEB_CTRL_AUTO_START=y
 
-# BoardInit + web_ctrl_start() run on app_main before other tasks; 3584 B was too tight.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# BoardInit runs on app_main; keep headroom after moving web_ctrl_start to web_boot task.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+
+# --- N16R8 performance (R8 = 8MB OPI PSRAM; see flash_partition/partitions_16m_n16r8.md) ---
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# CPU 240MHz (ESP32-S3 max). Flash stays DIO@80M (WROOM-1 N16R8 quad flash; WROOM-2 oct flash is optional).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Release-style app optimization (smaller/slower than debug; better throughput for SD/LCD paths).
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
