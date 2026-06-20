@@ -5,6 +5,7 @@ idf_component_register(
         "src/button.c"
         "src/led_scene.c"
         "src/board.c"
+        "src/device_profile.c"
         "src/sdcard.c"
         "src/nvs.c"
         "src/boot_slot.c"

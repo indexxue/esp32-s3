@@ -12,6 +12,7 @@
 
 #include "log.h"
 #include "nvs.h"
+#include "device_profile.h"
 #include "board.h"
 #include "button.h"
 #include "flexible_button.h"
@@ -173,9 +174,11 @@ static status_t app_init_platform(void)
     }
 
 #if CONFIG_WEB_CTRL_AUTO_START
-    if (xTaskCreate(web_ctrl_boot_task, "web_boot", WEB_CTRL_BOOT_TASK_STACK_WORDS, NULL,
-                    WEB_CTRL_BOOT_TASK_PRIORITY, NULL) != pdPASS) {
-        LOG_WARN("create web_boot task failed");
+    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_WEB)) {
+        if (xTaskCreate(web_ctrl_boot_task, "web_boot", WEB_CTRL_BOOT_TASK_STACK_WORDS, NULL,
+                        WEB_CTRL_BOOT_TASK_PRIORITY, NULL) != pdPASS) {
+            LOG_WARN("create web_boot task failed");
+        }
     }
 #endif
 
@@ -225,14 +228,18 @@ static status_t app_init(void)
         return err;
     }
 
-    err = app_init_button_io();
-    if (err != STATUS_OK) {
-        return err;
+    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_BUTTON)) {
+        err = app_init_button_io();
+        if (err != STATUS_OK) {
+            return err;
+        }
     }
 
-    err = app_init_led_ui();
-    if (err != STATUS_OK) {
-        return err;
+    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
+        err = app_init_led_ui();
+        if (err != STATUS_OK) {
+            return err;
+        }
     }
 
     return STATUS_OK;

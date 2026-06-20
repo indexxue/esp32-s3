@@ -22,7 +22,8 @@ extern "C" {
 #include "flash_partition.h"
 
 /* -------------------------------------------------------------------------- */
-/* 项目 device_id 登记表（factory 使用默认 ID 0，不占用项目编号）                 */
+/* 项目 product_id 登记表（NVS 键 did；factory 使用默认 ID 0）                  */
+/* hardware_id 见 device_profile.h / NVS 键 hid                                 */
 /* -------------------------------------------------------------------------- */
 
 #define NVS_DEVICE_ID_DEFAULT 0U
@@ -39,6 +40,15 @@ extern "C" {
     X(BALLOT_GUARD, NVS_PROJECT_ID_BALLOT_GUARD, "ballot_guard")
 
 #define NVS_DEVICE_ID_IS_PROJECT(id) (((uint32_t)(id) & 0xFFFFFF00U) == NVS_PROJECT_ID_CAT_PROJECT)
+
+/** 硬件型号 ID（NVS 键 hid）：0x5353HHNN（HH=类别 0x02） */
+#define NVS_HARDWARE_ID_CAT 0x53530200U
+#define NVS_HARDWARE_ID_MAKE(index) (NVS_HARDWARE_ID_CAT | ((uint32_t)(index) & 0xFFU))
+#define NVS_HARDWARE_ID_TY_S3_REV_A NVS_HARDWARE_ID_MAKE(0x01U)
+
+#ifndef NVS_DEFAULT_HARDWARE_ID
+#define NVS_DEFAULT_HARDWARE_ID NVS_HARDWARE_ID_TY_S3_REV_A
+#endif
 
 #ifndef NVS_DEFAULT_DEVICE_ID
 #define NVS_DEFAULT_DEVICE_ID NVS_DEVICE_ID_DEFAULT
@@ -96,7 +106,22 @@ uint8_t nvs_device_type_get(void);
 
 bool nvs_device_id_set(uint32_t id);
 uint32_t nvs_device_id_get(void);
+/** 与 nvs_device_id_get/set 相同，语义为软件产品 ID（NVS 键 did）。 */
+#define nvs_product_id_get nvs_device_id_get
+#define nvs_product_id_set nvs_device_id_set
+
+bool nvs_hardware_id_set(uint32_t id);
+uint32_t nvs_hardware_id_get(void);
+
+/**
+ * 运行时生效的 product_id：项目固件用编译期 NVS_DEFAULT_DEVICE_ID；factory 固件读 NVS。
+ */
+uint32_t nvs_product_id_active(void);
+/** @deprecated 使用 nvs_product_id_active */
+#define nvs_device_id_for_init nvs_product_id_active
+
 const char *nvs_device_id_project_name(uint32_t id);
+#define nvs_product_id_name nvs_device_id_project_name
 
 uint32_t nvs_firmware_build_date(void);
 uint32_t nvs_build_date_get(void);

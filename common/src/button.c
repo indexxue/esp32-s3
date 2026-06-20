@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "device_profile.h"
 #include "flexible_button.h"
 #include "gpio.h"
 #include "nvs.h"
@@ -12,20 +13,6 @@
 
 /** 各项目按键表最大路数；新增项目时按需增大。 */
 #define BUTTON_MAX_NUM 2U
-
-typedef struct {
-    btn_id_e id;
-    const char *name;
-    int32_t gpio;
-    uint8_t active_level;
-    uint16_t permission;
-} button_spec_t;
-
-typedef struct {
-    uint32_t device_id;
-    const button_spec_t *specs;
-    uint8_t count;
-} button_profile_t;
 
 typedef struct {
     btn_id_e id;
@@ -44,48 +31,6 @@ typedef struct {
 
 static button_list_t s_button_list[BUTTON_MAX_NUM];
 static button_item_t self = {0};
-
-/** factory / 默认：与 main 同板，语义为上 / 下。 */
-static const button_spec_t s_specs_default[] = {
-    {BTN_ID_UP, "上", 0, 0, (uint16_t)(BTN_PERMISSION_UP | BTN_PERMISSION_RESET)},
-    {BTN_ID_DOWN, "下", 3, 0, (uint16_t)(BTN_PERMISSION_DOWN | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR)},
-};
-
-/** main 工程：GPIO0=上，GPIO3=下。 */
-static const button_spec_t s_specs_main[] = {
-    {BTN_ID_UP, "上", 0, 0, (uint16_t)(BTN_PERMISSION_UP | BTN_PERMISSION_RESET)},
-    {BTN_ID_DOWN, "下", 3, 0, (uint16_t)(BTN_PERMISSION_DOWN | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR)},
-};
-
-/** ballot_guard：GPIO0=左，GPIO3=右。 */
-static const button_spec_t s_specs_ballot_guard[] = {
-    {BTN_ID_LEFT, "左", 0, 0, (uint16_t)(BTN_PERMISSION_LEFT | BTN_PERMISSION_RESET)},
-    {BTN_ID_RIGHT, "右", 3, 0, (uint16_t)(BTN_PERMISSION_RIGHT | BTN_PERMISSION_RESET)},
-};
-
-static const button_profile_t s_button_profiles[] = {
-    {NVS_DEVICE_ID_DEFAULT, s_specs_default, (uint8_t)(sizeof(s_specs_default) / sizeof(s_specs_default[0]))},
-    {NVS_PROJECT_ID_MAIN, s_specs_main, (uint8_t)(sizeof(s_specs_main) / sizeof(s_specs_main[0]))},
-    {NVS_PROJECT_ID_BALLOT_GUARD, s_specs_ballot_guard,
-     (uint8_t)(sizeof(s_specs_ballot_guard) / sizeof(s_specs_ballot_guard[0]))},
-};
-
-static const button_profile_t *button_profile_lookup(uint32_t device_id)
-{
-    size_t i;
-
-    for (i = 0; i < (sizeof(s_button_profiles) / sizeof(s_button_profiles[0])); i++) {
-        if (s_button_profiles[i].device_id == device_id) {
-            return &s_button_profiles[i];
-        }
-    }
-    for (i = 0; i < (sizeof(s_button_profiles) / sizeof(s_button_profiles[0])); i++) {
-        if (s_button_profiles[i].device_id == (uint32_t)NVS_DEFAULT_DEVICE_ID) {
-            return &s_button_profiles[i];
-        }
-    }
-    return &s_button_profiles[0];
-}
 
 static btn_id_e last_button_id = BTN_ID_MAX_NUMBER;
 static btn_event_e last_button_event = BTN_EVENT_NONE;
@@ -197,18 +142,20 @@ static void button_gpio_init(void)
 
 static void button_config(void)
 {
-    const uint32_t device_id = nvs_device_id_get();
-    const button_profile_t *profile = button_profile_lookup(device_id);
-    uint8_t n = profile->count;
+    const device_product_profile_t *product = device_profile_product();
+    uint8_t n = device_profile_button_count();
 
     if (n > BUTTON_MAX_NUM) {
         n = BUTTON_MAX_NUM;
     }
 
     for (uint8_t i = 0; i < n; i++) {
-        const button_spec_t *spec = &profile->specs[i];
+        const device_button_spec_t *spec = device_profile_button_spec(i);
         button_list_t *entry = &s_button_list[i];
 
+        if (spec == NULL) {
+            continue;
+        }
         entry->id = spec->id;
         entry->name = spec->name;
         entry->gpio = spec->gpio;
@@ -221,10 +168,8 @@ static void button_config(void)
 
 #if defined(BUTTON_USE_LOG) && (BUTTON_USE_LOG)
     {
-        const char *proj_name = nvs_device_id_project_name(profile->device_id);
-        ESP_LOGI("button", "nvs device_id=0x%08lX -> profile 0x%08lX (%s), %u keys",
-                 (unsigned long)device_id, (unsigned long)profile->device_id,
-                 (proj_name != NULL) ? proj_name : "unknown", (unsigned)n);
+        ESP_LOGI("button", "product=%s (0x%08lX), %u keys", product->name, (unsigned long)product->product_id,
+                 (unsigned)n);
     }
 #endif
 }

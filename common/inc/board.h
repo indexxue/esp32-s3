@@ -3,6 +3,7 @@
 
 #include "type.h"
 
+#include "device_profile.h"
 #include "qmi8658a.h"
 #include "spi.h"
 #include "st7789.h"
@@ -86,18 +87,22 @@
 #define BOARD_IO4_PWM_FREQ_HZ (5000U)
 
 /**
- * 板级外设：I2C 总线与设备、SPI+ST7789、QMI8658A 等（换板改 board.h 宏与 board.c 实现）。
+ * 板级外设：按 device_profile 中 board_mask 选择初始化子集。
+ * 须在 `nvs_init()` 之后调用 `BoardInit()`。
  */
 status_t BoardInit(void);
+
+/** 查询 BoardInit 已成功初始化的板级外设（DEVICE_BOARD_MASK_*）。 */
+bool_t BoardPeriphReady(uint32_t mask);
 
 void BoardDeinit(void);
 
 void BoardDeinitI2cBus(void);
 
-/** 已由 `BoardInit` 完成 `st7789_register` 后的句柄；未初始化前勿用。 */
+/** 已由 `BoardInit` 完成 `st7789_register` 后的句柄；未初始化时返回 NULL。 */
 st7789_t *BoardSt7789(void);
 
-/** 已由 `BoardInit` 完成 `qmi8658a_init_with_config` 后的句柄。 */
+/** 已由 `BoardInit` 完成 `qmi8658a_init_with_config` 后的句柄；未初始化时返回 NULL。 */
 qmi8658a_t *BoardQmi8658(void);
 
 #endif

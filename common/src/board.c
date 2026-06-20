@@ -1,6 +1,8 @@
 #include "board.h"
 
 #include "battery.h"
+#include "device_profile.h"
+#include "nvs.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -14,14 +16,26 @@
 
 static qmi8658a_t s_qmi8658;
 static st7789_t s_st7789;
+static uint32_t s_board_ready_mask;
+
+bool_t BoardPeriphReady(uint32_t mask)
+{
+    return (s_board_ready_mask & mask) == mask ? TRUE : FALSE;
+}
 
 st7789_t *BoardSt7789(void)
 {
+    if (!BoardPeriphReady(DEVICE_BOARD_MASK_LCD)) {
+        return NULL;
+    }
     return &s_st7789;
 }
 
 qmi8658a_t *BoardQmi8658(void)
 {
+    if (!BoardPeriphReady(DEVICE_BOARD_MASK_IMU)) {
+        return NULL;
+    }
     return &s_qmi8658;
 }
 
@@ -137,12 +151,14 @@ static void board_lcd_smoke_test(void)
 {
     uint16_t w = st7789_display_width(&s_st7789);
     uint16_t h = st7789_display_height(&s_st7789);
+    const char *title    = device_profile_lcd_smoke_title();
+    const char *subtitle = device_profile_lcd_smoke_subtitle();
 
     lcd_fill(&s_st7789, 0U, 0U, w, h, LCD_COLOR_DARKBLUE);
     lcd_draw_rectangle(&s_st7789, 0U, 0U, (uint16_t)(w - 1U), (uint16_t)(h - 1U), LCD_COLOR_YELLOW);
-    lcd_show_string(&s_st7789, 8U, 16U, (const uint8_t *)"ST7789 + lcd OK", LCD_COLOR_WHITE, LCD_COLOR_DARKBLUE, 16U, 0U);
-    lcd_show_string(&s_st7789, 8U, 40U, (const uint8_t *)"ESP32-S3 smoke test", LCD_COLOR_CYAN, LCD_COLOR_DARKBLUE, 16U, 0U);
-    LOG_INFO("LCD smoke: filled %ux%u, border + 2 lines (16px font)", (unsigned int)w, (unsigned int)h);
+    lcd_show_string(&s_st7789, 8U, 16U, (const uint8_t *)title, LCD_COLOR_WHITE, LCD_COLOR_DARKBLUE, 16U, 0U);
+    lcd_show_string(&s_st7789, 8U, 40U, (const uint8_t *)subtitle, LCD_COLOR_CYAN, LCD_COLOR_DARKBLUE, 16U, 0U);
+    LOG_INFO("LCD smoke: %s / %s, %ux%u", title, subtitle, (unsigned int)w, (unsigned int)h);
 }
 
 static status_t board_st7789_init(void)
@@ -313,22 +329,52 @@ static status_t board_init_i2c(void)
 
 status_t BoardInit(void)
 {
-    if (board_init_i2c() != STATUS_OK) {
-        return STATUS_FAIL;
+    const device_product_profile_t *product = device_profile_product();
+    const uint32_t board_mask = device_profile_board_mask();
+    const uint32_t hw_id = device_profile_hardware_id();
+    const char *hw_name = device_profile_hardware_name(hw_id);
+
+    s_board_ready_mask = 0U;
+
+    LOG_INFO("BoardInit: product=%s (0x%08lX) hardware=%s (0x%08lX) board_mask=0x%02lX",
+             product->name,
+             (unsigned long)product->product_id,
+             (hw_name != NULL) ? hw_name : "?",
+             (unsigned long)hw_id,
+             (unsigned long)board_mask);
+
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_I2C)) {
+        if (board_init_i2c() != STATUS_OK) {
+            return STATUS_FAIL;
+        }
+        s_board_ready_mask |= DEVICE_BOARD_MASK_I2C;
     }
 
-    if (board_st7789_init() != STATUS_OK) {
-        return STATUS_FAIL;
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_LCD)) {
+        if (board_st7789_init() != STATUS_OK) {
+            return STATUS_FAIL;
+        }
+        s_board_ready_mask |= DEVICE_BOARD_MASK_LCD;
     }
 
-    battery_init();
-
-    if (board_qmi8658_init() != STATUS_OK) {
-        return STATUS_FAIL;
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_BATTERY)) {
+        battery_init();
+        s_board_ready_mask |= DEVICE_BOARD_MASK_BATTERY;
     }
 
-    if (sdcard_mount(BOARD_SDCARD_MOUNT_POINT) != STATUS_OK) {
-        LOG_WARN("SD card FAT mount skipped or failed (check card / wiring), path %s", BOARD_SDCARD_MOUNT_POINT);
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_IMU)) {
+        if (board_qmi8658_init() != STATUS_OK) {
+            return STATUS_FAIL;
+        }
+        s_board_ready_mask |= DEVICE_BOARD_MASK_IMU;
+    }
+
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_SDCARD)) {
+        if (sdcard_mount(BOARD_SDCARD_MOUNT_POINT) != STATUS_OK) {
+            LOG_WARN("SD card FAT mount skipped or failed (check card / wiring), path %s", BOARD_SDCARD_MOUNT_POINT);
+        } else {
+            s_board_ready_mask |= DEVICE_BOARD_MASK_SDCARD;
+        }
     }
 
     return STATUS_OK;

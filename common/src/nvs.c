@@ -75,6 +75,7 @@ static const char *const TAG = "nvs";
 #define NVS_KEY_REGION "region"
 #define NVS_KEY_DEVICE_TYPE "dtype"
 #define NVS_KEY_DEVICE_ID "did"
+#define NVS_KEY_HARDWARE_ID "hid"
 #define NVS_KEY_DEVICE_NAME "dname"
 #define NVS_KEY_BUILD_DATE "bdate"
 #define NVS_KEY_RUN_TIME "rtime"
@@ -382,6 +383,8 @@ static void sync_build_date(void)
     }
 }
 
+static void sync_firmware_product_id(void);
+
 static void ensure_defaults(void)
 {
 #ifdef BUILD_FACTORY
@@ -415,6 +418,12 @@ static void ensure_defaults(void)
     if (overwrite || !read_u32(NVS_KEY_DEVICE_ID, &dev_id, 0)) {
         (void)nvs_device_id_set((uint32_t)NVS_DEFAULT_DEVICE_ID);
     }
+    {
+        uint32_t hw_id = 0U;
+        if (overwrite || !read_u32(NVS_KEY_HARDWARE_ID, &hw_id, 0)) {
+            (void)nvs_hardware_id_set((uint32_t)NVS_DEFAULT_HARDWARE_ID);
+        }
+    }
 #else
     if (!nvs_sn_get(sn)) {
         (void)nvs_sn_set(NVS_DEFAULT_SN);
@@ -431,10 +440,33 @@ static void ensure_defaults(void)
     if (!read_u32(NVS_KEY_DEVICE_ID, &dev_id, 0)) {
         (void)nvs_device_id_set((uint32_t)NVS_DEFAULT_DEVICE_ID);
     }
+    {
+        uint32_t hw_id = 0U;
+        if (!read_u32(NVS_KEY_HARDWARE_ID, &hw_id, 0)) {
+            (void)nvs_hardware_id_set((uint32_t)NVS_DEFAULT_HARDWARE_ID);
+        }
+    }
 #endif
 
+    sync_firmware_product_id();
     (void)device_name_apply(nvs_device_id_get());
     sync_build_date();
+}
+
+static void sync_firmware_product_id(void)
+{
+    const uint32_t fw = (uint32_t)NVS_DEFAULT_DEVICE_ID;
+    uint32_t stored;
+
+    if (fw == NVS_DEVICE_ID_DEFAULT) {
+        return;
+    }
+    stored = nvs_device_id_get();
+    if (stored != fw) {
+        LOG_WARN("NVS product_id 0x%08lX != firmware 0x%08lX, syncing to firmware",
+                 (unsigned long)stored, (unsigned long)fw);
+        (void)nvs_device_id_set(fw);
+    }
 }
 
 static void log_boot_info(void)
@@ -498,13 +530,17 @@ static void log_boot_info(void)
     }
     LOG_INFO("  device_type: %u", (unsigned int)nvs_device_type_get());
     if (dev_id == NVS_DEVICE_ID_DEFAULT) {
-        LOG_INFO("  device_id: 0x%08lX (default)", (unsigned long)dev_id);
+        LOG_INFO("  product_id: 0x%08lX (default)", (unsigned long)dev_id);
     } else if (proj != NULL) {
-        LOG_INFO("  device_id: 0x%08lX project=%s (fw=0x%08lX %s)", (unsigned long)dev_id, proj,
+        LOG_INFO("  product_id: 0x%08lX (%s, fw=0x%08lX %s)", (unsigned long)dev_id, proj,
                  (unsigned long)(uint32_t)NVS_DEFAULT_DEVICE_ID, fw_match ? "match" : "MISMATCH");
     } else {
-        LOG_INFO("  device_id: 0x%08lX (unknown project, fw=0x%08lX %s)", (unsigned long)dev_id,
+        LOG_INFO("  product_id: 0x%08lX (unknown, fw=0x%08lX %s)", (unsigned long)dev_id,
                  (unsigned long)(uint32_t)NVS_DEFAULT_DEVICE_ID, fw_match ? "match" : "MISMATCH");
+    }
+    {
+        const uint32_t hw_id = nvs_hardware_id_get();
+        LOG_INFO("  hardware_id: 0x%08lX", (unsigned long)hw_id);
     }
     {
         char bdate[NVS_BUILD_DATE_SIZE];
@@ -702,6 +738,32 @@ uint32_t nvs_device_id_get(void)
 {
     uint32_t id = (uint32_t)NVS_DEFAULT_DEVICE_ID;
     (void)read_u32(NVS_KEY_DEVICE_ID, &id, (uint32_t)NVS_DEFAULT_DEVICE_ID);
+    return id;
+}
+
+uint32_t nvs_product_id_active(void)
+{
+    const uint32_t stored = nvs_device_id_get();
+    const uint32_t fw     = (uint32_t)NVS_DEFAULT_DEVICE_ID;
+
+    if (fw != NVS_DEVICE_ID_DEFAULT) {
+        return fw;
+    }
+    return stored;
+}
+
+bool nvs_hardware_id_set(uint32_t id)
+{
+    if (!write_u32(NVS_KEY_HARDWARE_ID, id)) {
+        return false;
+    }
+    return true;
+}
+
+uint32_t nvs_hardware_id_get(void)
+{
+    uint32_t id = (uint32_t)NVS_DEFAULT_HARDWARE_ID;
+    (void)read_u32(NVS_KEY_HARDWARE_ID, &id, (uint32_t)NVS_DEFAULT_HARDWARE_ID);
     return id;
 }
 

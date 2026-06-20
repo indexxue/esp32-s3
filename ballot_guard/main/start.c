@@ -1,6 +1,6 @@
 /**
  * @file start.c
- * @brief ballot_guard 平台壳层：log、NVS、板级、按键、灯效初始化。
+ * @brief ballot_guard 平台壳层：log、NVS、板级、按键、灯效初始化（掩码见 device_profile）。
  */
 
 #include "start.h"
@@ -10,6 +10,7 @@
 
 #include "type.h"
 
+#include "device_profile.h"
 #include "log.h"
 #include "nvs.h"
 #include "board.h"
@@ -17,6 +18,7 @@
 #include "flexible_button.h"
 #include "led_scene.h"
 #include "boot_slot.h"
+#include "vote_menu_demo.h"
 
 #include "esp_ota_ops.h"
 
@@ -25,7 +27,6 @@
 #include "web_ctrl.h"
 #include "web_pages.h"
 
-/** Wi-Fi + HTTP 启动栈：含 STA 连接等待与 esp_httpd 注册，勿在 app_main 栈上同步调用。 */
 #define WEB_CTRL_BOOT_TASK_STACK_WORDS (10240U)
 #define WEB_CTRL_BOOT_TASK_PRIORITY (3U)
 
@@ -46,7 +47,6 @@ static void web_ctrl_boot_task(void *arg)
 #endif
 
 #define BUTTON_SCAN_PERIOD_MS (1000 / FLEX_BTN_SCAN_FREQ_HZ)
-
 #define BTN_SCAN_TASK_STACK_WORDS (3072U)
 #define BTN_SCAN_TASK_PRIORITY (5U)
 
@@ -83,9 +83,6 @@ status_t app_start(const app_lifecycle_t *lifecycle)
     return STATUS_OK;
 }
 
-/* ---------- 按键 ---------- */
-
-/** 左键长按：将下次启动切到「当前运行槽」的另一槽并复位。 */
 static void app_button_switch_to_other_slot(void)
 {
     const esp_partition_t *run = esp_ota_get_running_partition();
@@ -118,6 +115,12 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
 {
     (void)permission;
     LOG_INFO("key %s (%s): %s", button_id_to_str(id), (name != NULL) ? name : "?", button_event_to_str(event));
+
+    if (vote_menu_demo_is_active()) {
+        if (vote_menu_demo_on_button(id, event)) {
+            return;
+        }
+    }
 
     if ((id == BTN_ID_LEFT) && (event == BTN_EVENT_LONG_PRESS)) {
         app_button_switch_to_other_slot();
@@ -160,9 +163,11 @@ static status_t app_init_platform(void)
     }
 
 #if CONFIG_WEB_CTRL_AUTO_START
-    if (xTaskCreate(web_ctrl_boot_task, "web_boot", WEB_CTRL_BOOT_TASK_STACK_WORDS, NULL,
-                    WEB_CTRL_BOOT_TASK_PRIORITY, NULL) != pdPASS) {
-        LOG_WARN("create web_boot task failed");
+    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_WEB)) {
+        if (xTaskCreate(web_ctrl_boot_task, "web_boot", WEB_CTRL_BOOT_TASK_STACK_WORDS, NULL,
+                        WEB_CTRL_BOOT_TASK_PRIORITY, NULL) != pdPASS) {
+            LOG_WARN("create web_boot task failed");
+        }
     }
 #endif
 
@@ -173,13 +178,13 @@ static status_t app_init_button_io(void)
 {
     button_init(app_button_notify);
 
-    if (xTaskCreate(button_scan_task, "btn_scan", BTN_SCAN_TASK_STACK_WORDS, NULL,
-                    BTN_SCAN_TASK_PRIORITY, NULL) != pdPASS) {
+    if (xTaskCreate(button_scan_task, "btn_scan", BTN_SCAN_TASK_STACK_WORDS, NULL, BTN_SCAN_TASK_PRIORITY, NULL) !=
+        pdPASS) {
         LOG_ERROR("create btn_scan task failed");
         return STATUS_FAIL;
     }
 
-    LOG_INFO("buttons 左/右, scan %d Hz; 左 单击=灯效 trigger, 左 长按=切换下次启动槽并复位, 右 单击=灯效 success",
+    LOG_INFO("buttons 左/右 GPIO0/GPIO3, scan %d Hz; 左 单击=灯效 trigger, 左 长按=切换下次启动槽并复位, 右 单击=灯效 success",
              FLEX_BTN_SCAN_FREQ_HZ);
 
     return STATUS_OK;
@@ -207,21 +212,35 @@ static status_t app_init_led_ui(void)
 static status_t app_init(void)
 {
     status_t err = app_init_platform();
+    const device_product_profile_t *product = device_profile_product();
+
     if (err != STATUS_OK) {
         return err;
     }
 
-    err = app_init_button_io();
-    if (err != STATUS_OK) {
-        return err;
+    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_BUTTON)) {
+        err = app_init_button_io();
+        if (err != STATUS_OK) {
+            return err;
+        }
     }
 
-    err = app_init_led_ui();
-    if (err != STATUS_OK) {
-        return err;
+    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
+        err = app_init_led_ui();
+        if (err != STATUS_OK) {
+            return err;
+        }
     }
 
-    LOG_INFO("ballot_guard ready (NVS + app_a partition)");
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_LCD)) {
+        err = vote_menu_demo_start();
+        if (err != STATUS_OK) {
+            LOG_WARN("vote_menu_demo_start failed");
+        }
+    }
+
+    LOG_INFO("%s ready (platform_mask=0x%02lX)", product->name,
+             (unsigned long)device_profile_platform_mask());
     return STATUS_OK;
 }
 
