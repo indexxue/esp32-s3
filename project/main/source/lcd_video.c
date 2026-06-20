@@ -680,7 +680,7 @@ static void poll_stop_from_button(void)
     btn_event_e bev;
 
     button_last_event_get(&bid, &bev);
-    if ((bev == BTN_EVENT_SINGLE_CLICK) && (bid == BTN_ID_GPIO0)) {
+    if ((bev == BTN_EVENT_SINGLE_CLICK) && (bid == BTN_ID_UP)) {
         button_last_event_clear();
         s_stop_requested = true;
     }

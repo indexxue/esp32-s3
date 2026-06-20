@@ -11,7 +11,7 @@
 #include "type.h"
 
 #include "log.h"
-#include "persist.h"
+#include "nvs.h"
 #include "board.h"
 #include "button.h"
 #include "flexible_button.h"
@@ -129,7 +129,7 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
     (void)permission;
     LOG_INFO("key %s (%s): %s", button_id_to_str(id), (name != NULL) ? name : "?", button_event_to_str(event));
 
-    if ((id == BTN_ID_GPIO0) && (event == BTN_EVENT_LONG_PRESS)) {
+    if ((id == BTN_ID_UP) && (event == BTN_EVENT_LONG_PRESS)) {
         app_button_switch_to_other_slot();
         return;
     }
@@ -138,9 +138,9 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
         return;
     }
 
-    if (id == BTN_ID_GPIO0) {
+    if (id == BTN_ID_UP) {
         led_scene_run(LED_SCENE_ID_TRIGGER);
-    } else if (id == BTN_ID_GPIO3) {
+    } else if (id == BTN_ID_DOWN) {
         led_scene_run(LED_SCENE_ID_SUCCESS);
     }
 }
@@ -164,7 +164,7 @@ static status_t app_init_platform(void)
         return STATUS_FAIL;
     }
 
-    /* NVS：依赖 log，便于打印初始化与 boot 摘要（见 persist.c 中 nvs_init / nvs_print_boot_info） */
+    /* NVS：依赖 log，nvs_init 内部会打印 boot 摘要 */
     nvs_init();
 
     if (BoardInit() != STATUS_OK) {
@@ -192,7 +192,7 @@ static status_t app_init_button_io(void)
         return STATUS_FAIL;
     }
 
-    LOG_INFO("buttons GPIO0/GPIO3, scan %d Hz; GPIO0 单击=灯效 trigger + SD 图库下一张, GPIO0 长按=切换下次启动槽并复位, GPIO3 单击=灯效 success",
+    LOG_INFO("buttons 上/下, scan %d Hz; 上 单击=灯效 trigger + SD 图库下一张, 上 长按=切换下次启动槽并复位, 下 单击=灯效 success",
              FLEX_BTN_SCAN_FREQ_HZ);
 
     return STATUS_OK;

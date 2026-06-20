@@ -10,7 +10,7 @@
 #include "lcd.h"
 #include "led_scene.h"
 #include "log.h"
-#include "persist.h"
+#include "nvs.h"
 #include "boot_slot.h"
 #include "sdcard.h"
 #include "usb_serial_jtag.h"
@@ -382,6 +382,43 @@ static void cmd_devtype(int argc, const char *argv[])
     (void)argv;
     (void)snprintf(b, sizeof(b), "%u", (unsigned int)nvs_device_type_get());
     cmd_reply_ok("devtype", b);
+}
+
+static void cmd_devid(int argc, const char *argv[])
+{
+    char b[48];
+
+    if (argc == 1) {
+        uint32_t id = nvs_device_id_get();
+        const char *name = nvs_device_id_project_name(id);
+
+        if (name != NULL) {
+            (void)snprintf(b, sizeof(b), "0x%08lX:%s", (unsigned long)id, name);
+        } else if (id == NVS_DEVICE_ID_DEFAULT) {
+            (void)snprintf(b, sizeof(b), "0x%08lX:default", (unsigned long)id);
+        } else {
+            (void)snprintf(b, sizeof(b), "0x%08lX", (unsigned long)id);
+        }
+        cmd_reply_ok("devid", b);
+        return;
+    }
+    if (argc == 2) {
+        char *end = NULL;
+        unsigned long v = strtoul(argv[1], &end, 0);
+        if ((end != NULL) && (*end == '\0') && (v <= 0xFFFFFFFFUL) && nvs_device_id_set((uint32_t)v)) {
+            const char *name = nvs_device_id_project_name((uint32_t)v);
+            if (name != NULL) {
+                (void)snprintf(b, sizeof(b), "0x%08lX:%s", v, name);
+            } else if (v == (unsigned long)NVS_DEVICE_ID_DEFAULT) {
+                (void)snprintf(b, sizeof(b), "0x%08lX:default", v);
+            } else {
+                (void)snprintf(b, sizeof(b), "0x%08lX", v);
+            }
+            cmd_reply_ok("devid", b);
+            return;
+        }
+    }
+    cmd_reply_ng();
 }
 
 static void cmd_mac(int argc, const char *argv[])
@@ -1181,6 +1218,7 @@ void cmd_register_defaults(void)
 {
     (void)cmd_register("sn", cmd_sn, "get/set serial (set: 10..12 chars)");
     (void)cmd_register("devtype", cmd_devtype, "read device type byte");
+    (void)cmd_register("devid", cmd_devid, "get/set device id (set: 0x........ hex/dec)");
     (void)cmd_register("mac", cmd_mac, "get/set mac blob (set: 8 decimal digits)");
     (void)cmd_register("led", cmd_led, "led r|b|all on|off");
     (void)cmd_register("ledfx", cmd_ledfx,

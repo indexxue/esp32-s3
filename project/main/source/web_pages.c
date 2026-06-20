@@ -20,7 +20,7 @@
 #include "cmd.h"
 #include "lcd_gallery.h"
 #include "lcd_video.h"
-#include "persist.h"
+#include "nvs.h"
 #include "sdcard.h"
 #include "web_ctrl_cmd.h"
 

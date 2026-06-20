@@ -18,7 +18,7 @@
 #include "cmd.h"
 #include "usb_serial_jtag.h"
 
-#include "persist.h"
+#include "nvs.h"
 
 #include "web_ctrl_cmd.h"
 #include "web_ctrl_wifi_api.h"

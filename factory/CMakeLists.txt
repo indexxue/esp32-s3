@@ -7,5 +7,7 @@ set(EXTRA_COMPONENT_DIRS
     "../components"
 )
 
+add_compile_definitions(BUILD_FACTORY)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(factory)

@@ -25,7 +25,7 @@
 
 #include "battery.h"
 #include "net_wifi.h"
-#include "persist.h"
+#include "nvs.h"
 
 static const char *TAG = "web_ctrl_wifi";
 

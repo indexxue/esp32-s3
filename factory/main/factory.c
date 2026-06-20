@@ -12,7 +12,7 @@
 #include "type.h"
 
 #include "log.h"
-#include "persist.h"
+#include "nvs.h"
 #include "board.h"
 #include "button.h"
 #include "flexible_button.h"
@@ -93,7 +93,7 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
     (void)permission;
     LOG_INFO("key %s (%s): %s", button_id_to_str(id), (name != NULL) ? name : "?", button_event_to_str(event));
 
-    if ((id == BTN_ID_GPIO0) && (event == BTN_EVENT_LONG_PRESS)) {
+    if ((id == BTN_ID_UP) && (event == BTN_EVENT_LONG_PRESS)) {
         app_button_switch_to_other_slot();
         return;
     }
@@ -102,9 +102,9 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
         return;
     }
 
-    if (id == BTN_ID_GPIO0) {
+    if (id == BTN_ID_UP) {
         led_scene_run(LED_SCENE_ID_TRIGGER);
-    } else if (id == BTN_ID_GPIO3) {
+    } else if (id == BTN_ID_DOWN) {
         led_scene_run(LED_SCENE_ID_SUCCESS);
     }
 }
@@ -146,7 +146,7 @@ static status_t app_init_button_io(void)
         return STATUS_FAIL;
     }
 
-    LOG_INFO("buttons: GPIO0 单击=灯效 trigger, GPIO0 长按=切换下次启动槽并复位, GPIO3 单击=灯效 success");
+    LOG_INFO("buttons: 上 单击=灯效 trigger, 上 长按=切换下次启动槽并复位, 下 单击=灯效 success");
 
     return STATUS_OK;
 }

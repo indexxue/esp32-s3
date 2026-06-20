@@ -14,8 +14,10 @@ typedef enum {
 } btn_status_e;
 
 typedef enum {
-    BTN_ID_GPIO0 = 0,
-    BTN_ID_GPIO3 = 1,
+    BTN_ID_UP = 0,
+    BTN_ID_DOWN,
+    BTN_ID_LEFT,
+    BTN_ID_RIGHT,
     BTN_ID_MAX_NUMBER,
 } btn_id_e;
 
@@ -50,6 +52,7 @@ typedef enum {
 /** 按键事件回调；在实现里打印 id/name/event 即可观察单击、双击、长按等（须配合周期性 button_schedule）。 */
 typedef void (*btn_notify_t)(btn_id_e id, const char *name, btn_permission_e permission, btn_event_e event);
 
+/** 须在 nvs_init() 之后调用：按 NVS device_id 选择按键表并注册 GPIO（见 common/src/button.c）。 */
 void button_init(btn_notify_t notify);
 void button_deinit(void);
 /** 按 FLEX_BTN_SCAN_FREQ_HZ（默认 50Hz）周期调用，例如定时器或任务中每 20ms 调一次。 */

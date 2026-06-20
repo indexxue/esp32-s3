@@ -4,19 +4,28 @@
 
 #include "flexible_button.h"
 #include "gpio.h"
+#include "nvs.h"
 
 #if defined(BUTTON_USE_LOG) && (BUTTON_USE_LOG)
 #include "esp_log.h"
 #endif
 
-/** 两路按键 GPIO，与硬件一致；改板时只改此处即可。 */
-#define BUTTON_GPIO0 (0)
-#define BUTTON_GPIO3 (3)
+/** 各项目按键表最大路数；新增项目时按需增大。 */
+#define BUTTON_MAX_NUM 2U
 
-#define BTN_NAME_GPIO0 "GPIO0"
-#define BTN_NAME_GPIO3 "GPIO3"
+typedef struct {
+    btn_id_e id;
+    const char *name;
+    int32_t gpio;
+    uint8_t active_level;
+    uint16_t permission;
+} button_spec_t;
 
-#define BTN_NUM 2
+typedef struct {
+    uint32_t device_id;
+    const button_spec_t *specs;
+    uint8_t count;
+} button_profile_t;
 
 typedef struct {
     btn_id_e id;
@@ -33,8 +42,50 @@ typedef struct {
     btn_notify_t notify;
 } button_item_t;
 
-static button_list_t s_button_list[BTN_NUM];
+static button_list_t s_button_list[BUTTON_MAX_NUM];
 static button_item_t self = {0};
+
+/** factory / 默认：与 main 同板，语义为上 / 下。 */
+static const button_spec_t s_specs_default[] = {
+    {BTN_ID_UP, "上", 0, 0, (uint16_t)(BTN_PERMISSION_UP | BTN_PERMISSION_RESET)},
+    {BTN_ID_DOWN, "下", 3, 0, (uint16_t)(BTN_PERMISSION_DOWN | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR)},
+};
+
+/** main 工程：GPIO0=上，GPIO3=下。 */
+static const button_spec_t s_specs_main[] = {
+    {BTN_ID_UP, "上", 0, 0, (uint16_t)(BTN_PERMISSION_UP | BTN_PERMISSION_RESET)},
+    {BTN_ID_DOWN, "下", 3, 0, (uint16_t)(BTN_PERMISSION_DOWN | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR)},
+};
+
+/** ballot_guard：GPIO0=左，GPIO3=右。 */
+static const button_spec_t s_specs_ballot_guard[] = {
+    {BTN_ID_LEFT, "左", 0, 0, (uint16_t)(BTN_PERMISSION_LEFT | BTN_PERMISSION_RESET)},
+    {BTN_ID_RIGHT, "右", 3, 0, (uint16_t)(BTN_PERMISSION_RIGHT | BTN_PERMISSION_RESET)},
+};
+
+static const button_profile_t s_button_profiles[] = {
+    {NVS_DEVICE_ID_DEFAULT, s_specs_default, (uint8_t)(sizeof(s_specs_default) / sizeof(s_specs_default[0]))},
+    {NVS_PROJECT_ID_MAIN, s_specs_main, (uint8_t)(sizeof(s_specs_main) / sizeof(s_specs_main[0]))},
+    {NVS_PROJECT_ID_BALLOT_GUARD, s_specs_ballot_guard,
+     (uint8_t)(sizeof(s_specs_ballot_guard) / sizeof(s_specs_ballot_guard[0]))},
+};
+
+static const button_profile_t *button_profile_lookup(uint32_t device_id)
+{
+    size_t i;
+
+    for (i = 0; i < (sizeof(s_button_profiles) / sizeof(s_button_profiles[0])); i++) {
+        if (s_button_profiles[i].device_id == device_id) {
+            return &s_button_profiles[i];
+        }
+    }
+    for (i = 0; i < (sizeof(s_button_profiles) / sizeof(s_button_profiles[0])); i++) {
+        if (s_button_profiles[i].device_id == (uint32_t)NVS_DEFAULT_DEVICE_ID) {
+            return &s_button_profiles[i];
+        }
+    }
+    return &s_button_profiles[0];
+}
 
 static btn_id_e last_button_id = BTN_ID_MAX_NUMBER;
 static btn_event_e last_button_event = BTN_EVENT_NONE;
@@ -130,7 +181,7 @@ static void button_flex_init(button_list_t *list)
 
 static void button_gpio_init(void)
 {
-    for (uint8_t i = 0; i < BTN_NUM; i++) {
+    for (uint8_t i = 0; i < self.num; i++) {
         button_list_t *p = &s_button_list[i];
         const GpioPinConfig_t cfg = {
             .pin = p->gpio,
@@ -146,23 +197,36 @@ static void button_gpio_init(void)
 
 static void button_config(void)
 {
-    button_list_t *list = s_button_list;
+    const uint32_t device_id = nvs_device_id_get();
+    const button_profile_t *profile = button_profile_lookup(device_id);
+    uint8_t n = profile->count;
 
-    list[0].id = BTN_ID_GPIO0;
-    list[0].name = BTN_NAME_GPIO0;
-    list[0].gpio = BUTTON_GPIO0;
-    list[0].active_level = 0;
-    list[0].permission = (uint16_t)(BTN_PERMISSION_FTM | BTN_PERMISSION_RESET);
+    if (n > BUTTON_MAX_NUM) {
+        n = BUTTON_MAX_NUM;
+    }
 
-    list[1].id = BTN_ID_GPIO3;
-    list[1].name = BTN_NAME_GPIO3;
-    list[1].gpio = BUTTON_GPIO3;
-    list[1].active_level = 0;
-    list[1].permission =
-        (uint16_t)(BTN_PERMISSION_UP | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR);
+    for (uint8_t i = 0; i < n; i++) {
+        const button_spec_t *spec = &profile->specs[i];
+        button_list_t *entry = &s_button_list[i];
 
-    self.num = BTN_NUM;
+        entry->id = spec->id;
+        entry->name = spec->name;
+        entry->gpio = spec->gpio;
+        entry->active_level = spec->active_level;
+        entry->permission = spec->permission;
+    }
+
+    self.num = n;
     self.list = s_button_list;
+
+#if defined(BUTTON_USE_LOG) && (BUTTON_USE_LOG)
+    {
+        const char *proj_name = nvs_device_id_project_name(profile->device_id);
+        ESP_LOGI("button", "nvs device_id=0x%08lX -> profile 0x%08lX (%s), %u keys",
+                 (unsigned long)device_id, (unsigned long)profile->device_id,
+                 (proj_name != NULL) ? proj_name : "unknown", (unsigned)n);
+    }
+#endif
 }
 
 void button_init(btn_notify_t notify)
@@ -215,11 +279,23 @@ void button_last_event_clear(void)
 
 const char *button_id_to_str(btn_id_e id)
 {
+    if (self.list != NULL) {
+        for (uint8_t i = 0; i < self.num; i++) {
+            if ((self.list[i].id == id) && (self.list[i].name != NULL)) {
+                return self.list[i].name;
+            }
+        }
+    }
+
     switch (id) {
-        case BTN_ID_GPIO0:
-            return "GPIO0";
-        case BTN_ID_GPIO3:
-            return "GPIO3";
+        case BTN_ID_UP:
+            return "上";
+        case BTN_ID_DOWN:
+            return "下";
+        case BTN_ID_LEFT:
+            return "左";
+        case BTN_ID_RIGHT:
+            return "右";
         default:
             return "UNKNOWN";
     }

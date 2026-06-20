@@ -23,7 +23,7 @@
 #include "lcd_gallery.h"
 #include "lcd_video.h"
 #include "net_wifi.h"
-#include "persist.h"
+#include "nvs.h"
 #include "battery.h"
 
 /* ---------- 可调参数（业务任务） ---------- */
@@ -218,13 +218,13 @@ static void application_modules_task(void *arg)
         lcd = BoardSt7789();
 
         button_last_event_get(&bid, &bev);
-        if ((s_lcd_ui_mode == LCD_UI_MODE_GALLERY) && (bev == BTN_EVENT_SINGLE_CLICK) && (bid == BTN_ID_GPIO0) &&
+        if ((s_lcd_ui_mode == LCD_UI_MODE_GALLERY) && (bev == BTN_EVENT_SINGLE_CLICK) && (bid == BTN_ID_UP) &&
             st7789_is_initialized(lcd) && (sdcard_get_card() != NULL) && (lcd_gallery_count() > 0U)) {
             button_last_event_clear();
             lcd_gallery_next();
             (void)lcd_gallery_show_index(lcd, lcd_gallery_current());
             app_lcd_draw_top_status(lcd);
-        } else if ((s_lcd_ui_mode == LCD_UI_MODE_VIDEO) && (bev == BTN_EVENT_SINGLE_CLICK) && (bid == BTN_ID_GPIO0)) {
+        } else if ((s_lcd_ui_mode == LCD_UI_MODE_VIDEO) && (bev == BTN_EVENT_SINGLE_CLICK) && (bid == BTN_ID_UP)) {
             button_last_event_clear();
             lcd_video_request_stop();
         }
