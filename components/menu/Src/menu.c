@@ -556,6 +556,42 @@ menu_result_t menu_nav_back(menu_engine_t *eng)
   return pop_page(eng);
 }
 
+menu_result_t menu_nav_goto(menu_engine_t *eng, const menu_page_t *target)
+{
+  const menu_page_t *root;
+  uint16_t i;
+
+  if (eng == NULL || target == NULL || eng->root == NULL)
+  {
+    return MENU_RESULT_ERROR;
+  }
+
+  menu_engine_reset(eng);
+
+  if (target == eng->current)
+  {
+    return MENU_RESULT_NONE;
+  }
+
+  root = eng->root;
+  if (root->items == NULL)
+  {
+    return MENU_RESULT_ERROR;
+  }
+
+  for (i = 0U; i < root->count; i++)
+  {
+    const menu_item_t *item = &root->items[i];
+    if (item->type == MENU_ITEM_SUBMENU && item->submenu == target)
+    {
+      eng->index = i;
+      return menu_dispatch(eng, MENU_EVT_ENTER);
+    }
+  }
+
+  return MENU_RESULT_ERROR;
+}
+
 const menu_page_t *menu_current_page(const menu_engine_t *eng)
 {
   if (eng == NULL)

@@ -26,6 +26,7 @@
 #include "esp_err.h"
 #include "web_ctrl.h"
 #include "web_pages.h"
+#include "web_server.h"
 
 #define WEB_CTRL_BOOT_TASK_STACK_WORDS (10240U)
 #define WEB_CTRL_BOOT_TASK_PRIORITY (3U)
@@ -41,6 +42,11 @@ static void web_ctrl_boot_task(void *arg)
     const esp_err_t werr = web_ctrl_start(&wcfg);
     if (werr != ESP_OK) {
         LOG_WARN("web_ctrl_start failed: %s", esp_err_to_name(werr));
+    } else {
+        const esp_err_t reg = web_pages_register(web_server_get_handle());
+        if (reg != ESP_OK) {
+            LOG_WARN("web_pages_register failed: %s", esp_err_to_name(reg));
+        }
     }
     vTaskDelete(NULL);
 }

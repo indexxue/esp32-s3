@@ -8,6 +8,7 @@
 #include <stdio.h>
 
 #include "vote_menu_config.h"
+#include "vote_status.h"
 
 static menu_engine_t s_eng;
 static vote_menu_settings_t s_settings = {
@@ -21,6 +22,15 @@ static vote_menu_settings_t s_settings = {
 
 static vote_menu_ui_notify_cb s_ui_notify;
 static void *s_ui_notify_ctx;
+static vote_menu_leave_app_cb s_leave_app;
+static void *s_leave_app_ctx;
+
+static void leave_to_app(void)
+{
+    if (s_leave_app != NULL) {
+        s_leave_app(s_leave_app_ctx);
+    }
+}
 
 static const vote_menu_page_id_t s_page_admin_id   = VOTE_MENU_PAGE_ADMIN;
 static const vote_menu_page_id_t s_page_time_id    = VOTE_MENU_PAGE_TIME;
@@ -217,32 +227,64 @@ static const char *aux_cooldown(void *ctx, const menu_item_t *item, char *buf, s
     return buf;
 }
 
-static void on_save_time(void *app_ctx, menu_engine_t *eng, const menu_item_t *item)
+static void save_time_and_back(menu_engine_t *eng)
 {
-    (void)item;
     if (schedule_minutes() >= schedule_end_minutes()) {
         ui_toast("Invalid time", 1);
         return;
     }
     ui_toast("Saved", 0);
     (void)menu_nav_back(eng);
-    (void)app_ctx;
 }
 
-static void on_save_count(void *app_ctx, menu_engine_t *eng, const menu_item_t *item)
+static void save_count_and_back(menu_engine_t *eng)
 {
-    (void)item;
-    (void)app_ctx;
     ui_toast("Saved", 0);
     (void)menu_nav_back(eng);
 }
 
-static void on_save_cooldown(void *app_ctx, menu_engine_t *eng, const menu_item_t *item)
+static void save_cooldown_and_back(menu_engine_t *eng)
 {
-    (void)item;
-    (void)app_ctx;
     ui_toast("Saved", 0);
     (void)menu_nav_back(eng);
+}
+
+bool vote_menu_pages_confirm_save(menu_engine_t *eng)
+{
+    const menu_page_t *page;
+    vote_menu_page_id_t pid;
+    uint16_t idx;
+
+    if (eng == NULL) {
+        return false;
+    }
+
+    page = menu_current_page(eng);
+    pid  = vote_menu_page_id_of(page);
+    idx  = menu_current_index(eng);
+
+    switch (pid) {
+    case VOTE_MENU_PAGE_TIME:
+        if (idx != 3U) {
+            return false;
+        }
+        save_time_and_back(eng);
+        return true;
+    case VOTE_MENU_PAGE_COUNT:
+        if (idx != 0U) {
+            return false;
+        }
+        save_count_and_back(eng);
+        return true;
+    case VOTE_MENU_PAGE_COOLDOWN:
+        if (idx != 0U) {
+            return false;
+        }
+        save_cooldown_and_back(eng);
+        return true;
+    default:
+        return false;
+    }
 }
 
 static void on_reset_cancel(void *app_ctx, menu_engine_t *eng, const menu_item_t *item)
@@ -257,9 +299,11 @@ static void on_reset_confirm(void *app_ctx, menu_engine_t *eng, const menu_item_
     (void)app_ctx;
     (void)item;
     ui_toast("Reset OK", 0);
+    vote_status_reset_counts();
     while (menu_engine_depth(eng) > 0U) {
         (void)menu_nav_back(eng);
     }
+    leave_to_app();
 }
 
 static void on_admin_root_back(void *app_ctx, menu_engine_t *eng, const menu_page_t *page)
@@ -268,24 +312,22 @@ static void on_admin_root_back(void *app_ctx, menu_engine_t *eng, const menu_pag
     (void)eng;
     (void)page;
     ui_toast("Exit menu", 0);
+    leave_to_app();
 }
 
 static const menu_item_t s_time_items[] = {
     { "Start Hour", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_hour, NULL, &s_settings.start_h },
     { "Start Min", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_minute, NULL, &s_settings.start_m },
     { "End Hour", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_hour, NULL, &s_settings.end_h },
-    { "End Min", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_minute, NULL, &s_settings.end_m },
-    { "Save", MENU_ITEM_ACTION, 0, NULL, on_save_time, NULL, NULL, NULL },
+    { "End Min", MENU_ITEM_PARAM, 0, NULL, NULL, &s_vtbl_minute, NULL, &s_settings.end_m },
 };
 
 static const menu_item_t s_count_items[] = {
-    { "Count", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_count, NULL, &s_settings.candidate_count },
-    { "Save", MENU_ITEM_ACTION, 0, NULL, on_save_count, NULL, NULL, NULL },
+    { "Count", MENU_ITEM_PARAM, 0, NULL, NULL, &s_vtbl_count, NULL, &s_settings.candidate_count },
 };
 
 static const menu_item_t s_cooldown_items[] = {
-    { "Seconds", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_cooldown, NULL, &s_settings.cooldown_sec },
-    { "Save", MENU_ITEM_ACTION, 0, NULL, on_save_cooldown, NULL, NULL, NULL },
+    { "Seconds", MENU_ITEM_PARAM, 0, NULL, NULL, &s_vtbl_cooldown, NULL, &s_settings.cooldown_sec },
 };
 
 static const menu_item_t s_reset_items[] = {
@@ -298,7 +340,7 @@ static const menu_page_t s_page_time = {
     .items     = s_time_items,
     .count     = (uint16_t)(sizeof(s_time_items) / sizeof(s_time_items[0])),
     .user_ctx  = (void *)&s_page_time_id,
-    .foot_hint = "Adj Save Back",
+    .foot_hint = "Adj OK Back",
 };
 
 static const menu_page_t s_page_count = {
@@ -306,7 +348,7 @@ static const menu_page_t s_page_count = {
     .items     = s_count_items,
     .count     = (uint16_t)(sizeof(s_count_items) / sizeof(s_count_items[0])),
     .user_ctx  = (void *)&s_page_count_id,
-    .foot_hint = "Adj Save Back",
+    .foot_hint = "Adj OK Back",
 };
 
 static const menu_page_t s_page_cooldown = {
@@ -314,7 +356,7 @@ static const menu_page_t s_page_cooldown = {
     .items     = s_cooldown_items,
     .count     = (uint16_t)(sizeof(s_cooldown_items) / sizeof(s_cooldown_items[0])),
     .user_ctx  = (void *)&s_page_cooldown_id,
-    .foot_hint = "Adj Save Back",
+    .foot_hint = "Adj OK Back",
 };
 
 static const menu_page_t s_page_reset = {
@@ -362,6 +404,12 @@ void vote_menu_set_ui_notify(vote_menu_ui_notify_cb cb, void *ctx)
     s_ui_notify_ctx  = ctx;
 }
 
+void vote_menu_set_leave_app_cb(vote_menu_leave_app_cb cb, void *ctx)
+{
+    s_leave_app      = cb;
+    s_leave_app_ctx  = ctx;
+}
+
 void vote_menu_pages_init(void)
 {
     menu_engine_opts_t opts = {
@@ -371,4 +419,30 @@ void vote_menu_pages_init(void)
 
     menu_engine_init(&s_eng, &s_page_admin, &s_settings);
     menu_engine_configure(&s_eng, &opts);
+}
+
+const menu_page_t *vote_menu_page_by_id(vote_menu_page_id_t id)
+{
+    switch (id) {
+    case VOTE_MENU_PAGE_ADMIN:
+        return &s_page_admin;
+    case VOTE_MENU_PAGE_TIME:
+        return &s_page_time;
+    case VOTE_MENU_PAGE_COUNT:
+        return &s_page_count;
+    case VOTE_MENU_PAGE_COOLDOWN:
+        return &s_page_cooldown;
+    case VOTE_MENU_PAGE_RESET:
+        return &s_page_reset;
+    default:
+        return NULL;
+    }
+}
+
+vote_menu_page_id_t vote_menu_page_id_of(const menu_page_t *page)
+{
+    if (page == NULL || page->user_ctx == NULL) {
+        return VOTE_MENU_PAGE_ADMIN;
+    }
+    return *(const vote_menu_page_id_t *)page->user_ctx;
 }

@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "start.c"
         "source/web_pages.c"
+        "source/vote_status.c"
         "source/vote_menu_pages.c"
         "source/vote_menu_lcd.c"
         "source/vote_menu_demo.c"

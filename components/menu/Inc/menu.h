@@ -153,6 +153,12 @@ menu_result_t menu_dispatch(menu_engine_t *eng, menu_evt_t evt);
 /** Pop one page; same as @ref MENU_EVT_BACK when depth > 0. */
 menu_result_t menu_nav_back(menu_engine_t *eng);
 
+/**
+ * Reset to root, then enter @a target if it is a direct SUBMENU of root.
+ * @a target may equal root (admin root only).
+ */
+menu_result_t menu_nav_goto(menu_engine_t *eng, const menu_page_t *target);
+
 const menu_page_t *menu_current_page(const menu_engine_t *eng);
 uint16_t menu_current_index(const menu_engine_t *eng);
 const menu_item_t *menu_current_item(const menu_engine_t *eng);
