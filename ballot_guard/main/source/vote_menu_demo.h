@@ -19,7 +19,9 @@ extern "C" {
 
 /**
  * 启动 LCD UI 任务（需 BoardInit 已完成且 LCD 就绪）。
- * 默认显示主界面；左=上/减，右=下/增，左长按=确认，右长按=返回。
+ * 自检完成后默认进入管理员菜单。
+ * 6 键：上/下/左/右/确认/返回独立；确认短按=有效票，确认长按=废票（选人屏）。
+ * 开发板 2 键：左=上/长按确认，右=下/长按返回。
  */
 status_t vote_menu_demo_start(void);
 
@@ -36,6 +38,9 @@ vote_menu_page_id_t vote_menu_demo_current_page(void);
 
 /** 跳转到任意 LCD 画面（Web 调试 / 预览）。 */
 bool vote_menu_demo_goto_screen(vote_lcd_screen_id_t screen);
+
+/** 退出管理员菜单，进入当前 phase 对应业务屏（LCD 菜单 / Web 均可调用）。 */
+bool vote_menu_demo_enter_voting(void);
 
 /** @deprecated 使用 vote_menu_demo_goto_screen。 */
 bool vote_menu_demo_goto_page(vote_menu_page_id_t page);

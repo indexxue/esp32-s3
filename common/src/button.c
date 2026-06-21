@@ -12,7 +12,7 @@
 #endif
 
 /** 各项目按键表最大路数；新增项目时按需增大。 */
-#define BUTTON_MAX_NUM 2U
+#define BUTTON_MAX_NUM 6U
 
 typedef struct {
     btn_id_e id;
@@ -241,6 +241,10 @@ const char *button_id_to_str(btn_id_e id)
             return "左";
         case BTN_ID_RIGHT:
             return "右";
+        case BTN_ID_CONFIRM:
+            return "确认";
+        case BTN_ID_BACK:
+            return "返回";
         default:
             return "UNKNOWN";
     }

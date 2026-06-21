@@ -17,6 +17,7 @@
 #include "button.h"
 #include "flexible_button.h"
 #include "led_scene.h"
+#include "buzzer.h"
 #include "boot_slot.h"
 #include "vote_menu_demo.h"
 
@@ -55,6 +56,9 @@ static void web_ctrl_boot_task(void *arg)
 #define BUTTON_SCAN_PERIOD_MS (1000 / FLEX_BTN_SCAN_FREQ_HZ)
 #define BTN_SCAN_TASK_STACK_WORDS (3072U)
 #define BTN_SCAN_TASK_PRIORITY (5U)
+#define IR_POLL_TASK_STACK_WORDS (2048U)
+#define IR_POLL_TASK_PRIORITY (4U)
+#define IR_POLL_PERIOD_MS (50U)
 
 static void app_idle_default(void)
 {
@@ -117,9 +121,21 @@ static void app_button_switch_to_other_slot(void)
     boot_slot_system_reset();
 }
 
+static void app_button_buzzer_feedback(btn_event_e event)
+{
+    if (event != BTN_EVENT_PRESS_DOWN) {
+        return;
+    }
+    if (!device_profile_platform_wants(DEVICE_PLATFORM_MASK_BUZZER) || !buzzer_is_ready()) {
+        return;
+    }
+    (void)buzzer_play_pattern(BUZZER_PATTERN_SHORT);
+}
+
 static void app_button_notify(btn_id_e id, const char *name, btn_permission_e permission, btn_event_e event)
 {
     (void)permission;
+    app_button_buzzer_feedback(event);
     LOG_INFO("key %s (%s): %s", button_id_to_str(id), (name != NULL) ? name : "?", button_event_to_str(event));
 
     if (vote_menu_demo_is_active()) {
@@ -128,7 +144,7 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
         }
     }
 
-    if ((id == BTN_ID_LEFT) && (event == BTN_EVENT_LONG_PRESS)) {
+    if ((id == BTN_ID_LEFT) && (event == BTN_EVENT_LONG_PRESS) && device_profile_button_count() < 6U) {
         app_button_switch_to_other_slot();
         return;
     }
@@ -155,6 +171,39 @@ static void button_scan_task(void *arg)
     }
 }
 
+static void ir_poll_task(void *arg)
+{
+    (void)arg;
+
+    for (;;) {
+        board_ir_event_t evt;
+
+        while (board_ir_take_event(&evt) == TRUE) {
+            LOG_INFO("IR trigger ch%u (GPIO%d)",
+                     (unsigned)evt.channel,
+                     (evt.channel == BOARD_IR_CH0) ? BOARD_IR_SENSOR0_PIN : BOARD_IR_SENSOR1_PIN);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(IR_POLL_PERIOD_MS));
+    }
+}
+
+static status_t app_init_ir_poll(void)
+{
+    if (!BoardPeriphReady(DEVICE_BOARD_MASK_IR)) {
+        LOG_WARN("IR sensors not ready, poll task skipped");
+        return STATUS_FAIL;
+    }
+
+    if (xTaskCreate(ir_poll_task, "ir_poll", IR_POLL_TASK_STACK_WORDS, NULL, IR_POLL_TASK_PRIORITY, NULL) != pdPASS) {
+        LOG_ERROR("create ir_poll task failed");
+        return STATUS_FAIL;
+    }
+
+    LOG_INFO("IR poll task started");
+    return STATUS_OK;
+}
+
 static status_t app_init_platform(void)
 {
     if (log_init(NULL) != STATUS_OK) {
@@ -166,6 +215,12 @@ static status_t app_init_platform(void)
     if (BoardInit() != STATUS_OK) {
         LOG_ERROR("BoardInit failed");
         return STATUS_FAIL;
+    }
+
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_IR)) {
+        if (app_init_ir_poll() != STATUS_OK) {
+            LOG_WARN("app_init_ir_poll failed");
+        }
     }
 
 #if CONFIG_WEB_CTRL_AUTO_START
@@ -190,8 +245,16 @@ static status_t app_init_button_io(void)
         return STATUS_FAIL;
     }
 
-    LOG_INFO("buttons 左/右 GPIO0/GPIO3, scan %d Hz; 左 单击=灯效 trigger, 左 长按=切换下次启动槽并复位, 右 单击=灯效 success",
-             FLEX_BTN_SCAN_FREQ_HZ);
+    {
+        const uint8_t n = device_profile_button_count();
+        if (n >= 6U) {
+            LOG_INFO("buttons %u keys (ballot_guard), scan %d Hz; menu via vote_menu_demo_on_button",
+                     (unsigned)n, FLEX_BTN_SCAN_FREQ_HZ);
+        } else {
+            LOG_INFO("buttons 左/右 GPIO0/GPIO3, scan %d Hz; 左 单击=灯效 trigger, 左 长按=切换下次启动槽并复位, 右 单击=灯效 success",
+                     FLEX_BTN_SCAN_FREQ_HZ);
+        }
+    }
 
     return STATUS_OK;
 }
@@ -215,6 +278,28 @@ static status_t app_init_led_ui(void)
     return STATUS_OK;
 }
 
+static status_t app_init_buzzer(void)
+{
+    buzzer_config_t cfg = {
+        .gpio          = (s32_t)BOARD_BUZZER_PIN,
+        .type          = BUZZER_TYPE_ACTIVE,
+        .active_level  = BOARD_BUZZER_ACTIVE_LEVEL,
+        .pwm_timer     = PWM_TIMER_1_E,
+        .pwm_channel   = PWM_CHANNEL_1_E,
+        .passive_freq_hz = 0U,
+        .passive_duty  = 0U,
+    };
+    status_t err = buzzer_init(&cfg);
+
+    if (err != STATUS_OK) {
+        LOG_WARN("buzzer_init GPIO%d failed", BOARD_BUZZER_PIN);
+        return err;
+    }
+
+    LOG_INFO("buzzer active on GPIO%d ready", BOARD_BUZZER_PIN);
+    return STATUS_OK;
+}
+
 static status_t app_init(void)
 {
     status_t err = app_init_platform();
@@ -235,6 +320,12 @@ static status_t app_init(void)
         err = app_init_led_ui();
         if (err != STATUS_OK) {
             return err;
+        }
+    }
+
+    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_BUZZER)) {
+        if (app_init_buzzer() != STATUS_OK) {
+            LOG_WARN("buzzer init skipped (non-fatal)");
         }
     }
 

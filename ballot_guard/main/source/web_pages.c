@@ -12,12 +12,17 @@
 #include "esp_http_server.h"
 #include "vote_menu_config.h"
 #include "vote_menu_demo.h"
+#include "vote_nvs.h"
 #include "vote_status.h"
+#include "vote_history.h"
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
 
 #define VOTE_STATUS_JSON_BUF (2048U)
+#define VOTE_HIST_JSON_BUF (4096U)
+#define VOTE_CAND_JSON_BUF (512U)
+#define VOTE_CAND_POST_BUF (512U)
 #define LCD_MENU_JSON_BUF (2048U)
 #define LCD_MENU_POST_BUF (256U)
 
@@ -40,6 +45,7 @@ static const lcd_screen_def_t s_lcd_screens[] = {
     { "admin_count", "候选人数量", VOTE_LCD_SCREEN_ADMIN_COUNT },
     { "admin_cooldown", "冷却时长", VOTE_LCD_SCREEN_ADMIN_COOLDOWN },
     { "admin_reset", "重置确认", VOTE_LCD_SCREEN_ADMIN_RESET },
+    { "admin_enter", "进入投票", VOTE_LCD_SCREEN_ADMIN_ENTER },
 };
 
 static const lcd_screen_def_t *lcd_screen_by_key(const char *key)
@@ -185,11 +191,230 @@ static esp_err_t vote_status_get_handler(httpd_req_t *req)
 
 static esp_err_t vote_history_get_handler(httpd_req_t *req)
 {
-    static const char json[] = "{\"ok\":true,\"records\":[]}";
+    char json[VOTE_HIST_JSON_BUF];
+    const size_t n = vote_history_build_json(json, sizeof(json));
+
+    if (n == 0U) {
+        (void)httpd_resp_set_status(req, "500 Internal Server Error");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false}", HTTPD_RESP_USE_STRLEN);
+    }
 
     (void)httpd_resp_set_type(req, "application/json");
     (void)httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(req, json, n);
+}
+
+static esp_err_t vote_candidates_get_handler(httpd_req_t *req)
+{
+    char json[VOTE_CAND_JSON_BUF];
+    uint8_t count = vote_status_candidate_count();
+    uint8_t i;
+    size_t n;
+    size_t off = 0U;
+
+    n = (size_t)snprintf(json, sizeof(json), "{\"ok\":true,\"count\":%u,\"names\":[", (unsigned)count);
+    if (n <= 0U || n >= sizeof(json)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json overflow");
+    }
+    off = n;
+
+    for (i = 0U; i < count; i++) {
+        n = (size_t)snprintf(json + off, sizeof(json) - off, "%s\"%s\"", (i > 0U) ? "," : "",
+                             vote_status_candidate_name(i));
+        if (n <= 0U || (off + n >= sizeof(json))) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json overflow");
+        }
+        off += n;
+    }
+
+    n = (size_t)snprintf(json + off, sizeof(json) - off, "]}");
+    if (n <= 0U || (off + n >= sizeof(json))) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json overflow");
+    }
+
+    (void)httpd_resp_set_type(req, "application/json");
+    (void)httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, off + n);
+}
+
+static bool vote_phase_allows_admin_edit(const char **phase_out)
+{
+    int cd = 0;
+    const char *phase = vote_status_current_phase(&cd);
+
+    if (phase_out != NULL) {
+        *phase_out = phase;
+    }
+    if (phase == NULL) {
+        return true;
+    }
+    return (strcmp(phase, "voting") != 0) && (strcmp(phase, "selecting") != 0) && (strcmp(phase, "cooldown") != 0);
+}
+
+static esp_err_t vote_admin_edit_conflict(httpd_req_t *req)
+{
+    (void)httpd_resp_set_status(req, "409 Conflict");
+    (void)httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":false,\"error\":\"voting_in_progress\"}", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t vote_history_clear_post_handler(httpd_req_t *req)
+{
+    if (!vote_phase_allows_admin_edit(NULL)) {
+        return vote_admin_edit_conflict(req);
+    }
+    if (!vote_history_clear_all()) {
+        (void)httpd_resp_set_status(req, "500 Internal Server Error");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"clear_failed\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    (void)httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t vote_candidates_reset_post_handler(httpd_req_t *req)
+{
+    if (!vote_phase_allows_admin_edit(NULL)) {
+        return vote_admin_edit_conflict(req);
+    }
+    if (!vote_nvs_restore_default_candidate_names()) {
+        (void)httpd_resp_set_status(req, "500 Internal Server Error");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"reset_failed\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    (void)httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t vote_session_enter_post_handler(httpd_req_t *req)
+{
+    char json[128];
+    vote_lcd_screen_id_t screen;
+    const char *key;
+    int n;
+
+    if (!vote_menu_demo_is_active()) {
+        (void)httpd_resp_set_status(req, "503 Service Unavailable");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"lcd_inactive\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    if (!vote_menu_demo_enter_voting()) {
+        (void)httpd_resp_set_status(req, "500 Internal Server Error");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"enter_failed\"}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    screen = vote_menu_demo_current_screen();
+    key    = lcd_screen_key_of(screen);
+    n      = snprintf(json, sizeof(json), "{\"ok\":true,\"page\":\"%s\",\"page_id\":%d}", key, (int)screen);
+    if (n <= 0 || (size_t)n >= sizeof(json)) {
+        (void)httpd_resp_set_status(req, "500 Internal Server Error");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    (void)httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, json, (size_t)n);
+}
+
+static bool json_extract_name_at(const char *body, int index, char *out, size_t out_cap)
+{
+    const char *p = strstr(body, "\"names\"");
+    const char *start;
+    const char *end;
+    int i;
+    size_t len;
+
+    if (body == NULL || out == NULL || out_cap == 0U) {
+        return false;
+    }
+
+    if (p == NULL) {
+        return false;
+    }
+    p = strchr(p, '[');
+    if (p == NULL) {
+        return false;
+    }
+    p++;
+
+    for (i = 0; i < index; i++) {
+        p = strchr(p, '"');
+        if (p == NULL) {
+            return false;
+        }
+        p++;
+        end = strchr(p, '"');
+        if (end == NULL) {
+            return false;
+        }
+        p = strchr(end, ',');
+        if (p == NULL && i + 1 < index) {
+            return false;
+        }
+        if (p != NULL) {
+            p++;
+        }
+    }
+
+    start = strchr(p, '"');
+    if (start == NULL) {
+        return false;
+    }
+    start++;
+    end = strchr(start, '"');
+    if (end == NULL) {
+        return false;
+    }
+    len = (size_t)(end - start);
+    if (len + 1U > out_cap) {
+        return false;
+    }
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return true;
+}
+
+static esp_err_t vote_candidates_post_handler(httpd_req_t *req)
+{
+    char body[VOTE_CAND_POST_BUF];
+    char name[VOTE_NVS_CAND_NAME_BUF];
+    uint8_t count = vote_status_candidate_count();
+    uint8_t i;
+    esp_err_t herr;
+
+    herr = http_read_post_body(req, body, sizeof(body));
+    if (herr != ESP_OK) {
+        (void)httpd_resp_set_status(req, "400 Bad Request");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"body_too_large\"}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    if (!vote_phase_allows_admin_edit(NULL)) {
+        return vote_admin_edit_conflict(req);
+    }
+
+    for (i = 0U; i < count; i++) {
+        if (!json_extract_name_at(body, (int)i, name, sizeof(name))) {
+            (void)httpd_resp_set_status(req, "400 Bad Request");
+            (void)httpd_resp_set_type(req, "application/json");
+            return httpd_resp_send(req, "{\"ok\":false,\"error\":\"invalid_names\"}", HTTPD_RESP_USE_STRLEN);
+        }
+        if (!vote_nvs_validate_candidate_name(name)) {
+            (void)httpd_resp_set_status(req, "400 Bad Request");
+            (void)httpd_resp_set_type(req, "application/json");
+            return httpd_resp_send(req, "{\"ok\":false,\"error\":\"invalid_name\"}", HTTPD_RESP_USE_STRLEN);
+        }
+        if (!vote_nvs_set_candidate_name(i, name)) {
+            (void)httpd_resp_set_status(req, "500 Internal Server Error");
+            (void)httpd_resp_set_type(req, "application/json");
+            return httpd_resp_send(req, "{\"ok\":false,\"error\":\"save_failed\"}", HTTPD_RESP_USE_STRLEN);
+        }
+    }
+
+    (void)httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
 
 static size_t lcd_menu_build_json(char *json, size_t cap)
@@ -296,6 +521,10 @@ static esp_err_t lcd_menu_post_handler(httpd_req_t *req)
             evt = MENU_EVT_UP;
         } else if (strcmp(event_key, "down") == 0 || strcmp(event_key, "nav_next") == 0) {
             evt = MENU_EVT_DOWN;
+        } else if (strcmp(event_key, "left") == 0 || strcmp(event_key, "nav_left") == 0) {
+            evt = MENU_EVT_LEFT;
+        } else if (strcmp(event_key, "right") == 0 || strcmp(event_key, "nav_right") == 0) {
+            evt = MENU_EVT_RIGHT;
         } else if (strcmp(event_key, "enter") == 0 || strcmp(event_key, "confirm") == 0) {
             evt = MENU_EVT_ENTER;
         } else if (strcmp(event_key, "back") == 0) {
@@ -318,7 +547,7 @@ static esp_err_t lcd_menu_post_handler(httpd_req_t *req)
     if (json_extract_quoted(body, "\"page\"", page_key, sizeof(page_key))) {
         screen = lcd_screen_by_key(page_key);
     } else if (json_extract_int(body, "\"page_id\"", &page_id)) {
-        if (page_id >= (int)VOTE_LCD_SCREEN_HOME && page_id <= (int)VOTE_LCD_SCREEN_ADMIN_RESET) {
+        if (page_id >= (int)VOTE_LCD_SCREEN_HOME && page_id <= (int)VOTE_LCD_SCREEN_ADMIN_ENTER) {
             screen = lcd_screen_by_key(lcd_screen_key_of((vote_lcd_screen_id_t)page_id));
         }
     }
@@ -352,6 +581,11 @@ esp_err_t web_pages_register(httpd_handle_t server)
     static const httpd_uri_t uris[] = {
         {.uri = "/api/vote/status", .method = HTTP_GET, .handler = vote_status_get_handler, .user_ctx = NULL},
         {.uri = "/api/vote/history", .method = HTTP_GET, .handler = vote_history_get_handler, .user_ctx = NULL},
+        {.uri = "/api/vote/history/clear", .method = HTTP_POST, .handler = vote_history_clear_post_handler, .user_ctx = NULL},
+        {.uri = "/api/vote/candidates", .method = HTTP_GET, .handler = vote_candidates_get_handler, .user_ctx = NULL},
+        {.uri = "/api/vote/candidates", .method = HTTP_POST, .handler = vote_candidates_post_handler, .user_ctx = NULL},
+        {.uri = "/api/vote/candidates/reset", .method = HTTP_POST, .handler = vote_candidates_reset_post_handler, .user_ctx = NULL},
+        {.uri = "/api/vote/session/enter", .method = HTTP_POST, .handler = vote_session_enter_post_handler, .user_ctx = NULL},
         {.uri = "/api/lcd/menu", .method = HTTP_GET, .handler = lcd_menu_get_handler, .user_ctx = NULL},
         {.uri = "/api/lcd/menu", .method = HTTP_POST, .handler = lcd_menu_post_handler, .user_ctx = NULL},
     };

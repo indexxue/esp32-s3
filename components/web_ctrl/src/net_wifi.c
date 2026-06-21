@@ -456,10 +456,33 @@ net_wifi_mode_t net_wifi_get_mode(void)
 
 bool net_wifi_sta_has_ipv4(void)
 {
-    if ((s_sta_ip_event_group == NULL) || (!s_wifi_iface_started)) {
+    if (!s_wifi_iface_started) {
+        return false;
+    }
+    if (s_sta_netif != NULL) {
+        esp_netif_ip_info_t ip;
+        if (esp_netif_get_ip_info(s_sta_netif, &ip) == ESP_OK && ip.ip.addr != 0U) {
+            return true;
+        }
+    }
+    if (s_sta_ip_event_group == NULL) {
         return false;
     }
     return (xEventGroupGetBits(s_sta_ip_event_group) & k_sta_got_ip_bit) != 0U;
+}
+
+static bool read_netif_ipv4(esp_netif_t *netif, char *buf, size_t cap)
+{
+    esp_netif_ip_info_t ip;
+
+    if ((netif == NULL) || (buf == NULL) || (cap < 8U)) {
+        return false;
+    }
+    if (esp_netif_get_ip_info(netif, &ip) != ESP_OK || ip.ip.addr == 0U) {
+        return false;
+    }
+    (void)snprintf(buf, cap, IPSTR, IP2STR(&ip.ip));
+    return true;
 }
 
 bool net_wifi_format_ipv4_for_display(char *buf, size_t cap)
@@ -473,40 +496,18 @@ bool net_wifi_format_ipv4_for_display(char *buf, size_t cap)
         buf[cap - 1U] = '\0';
         return false;
     }
-    if (s_running_mode == NET_WIFI_MODE_STA) {
-        if ((s_sta_netif == NULL) || !net_wifi_sta_has_ipv4()) {
-            (void)strncpy(buf, "---", cap - 1U);
-            buf[cap - 1U] = '\0';
-            return false;
-        }
-        {
-            esp_netif_ip_info_t ip;
-            if (esp_netif_get_ip_info(s_sta_netif, &ip) != ESP_OK) {
-                (void)strncpy(buf, "---", cap - 1U);
-                buf[cap - 1U] = '\0';
-                return false;
-            }
-            (void)snprintf(buf, cap, IPSTR, IP2STR(&ip.ip));
-        }
+
+    /* STA 已 DHCP 时优先显示路由器分配的地址（含 APSTA 形态）。 */
+    if (read_netif_ipv4(s_sta_netif, buf, cap)) {
         return true;
     }
+
     if (s_running_mode == NET_WIFI_MODE_SOFTAP) {
-        if (s_ap_netif == NULL) {
-            (void)strncpy(buf, "---", cap - 1U);
-            buf[cap - 1U] = '\0';
-            return false;
+        if (read_netif_ipv4(s_ap_netif, buf, cap)) {
+            return true;
         }
-        {
-            esp_netif_ip_info_t ip;
-            if (esp_netif_get_ip_info(s_ap_netif, &ip) != ESP_OK) {
-                (void)strncpy(buf, "---", cap - 1U);
-                buf[cap - 1U] = '\0';
-                return false;
-            }
-            (void)snprintf(buf, cap, IPSTR, IP2STR(&ip.ip));
-        }
-        return true;
     }
+
     (void)strncpy(buf, "---", cap - 1U);
     buf[cap - 1U] = '\0';
     return false;

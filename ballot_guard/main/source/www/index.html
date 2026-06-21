@@ -102,6 +102,25 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
 .empty{color:var(--muted);font-size:.85rem;margin:0}
 .panel-lcd{display:none}
 .panel-lcd.on{display:block}
+.panel-manage{display:none}
+.panel-manage.on{display:block}
+.hist-list{margin:0;padding:0;list-style:none}
+.hist-list li{padding:10px 0;border-bottom:1px solid var(--border);font-size:.85rem}
+.hist-list li:last-child{border-bottom:0}
+.hist-list .hist-title{font-weight:600;color:var(--text)}
+.hist-list .hist-sum{color:var(--muted);margin-top:4px}
+.manage-tabs{display:flex;gap:6px;margin-bottom:12px;padding:4px;background:var(--surface2);border-radius:10px;border:1px solid var(--border)}
+.manage-tabs button{flex:1;padding:8px 6px;border:none;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-size:.82rem;cursor:pointer;transition:background .15s,color .15s}
+.manage-tabs button.on{background:var(--accent);color:#fff;font-weight:600}
+.manage-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px 8px}
+.manage-track::-webkit-scrollbar{display:none}
+.manage-slide{flex:0 0 100%;scroll-snap-align:start;min-width:0}
+.manage-dots{display:flex;justify-content:center;gap:6px;margin-bottom:12px}
+.manage-dots i{width:7px;height:7px;border-radius:50%;background:var(--border);transition:background .15s,transform .15s}
+.manage-dots i.on{background:var(--accent);transform:scale(1.15)}
+.session-hero{border-radius:10px;padding:16px;border:1px solid var(--border);background:var(--surface2);margin-bottom:14px}
+.session-hero .phase{font-size:1.1rem;font-weight:700;margin:0 0 6px}
+.cand-fields .field{margin-bottom:10px}
 .lcd-screens{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
 .lcd-screens .lcd-grp{width:100%;font-size:.72rem;color:var(--muted);margin:8px 0 4px}
 .lcd-screens .lcd-grp:first-child{margin-top:0}
@@ -124,6 +143,7 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
 
 <div class="tabs">
   <button type="button" class="tab on" data-tab="dash">实时看板</button>
+  <button type="button" class="tab" data-tab="manage">管理员</button>
   <button type="button" class="tab" data-tab="lcd">LCD 调试</button>
   <button type="button" class="tab" data-tab="wifi">网络设置</button>
 </div>
@@ -165,7 +185,76 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
     <div class="card-b"><ul class="events" id="events"><li class="empty">暂无记录</li></ul></div>
   </section>
 
-  <p class="note">投票数据为只读看板；时段与重置等设置可在设备 LCD 操作，或通过「LCD 调试」页切换菜单画面预览。</p>
+  <p class="note">实时看板为只读；候选人、历史与进入投票请在「管理员」页操作；时段与票数重置在设备 LCD 菜单。</p>
+</div>
+
+<div id="panel-manage" class="panel-manage">
+  <div class="manage-tabs" id="manage-tabs">
+    <button type="button" class="manage-tab on" data-slide="0">候选人</button>
+    <button type="button" class="manage-tab" data-slide="1">历史</button>
+    <button type="button" class="manage-tab" data-slide="2">进入投票</button>
+  </div>
+  <div class="manage-dots" id="manage-dots" aria-hidden="true">
+    <i class="on"></i><i></i><i></i>
+  </div>
+  <div class="manage-track" id="manage-track">
+    <div class="manage-slide">
+      <section class="card">
+        <div class="card-h">
+          <h2>候选人姓名</h2>
+          <button type="button" class="btn btn-ghost" id="btn-cand-reload" onclick="loadCandidates()">重新加载</button>
+        </div>
+        <div class="card-b">
+          <p class="hint">英文 A–Z、a–z、数字、空格、连字符，最多 20 字符。人数由 LCD「Candidate Count」设置。</p>
+          <div class="cand-fields" id="cand-fields"><p class="empty">加载中…</p></div>
+          <div class="row" style="margin-top:12px">
+            <button type="button" class="btn btn-primary" id="btn-cand-save" onclick="saveCandidates()">保存姓名</button>
+          </div>
+          <div class="danger-zone">
+            <p class="dz-title">恢复默认姓名</p>
+            <p class="dz-desc">重置为 Candidate 1、Candidate 2…（不影响票数与时段）。</p>
+            <button type="button" class="btn btn-danger" id="btn-cand-reset" onclick="openCandResetModal()">恢复默认姓名…</button>
+          </div>
+          <pre class="log" id="cand-log" hidden></pre>
+        </div>
+      </section>
+    </div>
+    <div class="manage-slide">
+      <section class="card">
+        <div class="card-h">
+          <h2>历史记录</h2>
+          <button type="button" class="btn btn-ghost" id="btn-hist-refresh" onclick="loadHistory()">刷新</button>
+        </div>
+        <div class="card-b">
+          <p class="hint">最多 20 条，满则覆盖最旧。与 LCD 历史屏同步。</p>
+          <ul class="hist-list" id="hist-list"><li class="empty">加载中…</li></ul>
+          <div class="danger-zone">
+            <p class="dz-title">清空历史</p>
+            <p class="dz-desc">删除全部归档记录，不可恢复。</p>
+            <button type="button" class="btn btn-danger" id="btn-hist-clear" onclick="openHistClearModal()">清空全部历史…</button>
+          </div>
+          <pre class="log" id="hist-log" hidden></pre>
+        </div>
+      </section>
+    </div>
+    <div class="manage-slide">
+      <section class="card">
+        <div class="card-h"><h2>进入投票</h2></div>
+        <div class="card-b">
+          <div class="session-hero">
+            <p class="phase" id="session-phase">—</p>
+            <p class="sub" id="session-sub">加载中…</p>
+          </div>
+          <p class="hint">让设备 LCD 退出管理员菜单，进入当前时段对应的投票业务界面（主界面 / 投票等待 / 结果锁定等）。</p>
+          <div class="row" style="margin-top:12px">
+            <button type="button" class="btn btn-primary" id="btn-session-enter" onclick="enterVotingSession()">进入投票界面</button>
+            <button type="button" class="btn btn-ghost" id="btn-session-refresh" onclick="refreshSessionPanel()">刷新状态</button>
+          </div>
+          <pre class="log" id="session-log" hidden></pre>
+        </div>
+      </section>
+    </div>
+  </div>
 </div>
 
 <div id="panel-lcd" class="panel-lcd">
@@ -191,11 +280,14 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
         <button type="button" data-page="admin_count">候选人数量</button>
         <button type="button" data-page="admin_cooldown">冷却时长</button>
         <button type="button" data-page="admin_reset">重置确认</button>
+        <button type="button" data-page="admin_enter">进入投票</button>
       </div>
       <h3 style="font-size:.9rem;margin:0 0 8px;font-weight:600">逻辑动作</h3>
       <div class="lcd-acts" id="lcd-acts">
         <button type="button" data-event="up">NAV_PREV ↑</button>
         <button type="button" data-event="down">NAV_NEXT ↓</button>
+        <button type="button" data-event="left">NAV_LEFT ←</button>
+        <button type="button" data-event="right">NAV_RIGHT →</button>
         <button type="button" data-event="enter">CONFIRM</button>
         <button type="button" data-event="back">BACK</button>
       </div>
@@ -239,6 +331,28 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" onclick="closeDisconnectModal()">取消</button>
       <button type="button" class="btn btn-danger" id="modal-confirm-dc" onclick="confirmStaDisconnect()">确认清除并重启</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-wrap" id="modal-cand-reset" role="dialog" aria-modal="true">
+  <div class="modal">
+    <h3>恢复默认候选人姓名？</h3>
+    <p>所有姓名将变为 Candidate 1、Candidate 2…，已保存的自定义姓名会被覆盖。</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" onclick="closeCandResetModal()">取消</button>
+      <button type="button" class="btn btn-danger" id="modal-confirm-cand-reset" onclick="confirmCandReset()">确认恢复</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-wrap" id="modal-hist-clear" role="dialog" aria-modal="true">
+  <div class="modal">
+    <h3>清空全部历史？</h3>
+    <p>将删除设备内全部投票历史记录，LCD 历史屏也会变为空，此操作不可撤销。</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" onclick="closeHistClearModal()">取消</button>
+      <button type="button" class="btn btn-danger" id="modal-confirm-hist-clear" onclick="confirmHistClear()">确认清空</button>
     </div>
   </div>
 </div>
@@ -352,19 +466,23 @@ function stopDashPoll(){
 function switchTab(name){
   var dash=name==='dash';
   var lcd=name==='lcd';
+  var manage=name==='manage';
   document.querySelectorAll('.tab').forEach(function(t){
     t.classList.toggle('on',t.dataset.tab===name);
   });
   document.getElementById('panel-dash').style.display=dash?'block':'none';
+  document.getElementById('panel-manage').classList.toggle('on',manage);
   document.getElementById('panel-lcd').classList.toggle('on',lcd);
   document.getElementById('panel-wifi').classList.toggle('on',name==='wifi');
   var sub='选票监管 · 实时看板';
   if(name==='wifi')sub='选票监管 · 网络配置';
   else if(name==='lcd')sub='选票监管 · LCD 调试';
+  else if(name==='manage')sub='选票监管 · 管理员';
   document.getElementById('subtitle').textContent=sub;
   if(dash){startDashPoll();}else{stopDashPoll();}
   if(name==='wifi'){stopLcdPoll();refreshStatus();location.hash='wifi';}
   else if(name==='lcd'){startLcdPoll();location.hash='lcd';}
+  else if(name==='manage'){stopLcdPoll();loadManageData();location.hash='manage';}
   else{stopLcdPoll();history.replaceState(null,'',location.pathname);}
 }
 
@@ -372,10 +490,181 @@ document.querySelectorAll('.tab').forEach(function(tab){
   tab.onclick=function(){switchTab(tab.dataset.tab);};
 });
 
-function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-disconnect','modal-confirm-dc'].forEach(function(id){
+function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-disconnect','modal-confirm-dc','btn-cand-save','btn-cand-reload','btn-cand-reset','btn-hist-refresh','btn-hist-clear','modal-confirm-cand-reset','modal-confirm-hist-clear','btn-session-enter','btn-session-refresh'].forEach(function(id){
   var el=document.getElementById(id);if(el)el.disabled=b;
 });}
 function showLog(id,txt,show){var el=document.getElementById(id);if(!el)return;if(!txt){el.hidden=true;el.textContent='';return;}el.hidden=!show;el.textContent=txt;}
+function apiErrorText(j,fallback){if(!j)return fallback||'请求失败';if(j.error==='voting_in_progress')return '投票进行中，请稍后再试';if(j.error)return String(j.error);return fallback||'请求失败';}
+
+function renderCandidateFields(names){
+  var box=document.getElementById('cand-fields');
+  if(!names||!names.length){
+    box.innerHTML='<p class="empty">暂无候选人（请在 LCD 设置人数）</p>';
+    return;
+  }
+  box.innerHTML=names.map(function(name,idx){
+    return '<div class="field"><label for="cand-'+idx+'">候选人 '+(idx+1)+'</label>'+
+      '<input class="inp cand-name" id="cand-'+idx+'" data-idx="'+idx+'" maxlength="20" value="'+esc(name)+'" autocomplete="off"/></div>';
+  }).join('');
+}
+
+async function loadCandidates(){
+  showLog('cand-log','',false);
+  try{
+    var r=await fetch('/api/vote/candidates');
+    var j=await r.json();
+    if(!j.ok){showLog('cand-log',apiErrorText(j,'无法加载候选人'),true);return;}
+    renderCandidateFields(j.names||[]);
+  }catch(e){
+    showLog('cand-log',String(e),true);
+  }
+}
+
+async function saveCandidates(){
+  var inputs=document.querySelectorAll('.cand-name');
+  if(!inputs.length){showLog('cand-log','没有可保存的候选人',true);return;}
+  var names=[];
+  inputs.forEach(function(inp){names.push(inp.value.trim());});
+  showLog('cand-log','保存中…',true);setBusy(true);
+  try{
+    var r=await fetch('/api/vote/candidates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({names:names})});
+    var j=await r.json();
+    if(!j.ok){showLog('cand-log',apiErrorText(j,r.status+' 保存失败'),true);return;}
+    showLog('cand-log','已保存',true);
+    await loadCandidates();
+  }catch(e){showLog('cand-log',String(e),true);}
+  finally{setBusy(false);}
+}
+
+function openCandResetModal(){document.getElementById('modal-cand-reset').classList.add('on');}
+function closeCandResetModal(){document.getElementById('modal-cand-reset').classList.remove('on');}
+
+async function confirmCandReset(){
+  closeCandResetModal();showLog('cand-log','正在恢复默认姓名…',true);setBusy(true);
+  try{
+    var r=await fetch('/api/vote/candidates/reset',{method:'POST'});
+    var j=await r.json();
+    if(!j.ok){showLog('cand-log',apiErrorText(j,'恢复失败'),true);return;}
+    showLog('cand-log','已恢复默认姓名',true);
+    await loadCandidates();
+  }catch(e){showLog('cand-log',String(e),true);}
+  finally{setBusy(false);}
+}
+
+async function loadHistory(){
+  showLog('hist-log','',false);
+  var list=document.getElementById('hist-list');
+  try{
+    var r=await fetch('/api/vote/history');
+    var j=await r.json();
+    if(!j.ok){list.innerHTML='<li class="empty">加载失败</li>';return;}
+    var recs=j.records||[];
+    if(!recs.length){
+      list.innerHTML='<li class="empty">暂无历史记录</li>';
+      return;
+    }
+    list.innerHTML=recs.map(function(rec){
+      return '<li><div class="hist-title">'+esc(rec.title||'—')+'</div>'+
+        '<div class="hist-sum">'+esc(rec.summary||'')+' · 有效 '+esc(String(rec.valid!=null?rec.valid:0))+
+        ' · 废票 '+esc(String(rec.spoiled!=null?rec.spoiled:0))+'</div></li>';
+    }).join('');
+  }catch(e){
+    list.innerHTML='<li class="empty">'+esc(String(e))+'</li>';
+  }
+}
+
+function openHistClearModal(){document.getElementById('modal-hist-clear').classList.add('on');}
+function closeHistClearModal(){document.getElementById('modal-hist-clear').classList.remove('on');}
+
+async function confirmHistClear(){
+  closeHistClearModal();showLog('hist-log','正在清空…',true);setBusy(true);
+  try{
+    var r=await fetch('/api/vote/history/clear',{method:'POST'});
+    var j=await r.json();
+    if(!j.ok){showLog('hist-log',apiErrorText(j,'清空失败'),true);return;}
+    showLog('hist-log','历史已清空',true);
+    await loadHistory();
+  }catch(e){showLog('hist-log',String(e),true);}
+  finally{setBusy(false);}
+}
+
+function loadManageData(){
+  loadCandidates();
+  loadHistory();
+  refreshSessionPanel();
+  initManageSlider();
+}
+
+var manageSliderBound=false;
+function manageSlideTo(index,smooth){
+  var track=document.getElementById('manage-track');
+  if(!track)return;
+  var w=track.clientWidth||1;
+  track.scrollTo({left:index*w,behavior:smooth?'smooth':'auto'});
+  setManageSlideHighlight(index);
+}
+
+function setManageSlideHighlight(index){
+  document.querySelectorAll('#manage-tabs .manage-tab').forEach(function(btn){
+    btn.classList.toggle('on',Number(btn.dataset.slide)===index);
+  });
+  document.querySelectorAll('#manage-dots i').forEach(function(dot,i){
+    dot.classList.toggle('on',i===index);
+  });
+}
+
+function initManageSlider(){
+  if(manageSliderBound)return;
+  var track=document.getElementById('manage-track');
+  if(!track)return;
+  manageSliderBound=true;
+  document.querySelectorAll('#manage-tabs .manage-tab').forEach(function(btn){
+    btn.onclick=function(){manageSlideTo(Number(btn.dataset.slide),true);};
+  });
+  track.addEventListener('scroll',function(){
+    var w=track.clientWidth||1;
+    var idx=Math.round(track.scrollLeft/w);
+    setManageSlideHighlight(idx);
+  },{passive:true});
+}
+
+async function refreshSessionPanel(){
+  var phaseEl=document.getElementById('session-phase');
+  var subEl=document.getElementById('session-sub');
+  try{
+    var r=await fetch('/api/vote/status');
+    var j=await r.json();
+    if(!j.ok){
+      phaseEl.textContent='—';
+      subEl.textContent='无法读取状态';
+      return;
+    }
+    phaseEl.textContent=j.phase_label||j.phase||'—';
+    var parts=[];
+    if(j.schedule&&j.schedule.start){parts.push('时段 '+j.schedule.start+' – '+j.schedule.end);}
+    if(j.countdown_sec>0){parts.push('倒计时 '+j.countdown_sec+'s');}
+    subEl.textContent=parts.length?parts.join(' · '):'按当前时钟与投票时段自动切换业务屏';
+  }catch(e){
+    phaseEl.textContent='—';
+    subEl.textContent=String(e);
+  }
+}
+
+async function enterVotingSession(){
+  showLog('session-log','正在切换 LCD…',true);setBusy(true);
+  try{
+    var r=await fetch('/api/vote/session/enter',{method:'POST'});
+    var j=await r.json();
+    if(!j.ok){
+      showLog('session-log',apiErrorText(j,'切换失败'),true);
+      return;
+    }
+    showLog('session-log','已进入：'+(j.page||'?')+(j.page_id!=null?' (id='+j.page_id+')':''),true);
+    await refreshSessionPanel();
+  }catch(e){showLog('session-log',String(e),true);}
+  finally{setBusy(false);}
+}
+
 function rssiPct(r){if(typeof r!=='number')return 15;return Math.max(8,Math.min(100,2*(r+100)));}
 
 async function refreshStatus(){
@@ -454,6 +743,12 @@ async function confirmStaDisconnect(){
 
 document.getElementById('modal-disconnect').addEventListener('click',function(ev){
   if(ev.target.id==='modal-disconnect')closeDisconnectModal();
+});
+document.getElementById('modal-cand-reset').addEventListener('click',function(ev){
+  if(ev.target.id==='modal-cand-reset')closeCandResetModal();
+});
+document.getElementById('modal-hist-clear').addEventListener('click',function(ev){
+  if(ev.target.id==='modal-hist-clear')closeHistClearModal();
 });
 
 var lcdActionBusy=false;
@@ -568,6 +863,7 @@ document.querySelectorAll('#lcd-acts button[data-event]').forEach(function(btn){
 
 if(location.hash==='#wifi'){switchTab('wifi');}
 else if(location.hash==='#lcd'){switchTab('lcd');}
+else if(location.hash==='#manage'){switchTab('manage');}
 else{startDashPoll();}
 </script>
 </body>

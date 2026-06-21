@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS
+        "ds3231.c"
         "eeprom.c"
         "ili9341.c"
         "st7789.c"

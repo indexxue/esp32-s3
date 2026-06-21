@@ -5,18 +5,159 @@
 #include "nvs.h"
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 
 #include "gpio.h"
 #include "i2c.h"
 #include "lcd.h"
 #include "log.h"
+#include "ds3231.h"
 #include "sdcard.h"
 #include "spi.h"
 
+#include "esp_timer.h"
+
 static qmi8658a_t s_qmi8658;
+static ds3231_t s_ds3231;
 static st7789_t s_st7789;
 static uint32_t s_board_ready_mask;
+
+#define BOARD_IR_QUEUE_LEN (8U)
+#define BOARD_IR_DEBOUNCE_US ((int64_t)BOARD_IR_DEBOUNCE_MS * 1000LL)
+
+static const s32_t s_ir_pins[BOARD_IR_CH_COUNT] = {
+    (s32_t)BOARD_IR_SENSOR0_PIN,
+    (s32_t)BOARD_IR_SENSOR1_PIN,
+};
+
+static QueueHandle_t s_ir_queue;
+static bool_t s_ir_ready;
+static volatile int64_t s_ir_last_evt_us[BOARD_IR_CH_COUNT];
+
+static void IRAM_ATTR board_ir_isr_handler(void *arg)
+{
+    const board_ir_channel_e ch = (board_ir_channel_e)(uintptr_t)arg;
+    board_ir_event_t evt;
+    BaseType_t hp = pdFALSE;
+    int64_t now;
+
+    if (ch >= BOARD_IR_CH_COUNT) {
+        return;
+    }
+
+    now = esp_timer_get_time();
+    if ((now - s_ir_last_evt_us[ch]) < BOARD_IR_DEBOUNCE_US) {
+        return;
+    }
+    s_ir_last_evt_us[ch] = now;
+    evt.channel          = ch;
+
+    if (s_ir_queue != NULL) {
+        (void)xQueueSendFromISR(s_ir_queue, &evt, &hp);
+        if (hp == pdTRUE) {
+            portYIELD_FROM_ISR();
+        }
+    }
+}
+
+static status_t board_ir_configure_pin(board_ir_channel_e channel)
+{
+    GpioPinConfig_t cfg = {0};
+
+    if (channel >= BOARD_IR_CH_COUNT) {
+        return STATUS_INVALID_ARG;
+    }
+
+    cfg.pin        = s_ir_pins[channel];
+    cfg.mode       = GPIO_MODE_INPUT_E;
+    cfg.pullUpEn   = GPIO_PULL_ENABLE_E;
+    cfg.pullDownEn = GPIO_PULL_DISABLE_E;
+    cfg.intrType   = GPIO_INTR_NEGEDGE_E;
+
+    if (GpioConfigurePin(&cfg) != TRUE) {
+        LOG_ERROR("IR sensor ch%u GPIO%d configure failed, esp err %d",
+                  (unsigned)channel,
+                  (int)s_ir_pins[channel],
+                  (int)GpioGetLastError());
+        return STATUS_FAIL;
+    }
+
+    if (GpioRegisterIsr(s_ir_pins[channel], board_ir_isr_handler, (void_t *)(uintptr_t)channel) != TRUE) {
+        LOG_ERROR("IR sensor ch%u GPIO%d ISR register failed, esp err %d",
+                  (unsigned)channel,
+                  (int)s_ir_pins[channel],
+                  (int)GpioGetLastError());
+        return STATUS_FAIL;
+    }
+
+    return STATUS_OK;
+}
+
+status_t board_ir_init(void)
+{
+    board_ir_channel_e ch;
+
+    s_ir_ready = FALSE;
+
+    if (GpioDriverInit() != TRUE) {
+        LOG_ERROR("IR sensors: GpioDriverInit failed, esp err %d", (int)GpioGetLastError());
+        return STATUS_FAIL;
+    }
+
+    if (s_ir_queue == NULL) {
+        s_ir_queue = xQueueCreate(BOARD_IR_QUEUE_LEN, sizeof(board_ir_event_t));
+        if (s_ir_queue == NULL) {
+            LOG_ERROR("IR sensors: event queue create failed");
+            return STATUS_FAIL;
+        }
+    } else {
+        (void)xQueueReset(s_ir_queue);
+    }
+
+    for (ch = BOARD_IR_CH0; ch < BOARD_IR_CH_COUNT; ch++) {
+        s_ir_last_evt_us[ch] = 0;
+        if (board_ir_configure_pin(ch) != STATUS_OK) {
+            return STATUS_FAIL;
+        }
+    }
+
+    s_ir_ready = TRUE;
+    LOG_INFO("IR sensors ready: ch0 GPIO%d, ch1 GPIO%d (pull-up, negedge, debounce %ums)",
+             BOARD_IR_SENSOR0_PIN,
+             BOARD_IR_SENSOR1_PIN,
+             (unsigned)BOARD_IR_DEBOUNCE_MS);
+    return STATUS_OK;
+}
+
+bool_t board_ir_is_ready(void)
+{
+    return s_ir_ready;
+}
+
+bool_t board_ir_read_level(board_ir_channel_e channel, u32_t *level)
+{
+    if ((channel >= BOARD_IR_CH_COUNT) || (level == NULL) || (s_ir_ready != TRUE)) {
+        return FALSE;
+    }
+    return GpioReadPin(s_ir_pins[channel], level);
+}
+
+bool_t board_ir_take_event(board_ir_event_t *out)
+{
+    board_ir_event_t evt;
+    bool_t got = FALSE;
+
+    if ((out == NULL) || (s_ir_queue == NULL)) {
+        return FALSE;
+    }
+
+    while (xQueueReceive(s_ir_queue, &evt, 0) == pdTRUE) {
+        *out = evt;
+        got  = TRUE;
+    }
+    return got;
+}
 
 bool_t BoardPeriphReady(uint32_t mask)
 {
@@ -39,7 +180,15 @@ qmi8658a_t *BoardQmi8658(void)
     return &s_qmi8658;
 }
 
-static void board_qmi_delay_ms(uint32_t ms)
+ds3231_t *BoardDs3231(void)
+{
+    if (!BoardPeriphReady(DEVICE_BOARD_MASK_RTC)) {
+        return NULL;
+    }
+    return &s_ds3231;
+}
+
+static void board_delay_ms(uint32_t ms)
 {
     vTaskDelay(pdMS_TO_TICKS(ms));
 }
@@ -76,7 +225,7 @@ static status_t board_qmi8658_init(void)
     cfg.write      = board_qmi_i2c_write;
     cfg.read       = NULL;
     cfg.write_read = board_qmi_i2c_write_read;
-    cfg.delay_ms   = board_qmi_delay_ms;
+    cfg.delay_ms   = board_delay_ms;
     cfg.address    = (uint8_t)BOARD_I2C_QMI8658A_ADDR;
     cfg.accel_range = QMI8658A_ACCEL_RANGE_2G;
     cfg.gyro_range  = QMI8658A_GYRO_RANGE_2048DPS;
@@ -93,6 +242,102 @@ static status_t board_qmi8658_init(void)
         LOG_ERROR("QMI8658A init failed (I2C?)");
         return STATUS_FAIL;
     }
+}
+
+static int board_ds3231_i2c_write(uint8_t addr7, const uint8_t *data, uint16_t len)
+{
+    if (I2cWrite((s32_t)BOARD_I2C_DS3231_PORT, (u16_t)addr7, data, (usize_t)len) != TRUE) {
+        return -1;
+    }
+    return 0;
+}
+
+static int board_ds3231_i2c_write_read(uint8_t addr7,
+                                       const uint8_t *write_data,
+                                       uint16_t write_len,
+                                       uint8_t *read_data,
+                                       uint16_t read_len)
+{
+    if (I2cWriteRead((s32_t)BOARD_I2C_DS3231_PORT,
+                     (u16_t)addr7,
+                     write_data,
+                     (usize_t)write_len,
+                     read_data,
+                     (usize_t)read_len) != TRUE) {
+        return -1;
+    }
+    return 0;
+}
+
+static status_t board_ds3231_init(void)
+{
+    ds3231_config_t cfg = {0};
+    ds3231_status_flags_t flags = {0};
+    ds3231_datetime_t dt = {0};
+
+    cfg.write       = board_ds3231_i2c_write;
+    cfg.read        = NULL;
+    cfg.write_read  = board_ds3231_i2c_write_read;
+    cfg.delay_ms    = board_delay_ms;
+    cfg.address     = (uint8_t)BOARD_I2C_DS3231_ADDR;
+
+    if (ds3231_init_with_config(&s_ds3231, &cfg) != DS3231_OK) {
+        LOG_ERROR("DS3231 init failed (I2C?) on port %d addr 0x%02X",
+                  BOARD_I2C_DS3231_PORT,
+                  (unsigned int)BOARD_I2C_DS3231_ADDR);
+        return STATUS_FAIL;
+    }
+    if (ds3231_probe(&s_ds3231) != DS3231_OK) {
+        LOG_ERROR("DS3231 not responding on I2C1 SCL=GPIO%d SDA=GPIO%d (check wiring / 0x%02X)",
+                  BOARD_I2C_BUS1_PIN_SCL,
+                  BOARD_I2C_BUS1_PIN_SDA,
+                  (unsigned int)BOARD_I2C_DS3231_ADDR);
+        return STATUS_FAIL;
+    }
+
+#if BOARD_DS3231_SYNC_TIME_ON_BOOT
+    dt.year    = BOARD_DS3231_SYNC_YEAR;
+    dt.month   = (uint8_t)BOARD_DS3231_SYNC_MONTH;
+    dt.day     = (uint8_t)BOARD_DS3231_SYNC_DAY;
+    dt.weekday = (uint8_t)BOARD_DS3231_SYNC_WEEKDAY;
+    dt.hour    = (uint8_t)BOARD_DS3231_SYNC_HOUR;
+    dt.minute  = (uint8_t)BOARD_DS3231_SYNC_MINUTE;
+    dt.second  = (uint8_t)BOARD_DS3231_SYNC_SECOND;
+    if (ds3231_write_datetime(&s_ds3231, &dt) != DS3231_OK) {
+        LOG_ERROR("DS3231 write_datetime failed");
+        return STATUS_FAIL;
+    }
+    LOG_INFO("DS3231 time synced to %04u-%02u-%02u %02u:%02u:%02u wday=%u",
+             (unsigned int)dt.year,
+             (unsigned int)dt.month,
+             (unsigned int)dt.day,
+             (unsigned int)dt.hour,
+             (unsigned int)dt.minute,
+             (unsigned int)dt.second,
+             (unsigned int)dt.weekday);
+#endif
+
+    if (ds3231_read_status(&s_ds3231, &flags) == DS3231_OK) {
+        if (flags.oscillator_stop) {
+            LOG_WARN("DS3231 OSF set (lost power?) — time may be invalid until set");
+        }
+    }
+
+    if (ds3231_read_datetime(&s_ds3231, &dt) == DS3231_OK) {
+        LOG_INFO("DS3231 on I2C1 (port %d) OK: %04u-%02u-%02u %02u:%02u:%02u wday=%u",
+                 BOARD_I2C_DS3231_PORT,
+                 (unsigned int)dt.year,
+                 (unsigned int)dt.month,
+                 (unsigned int)dt.day,
+                 (unsigned int)dt.hour,
+                 (unsigned int)dt.minute,
+                 (unsigned int)dt.second,
+                 (unsigned int)dt.weekday);
+    } else {
+        LOG_INFO("DS3231 on I2C1 (port %d) probe OK", BOARD_I2C_DS3231_PORT);
+    }
+
+    return STATUS_OK;
 }
 
 static void board_st7789_spi_tx(const uint8_t *data, uint16_t len)
@@ -268,11 +513,9 @@ static void board_i2c_bus1_scan_log(void)
 }
 #endif
 
-static status_t board_init_i2c(void)
+static status_t board_init_i2c_bus1(void)
 {
     I2cDriverConfig_t bus1Cfg = {0};
-    I2cDriverConfig_t bus2Cfg = {0};
-    I2cDeviceConfig_t qmiCfg = {0};
 
     bus1Cfg.port = BOARD_I2C_BUS1_HW_PORT;
     bus1Cfg.sdaPin = BOARD_I2C_BUS1_PIN_SDA;
@@ -284,6 +527,25 @@ static status_t board_init_i2c(void)
     bus1Cfg.enableSdaPullup = TRUE;
     bus1Cfg.enableSclPullup = TRUE;
 
+    if (I2cDriverInit(&bus1Cfg) != TRUE) {
+        LOG_ERROR("I2cDriverInit I2C1 (port %d) failed, esp err %d",
+                  BOARD_I2C_BUS1_HW_PORT,
+                  (int)I2cGetLastError());
+        return STATUS_FAIL;
+    }
+
+#if BOARD_I2C_BUS1_SCAN_ON_BOOT
+    board_i2c_bus1_scan_log();
+#endif
+
+    return STATUS_OK;
+}
+
+static status_t board_init_i2c_bus2(void)
+{
+    I2cDriverConfig_t bus2Cfg = {0};
+    I2cDeviceConfig_t qmiCfg = {0};
+
     bus2Cfg.port = BOARD_I2C_BUS2_HW_PORT;
     bus2Cfg.sdaPin = BOARD_I2C_BUS2_PIN_SDA;
     bus2Cfg.sclPin = BOARD_I2C_BUS2_PIN_SCL;
@@ -294,22 +556,12 @@ static status_t board_init_i2c(void)
     bus2Cfg.enableSdaPullup = TRUE;
     bus2Cfg.enableSclPullup = TRUE;
 
-    if (I2cDriverInit(&bus1Cfg) != TRUE) {
-        LOG_ERROR("I2cDriverInit I2C1 (port %d) failed, esp err %d",
-                  BOARD_I2C_BUS1_HW_PORT,
-                  (int)I2cGetLastError());
-        return STATUS_FAIL;
-    }
     if (I2cDriverInit(&bus2Cfg) != TRUE) {
         LOG_ERROR("I2cDriverInit I2C2 (port %d) failed, esp err %d",
                   BOARD_I2C_BUS2_HW_PORT,
                   (int)I2cGetLastError());
         return STATUS_FAIL;
     }
-
-#if BOARD_I2C_BUS1_SCAN_ON_BOOT
-    board_i2c_bus1_scan_log();
-#endif
 
     qmiCfg.port = BOARD_I2C_QMI8658A_PORT;
     qmiCfg.deviceAddress7bit = BOARD_I2C_QMI8658A_ADDR;
@@ -322,6 +574,47 @@ static status_t board_init_i2c(void)
                   BOARD_I2C_QMI8658A_PORT,
                   (int)I2cGetLastError());
         return STATUS_FAIL;
+    }
+
+    return STATUS_OK;
+}
+
+static status_t board_register_ds3231_i2c(void)
+{
+    I2cDeviceConfig_t rtcCfg = {0};
+
+    rtcCfg.port = BOARD_I2C_DS3231_PORT;
+    rtcCfg.deviceAddress7bit = BOARD_I2C_DS3231_ADDR;
+    rtcCfg.clockSpeedHz = 0U;
+    rtcCfg.transactionTimeoutMs = 0U;
+
+    if (I2cRegisterDevice(&rtcCfg) != TRUE) {
+        LOG_ERROR("I2cRegisterDevice DS3231 0x%02X on port %d failed, esp err %d",
+                  (unsigned int)BOARD_I2C_DS3231_ADDR,
+                  BOARD_I2C_DS3231_PORT,
+                  (int)I2cGetLastError());
+        return STATUS_FAIL;
+    }
+
+    return STATUS_OK;
+}
+
+static status_t board_init_i2c(void)
+{
+    if (board_init_i2c_bus1() != STATUS_OK) {
+        return STATUS_FAIL;
+    }
+
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_IMU)) {
+        if (board_init_i2c_bus2() != STATUS_OK) {
+            return STATUS_FAIL;
+        }
+    }
+
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_RTC)) {
+        if (board_register_ds3231_i2c() != STATUS_OK) {
+            return STATUS_FAIL;
+        }
     }
 
     return STATUS_OK;
@@ -350,6 +643,17 @@ status_t BoardInit(void)
         s_board_ready_mask |= DEVICE_BOARD_MASK_I2C;
     }
 
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_RTC)) {
+        if (!device_profile_board_wants(DEVICE_BOARD_MASK_I2C)) {
+            LOG_ERROR("DS3231 requires DEVICE_BOARD_MASK_I2C in board_mask");
+            return STATUS_FAIL;
+        }
+        if (board_ds3231_init() != STATUS_OK) {
+            return STATUS_FAIL;
+        }
+        s_board_ready_mask |= DEVICE_BOARD_MASK_RTC;
+    }
+
     if (device_profile_board_wants(DEVICE_BOARD_MASK_LCD)) {
         if (board_st7789_init() != STATUS_OK) {
             return STATUS_FAIL;
@@ -374,6 +678,14 @@ status_t BoardInit(void)
             LOG_WARN("SD card FAT mount skipped or failed (check card / wiring), path %s", BOARD_SDCARD_MOUNT_POINT);
         } else {
             s_board_ready_mask |= DEVICE_BOARD_MASK_SDCARD;
+        }
+    }
+
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_IR)) {
+        if (board_ir_init() != STATUS_OK) {
+            LOG_WARN("IR sensors init failed (GPIO%d/GPIO%d)", BOARD_IR_SENSOR0_PIN, BOARD_IR_SENSOR1_PIN);
+        } else {
+            s_board_ready_mask |= DEVICE_BOARD_MASK_IR;
         }
     }
 

@@ -4,6 +4,7 @@
 #include "type.h"
 
 #include "device_profile.h"
+#include "ds3231.h"
 #include "qmi8658a.h"
 #include "spi.h"
 #include "st7789.h"
@@ -40,6 +41,25 @@
 #define BOARD_I2C_QMI8658A_PORT BOARD_I2C_BUS2_HW_PORT
 #define BOARD_I2C_QMI8658A_ADDR (0x6AU)
 
+/** DS3231 RTC：接在 I2C1（GPIO4/5）上，7-bit 地址 0x68。 */
+#define BOARD_I2C_DS3231_PORT BOARD_I2C_BUS1_HW_PORT
+#define BOARD_I2C_DS3231_ADDR DS3231_I2C_ADDR_7BIT
+
+/**
+ * 上电是否将 DS3231 写入下方固定时间（联调用）。
+ * 量产后请设为 0，改由 NTP / 菜单 / 外部工具校时。
+ */
+#ifndef BOARD_DS3231_SYNC_TIME_ON_BOOT
+#define BOARD_DS3231_SYNC_TIME_ON_BOOT (0)
+#endif
+#define BOARD_DS3231_SYNC_YEAR    (2026U)
+#define BOARD_DS3231_SYNC_MONTH   (6U)
+#define BOARD_DS3231_SYNC_DAY     (21U)
+#define BOARD_DS3231_SYNC_WEEKDAY (1U) /**< DS3231：1=Sunday … 7=Saturday */
+#define BOARD_DS3231_SYNC_HOUR    (20U)
+#define BOARD_DS3231_SYNC_MINUTE  (40U)
+#define BOARD_DS3231_SYNC_SECOND  (0U)
+
 /** ST7789：SPI2 与 TFT 控制脚（与硬件接线一致）。 */
 #define BOARD_ST7789_SPI_HOST (SPI_HOST_2_E)
 #define BOARD_ST7789_PIN_SCK (12)
@@ -55,7 +75,21 @@
 #define BOARD_ST7789_SPI_CLOCK_HZ (40000000U)
 
 /**
- * SD 卡：SDMMC 4 线（与硬件接线一致）。
+ * ballot_guard 红外 proximity 传感器（OUT → MCU，输入上拉，靠近时对地，下降沿触发）。
+ * 本产品无 SD 卡，GPIO38/39 专用于红外。
+ */
+#define BOARD_IR_SENSOR0_PIN (38)
+#define BOARD_IR_SENSOR1_PIN (39)
+#define BOARD_IR_SENSOR_COUNT (2U)
+/** 同通道两次下降沿有效触发最短间隔（ms）；须小于产品冷却时长。 */
+#define BOARD_IR_DEBOUNCE_MS (400U)
+
+/** ballot_guard 有源蜂鸣器（GPIO 高电平响）。无源时改用 LEDC PWM 驱动同一引脚。 */
+#define BOARD_BUZZER_PIN (47)
+#define BOARD_BUZZER_ACTIVE_LEVEL (1U)
+
+/**
+ * SD 卡：SDMMC 4 线（main/project 等产品；ballot_guard 不使用）。
  * CMD=GPIO38, CLK=GPIO39, DAT0~DAT2=GPIO40~42, DAT3=GPIO2。
  */
 #define BOARD_SDCARD_PIN_CMD (38)
@@ -104,5 +138,29 @@ st7789_t *BoardSt7789(void);
 
 /** 已由 `BoardInit` 完成 `qmi8658a_init_with_config` 后的句柄；未初始化时返回 NULL。 */
 qmi8658a_t *BoardQmi8658(void);
+
+/** 已由 `BoardInit` 完成 `ds3231_init_with_config` 后的句柄；未初始化时返回 NULL。 */
+ds3231_t *BoardDs3231(void);
+
+/** ballot_guard 红外通道（靠近时对地，空闲为高） */
+typedef enum {
+    BOARD_IR_CH0 = 0,
+    BOARD_IR_CH1 = 1,
+    BOARD_IR_CH_COUNT = 2,
+} board_ir_channel_e;
+
+typedef struct {
+    board_ir_channel_e channel;
+} board_ir_event_t;
+
+/** 初始化红外传感器 GPIO（输入上拉 + 下降沿中断）；BoardInit 在 IR 掩码置位时调用。 */
+status_t board_ir_init(void);
+
+bool_t board_ir_is_ready(void);
+
+bool_t board_ir_read_level(board_ir_channel_e channel, u32_t *level);
+
+/** 非阻塞取中断事件。 */
+bool_t board_ir_take_event(board_ir_event_t *out);
 
 #endif

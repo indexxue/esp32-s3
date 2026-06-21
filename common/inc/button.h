@@ -18,6 +18,8 @@ typedef enum {
     BTN_ID_DOWN,
     BTN_ID_LEFT,
     BTN_ID_RIGHT,
+    BTN_ID_CONFIRM,
+    BTN_ID_BACK,
     BTN_ID_MAX_NUMBER,
 } btn_id_e;
 

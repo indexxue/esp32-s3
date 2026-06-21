@@ -65,8 +65,9 @@ net_wifi_mode_t net_wifi_get_mode(void);
 bool net_wifi_sta_has_ipv4(void);
 
 /**
- * @brief 将当前界面可用的 IPv4 写入 buf（STA 已 DHCP 时为 STA 地址；SoftAP 模式为 AP 网关地址；否则 "---"）。
- * @return true 表示 buf 为有效 IPv4（STA 已拿到地址，或 SoftAP 已可取到 AP IP）。
+ * @brief 将当前界面可用的 IPv4 写入 buf。
+ *        优先 STA DHCP 地址；否则 SoftAP 地址；Wi‑Fi 未就绪时为 "---"。
+ * @return true 表示 buf 为有效 IPv4。
  */
 bool net_wifi_format_ipv4_for_display(char *buf, size_t cap);
 

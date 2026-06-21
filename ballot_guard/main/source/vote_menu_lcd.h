@@ -19,6 +19,8 @@ typedef struct {
     const menu_engine_t *menu_eng;
     uint8_t select_idx;
     uint8_t history_idx;
+    uint8_t home_scroll_idx;
+    uint8_t locked_scroll_idx;
     uint8_t cooldown_sec;
 } vote_lcd_ctx_t;
 

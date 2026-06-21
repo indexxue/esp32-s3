@@ -29,6 +29,8 @@ extern "C" {
 #define DEVICE_BOARD_MASK_BATTERY (1U << 2)
 #define DEVICE_BOARD_MASK_IMU (1U << 3)
 #define DEVICE_BOARD_MASK_SDCARD (1U << 4)
+#define DEVICE_BOARD_MASK_RTC (1U << 5)
+#define DEVICE_BOARD_MASK_IR (1U << 6)
 
 #define DEVICE_BOARD_MASK_FULL                                                                                       \
     (DEVICE_BOARD_MASK_I2C | DEVICE_BOARD_MASK_LCD | DEVICE_BOARD_MASK_BATTERY | DEVICE_BOARD_MASK_IMU |           \
@@ -41,9 +43,10 @@ extern "C" {
 #define DEVICE_PLATFORM_MASK_BUTTON (1U << 0)
 #define DEVICE_PLATFORM_MASK_LED (1U << 1)
 #define DEVICE_PLATFORM_MASK_WEB (1U << 2)
+#define DEVICE_PLATFORM_MASK_BUZZER (1U << 3)
 
 #define DEVICE_PLATFORM_MASK_FULL                                                                                    \
-    (DEVICE_PLATFORM_MASK_BUTTON | DEVICE_PLATFORM_MASK_LED | DEVICE_PLATFORM_MASK_WEB)
+    (DEVICE_PLATFORM_MASK_BUTTON | DEVICE_PLATFORM_MASK_LED | DEVICE_PLATFORM_MASK_WEB | DEVICE_PLATFORM_MASK_BUZZER)
 
 /* -------------------------------------------------------------------------- */
 /* 产品档案                                                                    */

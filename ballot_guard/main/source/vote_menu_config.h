@@ -49,6 +49,7 @@ typedef enum {
     VOTE_LCD_SCREEN_ADMIN_COUNT,
     VOTE_LCD_SCREEN_ADMIN_COOLDOWN,
     VOTE_LCD_SCREEN_ADMIN_RESET,
+    VOTE_LCD_SCREEN_ADMIN_ENTER,
 } vote_lcd_screen_id_t;
 
 /** 管理员菜单页（menu 引擎子集）。 */
@@ -58,6 +59,7 @@ typedef enum {
     VOTE_MENU_PAGE_COUNT = (int)VOTE_LCD_SCREEN_ADMIN_COUNT,
     VOTE_MENU_PAGE_COOLDOWN = (int)VOTE_LCD_SCREEN_ADMIN_COOLDOWN,
     VOTE_MENU_PAGE_RESET = (int)VOTE_LCD_SCREEN_ADMIN_RESET,
+    VOTE_MENU_PAGE_ENTER = (int)VOTE_LCD_SCREEN_ADMIN_ENTER,
 } vote_menu_page_id_t;
 
 static inline bool vote_lcd_screen_is_menu(vote_lcd_screen_id_t id)

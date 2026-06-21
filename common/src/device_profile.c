@@ -10,9 +10,15 @@ static const device_button_spec_t s_buttons_main[] = {
     {3, BTN_ID_DOWN, "下", 0, (uint16_t)(BTN_PERMISSION_DOWN | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR)},
 };
 
+/** ballot_guard 产品 6 键：上7 下16 左18 右8 确认17 返回15。
+ *  开发板 2 键验证：改为 {0,LEFT,...},{3,RIGHT,...} 并将 button_count 设为 2。 */
 static const device_button_spec_t s_buttons_ballot_guard[] = {
-    {0, BTN_ID_LEFT, "左", 0, (uint16_t)(BTN_PERMISSION_LEFT | BTN_PERMISSION_RESET)},
-    {3, BTN_ID_RIGHT, "右", 0, (uint16_t)(BTN_PERMISSION_RIGHT | BTN_PERMISSION_RESET)},
+    {7, BTN_ID_UP, "上", 0, BTN_PERMISSION_UP},
+    {16, BTN_ID_DOWN, "下", 0, BTN_PERMISSION_DOWN},
+    {18, BTN_ID_LEFT, "左", 0, BTN_PERMISSION_LEFT},
+    {8, BTN_ID_RIGHT, "右", 0, BTN_PERMISSION_RIGHT},
+    {17, BTN_ID_CONFIRM, "确认", 0, (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET)},
+    {15, BTN_ID_BACK, "返回", 0, (uint16_t)(BTN_PERMISSION_BACK | BTN_PERMISSION_RESET)},
 };
 
 static const device_product_profile_t s_product_profiles[] = {
@@ -39,8 +45,10 @@ static const device_product_profile_t s_product_profiles[] = {
     {
         .product_id         = NVS_PROJECT_ID_BALLOT_GUARD,
         .name               = "ballot_guard",
-        .board_mask         = DEVICE_BOARD_MASK_LCD,
-        .platform_mask      = DEVICE_PLATFORM_MASK_BUTTON | DEVICE_PLATFORM_MASK_LED | DEVICE_PLATFORM_MASK_WEB,
+        .board_mask         = DEVICE_BOARD_MASK_LCD | DEVICE_BOARD_MASK_I2C | DEVICE_BOARD_MASK_RTC |
+                              DEVICE_BOARD_MASK_IR,
+        .platform_mask      = DEVICE_PLATFORM_MASK_BUTTON | DEVICE_PLATFORM_MASK_LED | DEVICE_PLATFORM_MASK_WEB |
+                              DEVICE_PLATFORM_MASK_BUZZER,
         .buttons            = s_buttons_ballot_guard,
         .button_count       = (uint8_t)(sizeof(s_buttons_ballot_guard) / sizeof(s_buttons_ballot_guard[0])),
         .lcd_smoke_title    = "ballot_guard LCD OK",
