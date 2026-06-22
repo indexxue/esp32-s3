@@ -326,6 +326,155 @@ static const led_scene_t led_scene_low_battery = {
     },
 };
 
+/** ballot_guard：待机 / 锁定 — 绿色常亮 */
+static const led_scene_t led_scene_ballot_idle = {
+    .cycle = CYCLE_ALWAYS,
+    .num = 1,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_HOLD,
+        .sub.hold.value.r = 0x00,
+        .sub.hold.value.g = 0xE8,
+        .sub.hold.value.b = 0x40,
+    },
+};
+
+/** ballot_guard：投票开始提示 — 蓝色慢闪 1 Hz × 5 s（5 个亮灭周期） */
+static const led_scene_t led_scene_ballot_voting = {
+    .cycle = 5,
+    .num = 2,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0x18,
+        .sub.onoff.value.g = 0x50,
+        .sub.onoff.value.b = 0xF0,
+        .sub.onoff.lifetime = 500 * LED_SCENE_MSEC,
+    },
+    .action[1] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0,
+        .sub.onoff.value.g = 0,
+        .sub.onoff.value.b = 0,
+        .sub.onoff.lifetime = 500 * LED_SCENE_MSEC,
+    },
+};
+
+/** ballot_guard：红外靠近 — 蓝色快闪 2 Hz 约 2 s（4 个亮灭周期） */
+static const led_scene_t led_scene_ballot_approach = {
+    .cycle = 4,
+    .num = 2,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0x30,
+        .sub.onoff.value.g = 0x70,
+        .sub.onoff.value.b = 0xFF,
+        .sub.onoff.lifetime = 250 * LED_SCENE_MSEC,
+    },
+    .action[1] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0,
+        .sub.onoff.value.g = 0,
+        .sub.onoff.value.b = 0,
+        .sub.onoff.lifetime = 250 * LED_SCENE_MSEC,
+    },
+};
+
+/** ballot_guard：有效票 — 绿色快闪 2 次 */
+static const led_scene_t led_scene_ballot_valid = {
+    .cycle = 2,
+    .num = 2,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0x00,
+        .sub.onoff.value.g = 0xE8,
+        .sub.onoff.value.b = 0x40,
+        .sub.onoff.lifetime = 200 * LED_SCENE_MSEC,
+    },
+    .action[1] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0,
+        .sub.onoff.value.g = 0,
+        .sub.onoff.value.b = 0,
+        .sub.onoff.lifetime = 200 * LED_SCENE_MSEC,
+    },
+};
+
+/** ballot_guard：废票 — 红色快闪 3 次 */
+static const led_scene_t led_scene_ballot_spoiled = {
+    .cycle = 3,
+    .num = 2,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0xFF,
+        .sub.onoff.value.g = 0x20,
+        .sub.onoff.value.b = 0x10,
+        .sub.onoff.lifetime = 200 * LED_SCENE_MSEC,
+    },
+    .action[1] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0,
+        .sub.onoff.value.g = 0,
+        .sub.onoff.value.b = 0,
+        .sub.onoff.lifetime = 200 * LED_SCENE_MSEC,
+    },
+};
+
+/** ballot_guard：违规 — 红色急促闪（80 ms 周期） */
+static const led_scene_t led_scene_ballot_violation = {
+    .cycle = CYCLE_ALWAYS,
+    .num = 2,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0xFF,
+        .sub.onoff.value.g = 0x10,
+        .sub.onoff.value.b = 0x08,
+        .sub.onoff.lifetime = 80 * LED_SCENE_MSEC,
+    },
+    .action[1] = {
+        .cycle = 1,
+        .type = ACTION_ONOFF,
+        .sub.onoff.value.r = 0,
+        .sub.onoff.value.g = 0,
+        .sub.onoff.value.b = 0,
+        .sub.onoff.lifetime = 80 * LED_SCENE_MSEC,
+    },
+};
+
+/** ballot_guard：系统异常 — 红色常亮 */
+static const led_scene_t led_scene_ballot_fault = {
+    .cycle = CYCLE_ALWAYS,
+    .num = 1,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_HOLD,
+        .sub.hold.value.r = 0xFF,
+        .sub.hold.value.g = 0x10,
+        .sub.hold.value.b = 0x08,
+    },
+};
+
+/** ballot_guard：Wi-Fi STA 离线 — 黄色常亮 */
+static const led_scene_t led_scene_ballot_wifi_warn = {
+    .cycle = CYCLE_ALWAYS,
+    .num = 1,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_HOLD,
+        .sub.hold.value.r = 0xFF,
+        .sub.hold.value.g = 0xC8,
+        .sub.hold.value.b = 0x28,
+    },
+};
+
 static const led_scene_tab_t scene_table[LED_SCENE_ID_MAX_NUM] = {
     [LED_SCENE_ID_BOOTUP]      = {.prio = LED_SCENE_PRIO_LOW,    .scene = &led_scene_bootup,},
     [LED_SCENE_ID_PAIRING]     = {.prio = LED_SCENE_PRIO_PAIR,   .scene = &led_scene_pairing,},
@@ -339,11 +488,28 @@ static const led_scene_tab_t scene_table[LED_SCENE_ID_MAX_NUM] = {
     [LED_SCENE_ID_CONFIG]      = {.prio = LED_SCENE_PRIO_PAIR,   .scene = &led_scene_config,},
     [LED_SCENE_ID_CHARGING]    = {.prio = LED_SCENE_PRIO_LOW,    .scene = &led_scene_charging,},
     [LED_SCENE_ID_LOW_BATTERY] = {.prio = LED_SCENE_PRIO_LOW,    .scene = &led_scene_low_battery,},
+    [LED_SCENE_ID_BALLOT_IDLE]      = {.prio = LED_SCENE_PRIO_LOW,    .scene = &led_scene_ballot_idle,},
+    [LED_SCENE_ID_BALLOT_VOTING]    = {.prio = LED_SCENE_PRIO_NORMAL, .scene = &led_scene_ballot_voting,},
+    [LED_SCENE_ID_BALLOT_APPROACH]  = {.prio = LED_SCENE_PRIO_NORMAL, .scene = &led_scene_ballot_approach,},
+    [LED_SCENE_ID_BALLOT_VALID]     = {.prio = LED_SCENE_PRIO_NORMAL, .scene = &led_scene_ballot_valid,},
+    [LED_SCENE_ID_BALLOT_SPOILED]   = {.prio = LED_SCENE_PRIO_NORMAL, .scene = &led_scene_ballot_spoiled,},
+    [LED_SCENE_ID_BALLOT_VIOLATION] = {.prio = LED_SCENE_PRIO_PAIR,   .scene = &led_scene_ballot_violation,},
+    [LED_SCENE_ID_BALLOT_FAULT]     = {.prio = LED_SCENE_PRIO_FACTORY,.scene = &led_scene_ballot_fault,},
+    [LED_SCENE_ID_BALLOT_WIFI_WARN] = {.prio = LED_SCENE_PRIO_LOW,    .scene = &led_scene_ballot_wifi_warn,},
 };
 
 static uint8_t led_scene_scale8(uint8_t c, uint8_t scale)
 {
     return (uint8_t)(((uint16_t)c * (uint16_t)scale) >> 8);
+}
+
+static led_rgb_value_t led_scene_scale_rgb(led_rgb_value_t rgb)
+{
+    const uint8_t s = (uint8_t)LED_SCENE_BRIGHTNESS_SCALE;
+    rgb.r           = led_scene_scale8(rgb.r, s);
+    rgb.g           = led_scene_scale8(rgb.g, s);
+    rgb.b           = led_scene_scale8(rgb.b, s);
+    return rgb;
 }
 
 /** 色相 pos 0–255，饱和全开的色环段 */
@@ -393,8 +559,13 @@ static void led_scene_output_rainbow(ws2812b_t *dev, uint8_t base_hue, uint8_t s
         uint8_t g0;
         uint8_t b0;
         led_scene_wheel_rgb(h, &r0, &g0, &b0);
-        (void)ws2812b_set_pixel_rgb(dev, i, led_scene_scale8(r0, amp), led_scene_scale8(g0, amp),
-                                    led_scene_scale8(b0, amp));
+        r0 = led_scene_scale8(r0, amp);
+        g0 = led_scene_scale8(g0, amp);
+        b0 = led_scene_scale8(b0, amp);
+        r0 = led_scene_scale8(r0, (uint8_t)LED_SCENE_BRIGHTNESS_SCALE);
+        g0 = led_scene_scale8(g0, (uint8_t)LED_SCENE_BRIGHTNESS_SCALE);
+        b0 = led_scene_scale8(b0, (uint8_t)LED_SCENE_BRIGHTNESS_SCALE);
+        (void)ws2812b_set_pixel_rgb(dev, i, r0, g0, b0);
     }
     (void)ws2812b_refresh(dev);
 }
@@ -439,10 +610,11 @@ static void led_scene_output(const led_rgb_value_t *rgb)
         return;
     }
 
-    const uint16_t n = ws2812b_get_num_leds(dev);
+    const led_rgb_value_t dim = led_scene_scale_rgb(*rgb);
+    const uint16_t n          = ws2812b_get_num_leds(dev);
     for (uint16_t i = 0; i < n; i++)
     {
-        (void)ws2812b_set_pixel_rgb(dev, i, rgb->r, rgb->g, rgb->b);
+        (void)ws2812b_set_pixel_rgb(dev, i, dim.r, dim.g, dim.b);
     }
     (void)ws2812b_refresh(dev);
 }
@@ -650,11 +822,18 @@ void led_scene_led_direct_set(led_scene_led_e led, bool on)
     /* 直接点灯：暖琥珀 + 冰青，避免纯红/纯蓝刺眼 */
     if (led == LED_SCENE_LED_0 && n > 0U)
     {
-        (void)ws2812b_set_pixel_rgb(dev, 0, on ? 0xFFu : 0u, on ? 0xC8u : 0u, on ? 0x58u : 0u);
+        const led_rgb_value_t c = led_scene_scale_rgb((led_rgb_value_t){on ? 0xFFu : 0u, on ? 0xC8u : 0u, on ? 0x58u : 0u});
+        (void)ws2812b_set_pixel_rgb(dev, 0, c.r, c.g, c.b);
     }
     else if (led == LED_SCENE_LED_1 && n > 1U)
     {
-        (void)ws2812b_set_pixel_rgb(dev, 1, on ? 0x38u : 0u, on ? 0xD0u : 0u, on ? 0xFFu : 0u);
+        const led_rgb_value_t c = led_scene_scale_rgb((led_rgb_value_t){on ? 0x38u : 0u, on ? 0xD0u : 0u, on ? 0xFFu : 0u});
+        (void)ws2812b_set_pixel_rgb(dev, 1, c.r, c.g, c.b);
+    }
+    else if (led == LED_SCENE_LED_2 && n > 2U)
+    {
+        const led_rgb_value_t c = led_scene_scale_rgb((led_rgb_value_t){on ? 0xE8u : 0u, on ? 0x40u : 0u, on ? 0x90u : 0u});
+        (void)ws2812b_set_pixel_rgb(dev, 2, c.r, c.g, c.b);
     }
 
     (void)ws2812b_refresh(dev);

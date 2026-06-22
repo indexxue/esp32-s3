@@ -33,6 +33,11 @@
 #define VOTE_SELECT_TIMEOUT_SEC (30U)
 /** 废票声光报警持续时间（ms）。 */
 #define VOTE_SPOILED_ALARM_MS (5000U)
+/** 投票时段开始蓝灯慢闪时长（ms）；与 led_scene 中 5 个 1 Hz 周期一致。 */
+#define VOTE_VOTING_LED_BLINK_MS (5000U)
+
+/** 业务屏返回键长按进入管理员菜单（ms，与 button 库 LONG_PRESS 阈值一致）。 */
+#define VOTE_ADMIN_BACK_HOLD_MS (10000U)
 
 #define VOTE_MENU_RGB565(r, g, b)                                                                                     \
     ((uint16_t)((((uint16_t)(r) & 0xF8U) << 8) | (((uint16_t)(g) & 0xFCU) << 3) | ((uint16_t)(b) >> 3)))

@@ -237,6 +237,11 @@ status_t buzzer_play_pattern(buzzer_pattern_e pattern)
         return STATUS_INVALID_STATE;
     }
 
+    /* 按键连发时避免 stop+建任务把扫描任务堵死 */
+    if (s_pattern_busy && pattern == BUZZER_PATTERN_SHORT) {
+        return STATUS_OK;
+    }
+
     buzzer_stop_pattern();
     s_pattern_stop = FALSE;
     s_pattern_busy = TRUE;
@@ -262,7 +267,7 @@ void buzzer_stop_pattern(void)
     buzzer_off();
 
     if (s_pattern_task != NULL) {
-        for (u8_t i = 0U; i < 20U; i++) {
+        for (u8_t i = 0U; i < 5U; i++) {
             if (s_pattern_task == NULL) {
                 break;
             }

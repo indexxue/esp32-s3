@@ -390,10 +390,11 @@ bool vote_status_add_valid(uint8_t idx)
     format_clock_hms(clk, sizeof(clk));
     vote_status_push_event(clk, "valid vote");
     (void)vote_nvs_save_votes();
+    (void)vote_history_append_valid(idx);
     return true;
 }
 
-bool vote_status_add_spoiled_typed(vote_spoiled_type_e type)
+bool vote_status_add_spoiled_typed(vote_spoiled_type_e type, uint8_t cand_idx)
 {
     char clk[16];
 
@@ -405,12 +406,13 @@ bool vote_status_add_spoiled_typed(vote_spoiled_type_e type)
     format_clock_hms(clk, sizeof(clk));
     vote_status_push_event(clk, spoiled_event_text(type));
     (void)vote_nvs_save_votes();
+    (void)vote_history_append_spoiled(type, cand_idx);
     return true;
 }
 
 bool vote_status_add_spoiled(void)
 {
-    return vote_status_add_spoiled_typed(VOTE_SPOILED_IRREGULAR);
+    return vote_status_add_spoiled_typed(VOTE_SPOILED_IRREGULAR, 0U);
 }
 
 size_t vote_status_build_json(char *out, size_t out_cap)

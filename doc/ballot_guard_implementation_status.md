@@ -109,7 +109,10 @@
 |:---|:---|
 | `GET /api/vote/status` | phase、倒计时、冷却、票数、外设、最近 5 事件 |
 | `GET /api/vote/history` | 归档会话列表 |
-| `GET/POST /api/lcd/menu` | LCD 调试切屏 / 注入按键 |
+| `GET /api/vote/settings` | 投票时段、人数、冷却、RTC 时钟 |
+| `POST /api/vote/settings/*` | 保存时段 / 人数 / 冷却 / 时钟 / 重置数据 |
+| `GET/POST /api/vote/candidates` | 候选人姓名 |
+| `POST /api/vote/session/enter` | 退出 LCD 管理员菜单进入投票 |
 | Wi‑Fi 配网 | 沿用 `web_ctrl` |
 
 ---
@@ -167,8 +170,14 @@
 | GET | `/` | 嵌入 `index.html` |
 | GET | `/api/vote/status` | 投票看板 JSON |
 | GET | `/api/vote/history` | 历史记录 |
-| GET | `/api/lcd/menu` | LCD 当前页与屏列表 |
-| POST | `/api/lcd/menu` | 切屏 / 注入按键事件 |
+| GET | `/api/vote/settings` | 参数设置（时段/人数/冷却/时钟） |
+| POST | `/api/vote/settings/schedule` | 保存投票时段 |
+| POST | `/api/vote/settings/count` | 保存候选人数量 |
+| POST | `/api/vote/settings/cooldown` | 保存冷却时长 |
+| POST | `/api/vote/settings/clock` | 设置 RTC 时钟 |
+| POST | `/api/vote/settings/reset` | 重置全部投票数据 |
+| GET/POST | `/api/vote/candidates` | 候选人姓名 |
+| POST | `/api/vote/session/enter` | 进入投票界面 |
 | GET/POST | `/api/wifi/*` | 配网（`web_ctrl`） |
 
 ---

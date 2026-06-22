@@ -520,6 +520,14 @@ static bool ledfx_name_to_id(const char *name, led_scene_id_e *out_id)
         {"config", LED_SCENE_ID_CONFIG},
         {"charging", LED_SCENE_ID_CHARGING},
         {"low_battery", LED_SCENE_ID_LOW_BATTERY},
+        {"ballot_idle", LED_SCENE_ID_BALLOT_IDLE},
+        {"ballot_voting", LED_SCENE_ID_BALLOT_VOTING},
+        {"ballot_approach", LED_SCENE_ID_BALLOT_APPROACH},
+        {"ballot_valid", LED_SCENE_ID_BALLOT_VALID},
+        {"ballot_spoiled", LED_SCENE_ID_BALLOT_SPOILED},
+        {"ballot_violation", LED_SCENE_ID_BALLOT_VIOLATION},
+        {"ballot_fault", LED_SCENE_ID_BALLOT_FAULT},
+        {"ballot_wifi_warn", LED_SCENE_ID_BALLOT_WIFI_WARN},
     };
 
     if ((name == NULL) || (out_id == NULL)) {

@@ -20,6 +20,7 @@
 
 #define VOTE_MENU_FONT_SM (12U)
 #define VOTE_MENU_FONT_MD (16U)
+#define VOTE_MENU_LIST_ROW_H (20U)
 
 static vote_menu_page_id_t page_id_of(const menu_page_t *page)
 {
@@ -145,13 +146,15 @@ static void draw_list_row(st7789_t *lcd,
                           uint16_t focus,
                           void *app_ctx,
                           char *aux_buf,
-                          size_t aux_len)
+                          size_t aux_len,
+                          uint16_t row_h)
 {
     uint16_t bg  = VOTE_MENU_COLOR_BG;
     uint16_t fc  = VOTE_MENU_COLOR_TEXT;
     uint16_t lnc = VOTE_MENU_COLOR_BG;
     const char *label;
     char prefix[4];
+    const uint16_t row_bottom = (uint16_t)(y + row_h - 1U);
 
     if (item == NULL) {
         return;
@@ -163,11 +166,13 @@ static void draw_list_row(st7789_t *lcd,
         fc  = menu_item_is_danger(item) ? VOTE_MENU_COLOR_DANGER : VOTE_MENU_COLOR_TEXT;
     } else if (menu_item_is_danger(item)) {
         fc = VOTE_MENU_COLOR_DANGER;
+    } else {
+        fc = VOTE_MENU_COLOR_MUTED;
     }
 
-    lcd_fill(lcd, 0U, y, VOTE_MENU_LCD_W, (uint16_t)(y + VOTE_MENU_ROW_H), bg);
+    lcd_fill(lcd, 0U, y, VOTE_MENU_LCD_W, row_bottom, bg);
     if (lnc != VOTE_MENU_COLOR_BG) {
-        lcd_fill(lcd, 0U, y, 3U, (uint16_t)(y + VOTE_MENU_ROW_H), lnc);
+        lcd_fill(lcd, 0U, y, 3U, row_bottom, lnc);
     }
 
     prefix[0] = focus ? '>' : ' ';
@@ -185,46 +190,6 @@ static void draw_list_row(st7789_t *lcd,
             draw_string(lcd, ax, (uint16_t)(y + 4U), aux, VOTE_MENU_COLOR_MUTED, bg, VOTE_MENU_FONT_SM);
         }
     }
-}
-
-static void draw_list_scrollbar(st7789_t *lcd, const menu_page_t *page, uint16_t item_index, uint16_t visible_rows)
-{
-    uint16_t focus_count;
-    uint16_t focus_pos;
-    uint16_t track_y;
-    uint16_t track_h;
-    uint16_t thumb_h;
-    uint16_t thumb_y;
-
-    if (lcd == NULL || page == NULL || visible_rows == 0U) {
-        return;
-    }
-
-    focus_count = menu_page_focus_item_count(page);
-    if (focus_count <= visible_rows) {
-        return;
-    }
-    if (!menu_page_focus_cursor_pos(page, item_index, &focus_pos)) {
-        return;
-    }
-
-    track_y = (uint16_t)(VOTE_MENU_BODY_Y + 2U);
-    track_h = (uint16_t)(visible_rows * VOTE_MENU_ROW_H - 4U);
-    thumb_h = (uint16_t)((uint32_t)track_h * visible_rows / focus_count);
-    if (thumb_h < 6U) {
-        thumb_h = 6U;
-    }
-    if (thumb_h > track_h) {
-        thumb_h = track_h;
-    }
-
-    thumb_y = track_y;
-    if (focus_count > 1U) {
-        thumb_y = (uint16_t)(track_y + ((uint32_t)focus_pos * (track_h - thumb_h) / (focus_count - 1U)));
-    }
-
-    lcd_fill(lcd, 234U, track_y, 237U, (uint16_t)(track_y + track_h), VOTE_MENU_COLOR_BORDER);
-    lcd_fill(lcd, 234U, thumb_y, 237U, (uint16_t)(thumb_y + thumb_h), VOTE_MENU_COLOR_ACCENT);
 }
 
 static void draw_simple_scrollbar(st7789_t *lcd, uint16_t track_y, uint16_t track_h, uint8_t total, uint8_t visible, uint8_t focus_idx)
@@ -259,26 +224,41 @@ static void draw_simple_scrollbar(st7789_t *lcd, uint16_t track_y, uint16_t trac
 static void draw_list_page(st7789_t *lcd, const menu_engine_t *eng, const menu_page_t *page)
 {
     char aux_buf[32];
+    const uint8_t visible = (uint8_t)VOTE_MENU_VISIBLE_ROWS;
+    const uint16_t row_h  = VOTE_MENU_LIST_ROW_H;
+    const uint16_t list_y0 = (uint16_t)(VOTE_MENU_BODY_Y + 4U);
+    const uint16_t track_h = (uint16_t)(visible * row_h - 2U);
     uint16_t first_slot = 0U;
+    uint16_t focus_pos  = 0U;
+    uint16_t focus_count;
+    uint16_t cur_idx;
     uint16_t i;
 
-    (void)menu_page_viewport_first_focus(page, menu_current_index(eng), VOTE_MENU_VISIBLE_ROWS, &first_slot);
+    if (lcd == NULL || eng == NULL || page == NULL) {
+        return;
+    }
 
-    for (i = 0U; i < VOTE_MENU_VISIBLE_ROWS; i++) {
+    cur_idx     = menu_current_index(eng);
+    focus_count = menu_page_focus_item_count(page);
+    (void)menu_page_viewport_first_focus(page, cur_idx, visible, &first_slot);
+    (void)menu_page_focus_cursor_pos(page, cur_idx, &focus_pos);
+
+    for (i = 0U; i < visible; i++) {
         uint16_t item_index = 0U;
-        uint16_t y          = (uint16_t)(VOTE_MENU_BODY_Y + i * VOTE_MENU_ROW_H);
+        uint16_t y          = (uint16_t)(list_y0 + i * row_h);
         const menu_item_t *item;
 
         if (!menu_page_focus_item_at(page, (uint16_t)(first_slot + i), &item_index)) {
-            lcd_fill(lcd, 0U, y, VOTE_MENU_LCD_W, (uint16_t)(y + VOTE_MENU_ROW_H), VOTE_MENU_COLOR_BG);
+            lcd_fill(lcd, 0U, y, VOTE_MENU_LCD_W, (uint16_t)(y + row_h - 1U), VOTE_MENU_COLOR_BG);
             continue;
         }
         item = &page->items[item_index];
-        draw_list_row(lcd, y, item, (uint16_t)(item_index == menu_current_index(eng)), eng->app_ctx, aux_buf,
-                      sizeof(aux_buf));
+        draw_list_row(lcd, y, item, (uint16_t)(item_index == cur_idx), eng->app_ctx, aux_buf, sizeof(aux_buf), row_h);
     }
 
-    draw_list_scrollbar(lcd, page, menu_current_index(eng), VOTE_MENU_VISIBLE_ROWS);
+    if (focus_count > 0U && focus_count <= 255U) {
+        draw_simple_scrollbar(lcd, list_y0, track_h, (uint8_t)focus_count, visible, (uint8_t)focus_pos);
+    }
 }
 
 static void draw_string_center_in_box(st7789_t *lcd,
@@ -443,9 +423,10 @@ static void draw_reset_modal(st7789_t *lcd, const menu_engine_t *eng, const menu
 
     if (page != NULL && page->items != NULL && page->count >= 2U) {
         uint16_t y = (uint16_t)(VOTE_MENU_BODY_Y + 54U);
-        draw_list_row(lcd, y, &page->items[0], (uint16_t)(idx == 0U), eng->app_ctx, aux_buf, sizeof(aux_buf));
+        draw_list_row(lcd, y, &page->items[0], (uint16_t)(idx == 0U), eng->app_ctx, aux_buf, sizeof(aux_buf),
+                      VOTE_MENU_ROW_H);
         draw_list_row(lcd, (uint16_t)(y + VOTE_MENU_ROW_H), &page->items[1], (uint16_t)(idx == 1U), eng->app_ctx,
-                      aux_buf, sizeof(aux_buf));
+                      aux_buf, sizeof(aux_buf), VOTE_MENU_ROW_H);
     }
 }
 
@@ -491,10 +472,24 @@ static void draw_enter_voting_modal(st7789_t *lcd, const menu_engine_t *eng, con
 
     if (page != NULL && page->items != NULL && page->count >= 2U) {
         uint16_t y = (uint16_t)(VOTE_MENU_BODY_Y + 54U);
-        draw_list_row(lcd, y, &page->items[0], (uint16_t)(idx == 0U), eng->app_ctx, aux_buf, sizeof(aux_buf));
+        draw_list_row(lcd, y, &page->items[0], (uint16_t)(idx == 0U), eng->app_ctx, aux_buf, sizeof(aux_buf),
+                      VOTE_MENU_ROW_H);
         draw_list_row(lcd, (uint16_t)(y + VOTE_MENU_ROW_H), &page->items[1], (uint16_t)(idx == 1U), eng->app_ctx,
-                      aux_buf, sizeof(aux_buf));
+                      aux_buf, sizeof(aux_buf), VOTE_MENU_ROW_H);
     }
+}
+
+static void format_remain_mmss(char *buf, size_t cap, int countdown_sec)
+{
+    if (buf == NULL || cap == 0U) {
+        return;
+    }
+    if (countdown_sec <= 0) {
+        buf[0] = '\0';
+        return;
+    }
+    (void)snprintf(buf, cap, VOTE_ZH_REMAIN " %02u:%02u", (unsigned)(countdown_sec / 60),
+                   (unsigned)(countdown_sec % 60));
 }
 
 static void format_select_title(char *buf, size_t cap, uint8_t timeout_sec)
@@ -525,10 +520,9 @@ static void draw_title_right_label(st7789_t *lcd, const char *label)
     draw_string(lcd, x, 4U, label, VOTE_MENU_COLOR_TEXT, VOTE_MENU_COLOR_SURFACE, VOTE_MENU_FONT_SM);
 }
 
-static void draw_select_title_bar(st7789_t *lcd, uint8_t timeout_sec)
+static void draw_countdown_title_bar(st7789_t *lcd, const char *title, const char *right_label)
 {
     char clk[16];
-    char title[24];
     uint16_t title_x;
 
     lcd_fill(lcd, 0U, 0U, VOTE_MENU_LCD_W, VOTE_MENU_TITLE_H, VOTE_MENU_COLOR_SURFACE);
@@ -539,12 +533,37 @@ static void draw_select_title_bar(st7789_t *lcd, uint8_t timeout_sec)
     draw_string(lcd, VOTE_MENU_TITLE_CLK_X, 4U, clk, VOTE_MENU_COLOR_TEXT, VOTE_MENU_COLOR_SURFACE,
                 VOTE_MENU_FONT_SM);
 
-    format_select_title(title, sizeof(title), timeout_sec);
-    if (title[0] != '\0') {
+    if (title != NULL && title[0] != '\0') {
         title_x = title_bar_title_x(clk, title);
         draw_string(lcd, title_x, 4U, title, VOTE_MENU_COLOR_WARN, VOTE_MENU_COLOR_SURFACE, VOTE_MENU_FONT_SM);
     }
-    draw_title_right_label(lcd, VOTE_ZH_BALLOT);
+    if (right_label != NULL && right_label[0] != '\0') {
+        draw_title_right_label(lcd, right_label);
+    }
+}
+
+static void draw_select_title_bar(st7789_t *lcd, uint8_t timeout_sec)
+{
+    char title[24];
+
+    format_select_title(title, sizeof(title), timeout_sec);
+    draw_countdown_title_bar(lcd, title, VOTE_ZH_BALLOT);
+}
+
+static void draw_waiting_title_bar(st7789_t *lcd, int countdown_sec)
+{
+    char title[24];
+
+    format_remain_mmss(title, sizeof(title), countdown_sec);
+    draw_countdown_title_bar(lcd, title, VOTE_ZH_WAITING);
+}
+
+static void draw_voting_title_bar(st7789_t *lcd, int countdown_sec)
+{
+    char title[24];
+
+    format_remain_mmss(title, sizeof(title), countdown_sec);
+    draw_countdown_title_bar(lcd, title, VOTE_ZH_VOTING);
 }
 
 static void draw_business_title(st7789_t *lcd, const char *title)
@@ -617,9 +636,15 @@ static void draw_home_screen(st7789_t *lcd, uint8_t scroll_idx)
         start = (uint8_t)(count - visible);
     }
 
-    draw_business_title(lcd, VOTE_ZH_BOARD);
-    draw_string(lcd, 170U, 4U, phase_badge_text(), VOTE_MENU_COLOR_WARN, VOTE_MENU_COLOR_SURFACE,
-                VOTE_MENU_FONT_SM);
+    if (strcmp(phase, "waiting") == 0 && countdown > 0) {
+        draw_waiting_title_bar(lcd, countdown);
+    } else {
+        draw_business_title(lcd, VOTE_ZH_BOARD);
+        if (strcmp(phase, "waiting") != 0) {
+            draw_string(lcd, 170U, 4U, phase_badge_text(), VOTE_MENU_COLOR_WARN, VOTE_MENU_COLOR_SURFACE,
+                        VOTE_MENU_FONT_SM);
+        }
+    }
 
     draw_string(lcd, 8U, y, VOTE_ZH_CANDIDATE, VOTE_MENU_COLOR_MUTED, VOTE_MENU_COLOR_BG, VOTE_MENU_FONT_SM);
     draw_string(lcd, 190U, y, VOTE_ZH_VOTES, VOTE_MENU_COLOR_MUTED, VOTE_MENU_COLOR_BG, VOTE_MENU_FONT_SM);
@@ -663,21 +688,16 @@ static void draw_home_screen(st7789_t *lcd, uint8_t scroll_idx)
     draw_string(lcd, 8U, (uint16_t)(VOTE_MENU_BODY_Y + 68U), line, VOTE_MENU_COLOR_TEXT, VOTE_MENU_COLOR_BG,
                 VOTE_MENU_FONT_SM);
 
-    if (strcmp(phase, "waiting") == 0 && countdown > 0) {
-        char cdline[32];
-        (void)snprintf(cdline, sizeof(cdline), "%d" VOTE_ZH_MINUTE "%02d" VOTE_ZH_SECOND VOTE_ZH_STARTS_IN_SUFFIX,
-                       countdown / 60, countdown % 60);
-        draw_string(lcd, 8U, (uint16_t)(VOTE_MENU_BODY_Y + 82U), cdline, VOTE_MENU_COLOR_WARN, VOTE_MENU_COLOR_BG,
-                    VOTE_MENU_FONT_SM);
+    if (phase != NULL && strcmp(phase, "voting") == 0) {
+        draw_business_foot(lcd, VOTE_ZH_FOOT_HOME_VOTING);
+    } else {
+        draw_business_foot(lcd, VOTE_ZH_FOOT_HOME);
     }
-
-    draw_business_foot(lcd, VOTE_ZH_FOOT_HOME);
 }
 
 static void draw_voting_screen(st7789_t *lcd)
 {
     char line[48];
-    char cdline[32];
     uint16_t valid = 0U;
     uint8_t i;
     uint8_t count = vote_status_candidate_count();
@@ -689,22 +709,18 @@ static void draw_voting_screen(st7789_t *lcd)
         valid = (uint16_t)(valid + vote_status_votes(i));
     }
 
-    draw_business_title(lcd, VOTE_ZH_VOTING);
+    if (countdown > 0) {
+        draw_voting_title_bar(lcd, countdown);
+    } else {
+        draw_business_title(lcd, VOTE_ZH_VOTING);
+    }
     draw_string_center(lcd, (uint16_t)(VOTE_MENU_BODY_Y + 16U), VOTE_ZH_READY, VOTE_MENU_COLOR_TEXT,
                        VOTE_MENU_COLOR_BG, VOTE_MENU_FONT_SM);
     (void)snprintf(line, sizeof(line), VOTE_ZH_VALID ":%u " VOTE_ZH_SPOILED ":%u", (unsigned)valid,
                    (unsigned)vote_status_spoiled());
     draw_string_center(lcd, (uint16_t)(VOTE_MENU_BODY_Y + 34U), line, VOTE_MENU_COLOR_MUTED, VOTE_MENU_COLOR_BG,
                        VOTE_MENU_FONT_SM);
-    if (countdown > 0) {
-        (void)snprintf(cdline, sizeof(cdline), VOTE_ZH_REMAIN " %02u:%02u", (unsigned)(countdown / 60),
-                       (unsigned)(countdown % 60));
-    } else {
-        cdline[0] = '\0';
-    }
-    draw_string_center(lcd, (uint16_t)(VOTE_MENU_BODY_Y + 56U), cdline, VOTE_MENU_COLOR_MUTED, VOTE_MENU_COLOR_BG,
-                       VOTE_MENU_FONT_SM);
-    draw_business_foot(lcd, VOTE_ZH_WAIT_IR);
+    draw_business_foot(lcd, VOTE_ZH_FOOT_VOTING);
 }
 
 static void draw_select_screen(st7789_t *lcd, uint8_t focus, uint8_t timeout_sec)
@@ -900,19 +916,42 @@ static void draw_locked_screen(st7789_t *lcd, uint8_t scroll_idx)
     }
 }
 
-static void draw_history_screen(st7789_t *lcd, uint8_t idx)
+static uint8_t list_viewport_start(uint8_t focus_idx, uint8_t total, uint8_t visible)
 {
-    char line1[48];
-    char line2[96];
+    uint8_t start = 0U;
+
+    if (total <= visible || visible == 0U) {
+        return 0U;
+    }
+    if (focus_idx >= visible) {
+        start = (uint8_t)(focus_idx - visible + 1U);
+    }
+    if (start + visible > total) {
+        start = (uint8_t)(total - visible);
+    }
+    return start;
+}
+
+static void draw_history_screen(st7789_t *lcd, uint8_t focus_idx)
+{
+    char time_buf[16];
+    char detail[48];
     char title[32];
-    const vote_history_entry_t *cur = NULL;
-    const vote_history_entry_t *next = NULL;
+    const vote_history_entry_t *rec = NULL;
+    const uint8_t visible = (uint8_t)VOTE_MENU_VISIBLE_ROWS;
+    const uint16_t row_h  = 20U;
+    const uint16_t list_y0 = (uint16_t)(VOTE_MENU_BODY_Y + 4U);
+    const uint16_t track_h = (uint16_t)(visible * row_h - 2U);
     uint8_t total = vote_history_count();
+    uint8_t i;
+    uint8_t start;
+    uint16_t y;
 
     draw_business_title(lcd, VOTE_ZH_HISTORY);
-    (void)snprintf(title, sizeof(title), VOTE_ZH_HISTORY " (%u/%u)", (unsigned)(idx + 1U),
-                   (unsigned)(total > 0U ? total : 1U));
+    (void)snprintf(title, sizeof(title), "%s %u", VOTE_ZH_HISTORY, (unsigned)total);
     draw_string(lcd, 72U, 4U, title, VOTE_MENU_COLOR_MUTED, VOTE_MENU_COLOR_SURFACE, VOTE_MENU_FONT_SM);
+
+    lcd_fill(lcd, 0U, VOTE_MENU_BODY_Y, VOTE_MENU_LCD_W, VOTE_MENU_FOOT_Y, VOTE_MENU_COLOR_BG);
 
     if (total == 0U) {
         draw_string_center(lcd, (uint16_t)(VOTE_MENU_BODY_Y + 28U), VOTE_ZH_NO_HISTORY, VOTE_MENU_COLOR_MUTED,
@@ -921,33 +960,43 @@ static void draw_history_screen(st7789_t *lcd, uint8_t idx)
         return;
     }
 
-    if (idx >= total) {
-        idx = (uint8_t)(total - 1U);
+    if (focus_idx >= total) {
+        focus_idx = 0U;
     }
 
-    (void)vote_history_get_display(idx, &cur);
-    (void)vote_history_get_display((uint8_t)(idx + 1U), &next);
+    start = list_viewport_start(focus_idx, total, visible);
 
-    if (cur != NULL) {
-        vote_history_format_title(cur, line1, sizeof(line1));
-        vote_history_format_summary(cur, line2, sizeof(line2));
-        lcd_fill(lcd, 0U, (uint16_t)(VOTE_MENU_BODY_Y + 8U), VOTE_MENU_LCD_W, (uint16_t)(VOTE_MENU_BODY_Y + 28U),
-                 VOTE_MENU_COLOR_SURFACE2);
-        lcd_fill(lcd, 0U, (uint16_t)(VOTE_MENU_BODY_Y + 8U), 3U, (uint16_t)(VOTE_MENU_BODY_Y + 28U),
-                 VOTE_MENU_COLOR_ACCENT);
-        draw_string(lcd, 8U, (uint16_t)(VOTE_MENU_BODY_Y + 12U), line1, VOTE_MENU_COLOR_TEXT,
-                    VOTE_MENU_COLOR_SURFACE2, VOTE_MENU_FONT_SM);
-        draw_string(lcd, 8U, (uint16_t)(VOTE_MENU_BODY_Y + 36U), line2, VOTE_MENU_COLOR_MUTED, VOTE_MENU_COLOR_BG,
-                    VOTE_MENU_FONT_SM);
+    y = list_y0;
+    for (i = start; i < total && i < (uint8_t)(start + visible); i++) {
+        uint16_t bg;
+        uint16_t fc;
+
+        if (!vote_history_get_display(i, &rec) || rec == NULL) {
+            break;
+        }
+
+        bg = (i == focus_idx) ? VOTE_MENU_COLOR_SURFACE2 : VOTE_MENU_COLOR_BG;
+        fc = (i == focus_idx) ? VOTE_MENU_COLOR_TEXT : VOTE_MENU_COLOR_MUTED;
+
+        vote_history_format_time(rec, time_buf, sizeof(time_buf));
+        vote_history_format_detail(rec, detail, sizeof(detail));
+
+        lcd_fill(lcd, 0U, y, VOTE_MENU_LCD_W, (uint16_t)(y + row_h - 1U), bg);
+        if (i == focus_idx) {
+            lcd_fill(lcd, 0U, y, 3U, (uint16_t)(y + row_h - 1U), VOTE_MENU_COLOR_ACCENT);
+        }
+        draw_string(lcd, 8U, (uint16_t)(y + 4U), time_buf, fc, bg, VOTE_MENU_FONT_SM);
+        draw_string(lcd, 72U, (uint16_t)(y + 4U), detail, fc, bg, VOTE_MENU_FONT_SM);
+        y = (uint16_t)(y + row_h);
     }
 
-    if (next != NULL) {
-        vote_history_format_title(next, line1, sizeof(line1));
-        draw_string(lcd, 8U, (uint16_t)(VOTE_MENU_BODY_Y + 56U), line1, VOTE_MENU_COLOR_MUTED, VOTE_MENU_COLOR_BG,
-                    VOTE_MENU_FONT_SM);
-    }
+    draw_simple_scrollbar(lcd, list_y0, track_h, total, visible, focus_idx);
 
-    draw_business_foot(lcd, VOTE_ZH_FOOT_HISTORY);
+    if (total > visible) {
+        draw_business_foot(lcd, VOTE_ZH_FOOT_HISTORY_SCROLL);
+    } else {
+        draw_business_foot(lcd, VOTE_ZH_FOOT_HISTORY);
+    }
 }
 
 void vote_lcd_draw(st7789_t *lcd, const vote_lcd_ctx_t *ctx)
@@ -1018,6 +1067,26 @@ void vote_lcd_draw_clock(st7789_t *lcd, const vote_lcd_ctx_t *ctx)
     if (ctx->screen == VOTE_LCD_SCREEN_SELECT) {
         vote_lcd_draw_select_title(lcd, ctx->select_timeout_sec);
         return;
+    }
+
+    if (ctx->screen == VOTE_LCD_SCREEN_HOME) {
+        int cd = 0;
+        const char *phase = vote_status_current_phase(&cd);
+
+        if (phase != NULL && strcmp(phase, "waiting") == 0 && cd > 0) {
+            draw_waiting_title_bar(lcd, cd);
+            return;
+        }
+    }
+
+    if (ctx->screen == VOTE_LCD_SCREEN_VOTING) {
+        int cd = 0;
+
+        (void)vote_status_current_phase(&cd);
+        if (cd > 0) {
+            draw_voting_title_bar(lcd, cd);
+            return;
+        }
     }
 
     {

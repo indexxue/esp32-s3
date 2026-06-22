@@ -452,7 +452,7 @@ bool menu_page_viewport_first_focus(const menu_page_t *page,
     return true;
   }
 
-  first = focus_pos;
+  first = 0U;
   if (focus_pos >= visible_rows)
   {
     first = (uint16_t)(focus_pos - visible_rows + 1U);

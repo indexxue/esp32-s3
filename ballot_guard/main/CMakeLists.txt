@@ -9,7 +9,12 @@ idf_component_register(
         "source/vote_menu_pages.c"
         "source/vote_menu_lcd.c"
         "source/vote_menu_demo.c"
+        "source/vote_led.c"
     INCLUDE_DIRS "." "source"
     EMBED_FILES "source/www/index.html"
     REQUIRES cbb common bsp_driver esp_timer app_update web_ctrl menu nvs_flash lcd_font
 )
+
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    LED_SCENE_WS2812_NUM_LEDS=3
+    LED_SCENE_BRIGHTNESS_SCALE=128)

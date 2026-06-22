@@ -733,3 +733,107 @@ vote_menu_page_id_t vote_menu_page_id_of(const menu_page_t *page)
     }
     return *(const vote_menu_page_id_t *)page->user_ctx;
 }
+
+bool vote_menu_web_read_clock(uint8_t *hour, uint8_t *minute, uint8_t *second)
+{
+    load_clock_from_rtc();
+    if (hour != NULL) {
+        *hour = s_clock.hour;
+    }
+    if (minute != NULL) {
+        *minute = s_clock.minute;
+    }
+    if (second != NULL) {
+        *second = s_clock.second;
+    }
+    return true;
+}
+
+vote_menu_web_err_e vote_menu_web_save_schedule(uint8_t start_h, uint8_t start_m, uint8_t end_h, uint8_t end_m)
+{
+    vote_nvs_cfg_t cfg;
+
+    if (start_h >= 24U || end_h >= 24U || start_m >= 60U || end_m >= 60U) {
+        return VOTE_MENU_WEB_ERR_INVALID_ARG;
+    }
+
+    s_settings.start_h = start_h;
+    s_settings.start_m = start_m;
+    s_settings.end_h   = end_h;
+    s_settings.end_m   = end_m;
+
+    if (schedule_minutes() >= schedule_end_minutes()) {
+        (void)vote_nvs_reload_settings();
+        return VOTE_MENU_WEB_ERR_INVALID_TIME;
+    }
+
+    cfg = settings_to_nvs_cfg();
+    if (!vote_nvs_save_cfg(&cfg)) {
+        (void)vote_nvs_reload_settings();
+        return VOTE_MENU_WEB_ERR_SAVE;
+    }
+    return VOTE_MENU_WEB_OK;
+}
+
+vote_menu_web_err_e vote_menu_web_save_count(uint8_t count)
+{
+    const uint8_t old_count = vote_status_candidate_count();
+    vote_nvs_cfg_t cfg;
+
+    if (count < 2U || count > 6U) {
+        return VOTE_MENU_WEB_ERR_INVALID_ARG;
+    }
+    if (vote_status_has_any_votes() && count < old_count) {
+        return VOTE_MENU_WEB_ERR_COUNT_REDUCE;
+    }
+
+    s_settings.candidate_count = count;
+    cfg                        = settings_to_nvs_cfg();
+    if (!vote_nvs_save_cfg(&cfg)) {
+        (void)vote_nvs_reload_settings();
+        return VOTE_MENU_WEB_ERR_SAVE;
+    }
+    return VOTE_MENU_WEB_OK;
+}
+
+vote_menu_web_err_e vote_menu_web_save_cooldown(uint8_t sec)
+{
+    vote_nvs_cfg_t cfg;
+
+    if (sec < 3U || sec > 10U) {
+        return VOTE_MENU_WEB_ERR_INVALID_ARG;
+    }
+
+    s_settings.cooldown_sec = sec;
+    cfg                     = settings_to_nvs_cfg();
+    if (!vote_nvs_save_cfg(&cfg)) {
+        (void)vote_nvs_reload_settings();
+        return VOTE_MENU_WEB_ERR_SAVE;
+    }
+    return VOTE_MENU_WEB_OK;
+}
+
+vote_menu_web_err_e vote_menu_web_save_clock(uint8_t hour, uint8_t minute, uint8_t second)
+{
+    if (hour >= 24U || minute >= 60U || second >= 60U) {
+        return VOTE_MENU_WEB_ERR_INVALID_ARG;
+    }
+
+    s_clock.hour   = hour;
+    s_clock.minute = minute;
+    s_clock.second = second;
+    if (!vote_status_set_clock_hms(hour, minute, second)) {
+        return VOTE_MENU_WEB_ERR_CLOCK;
+    }
+    return VOTE_MENU_WEB_OK;
+}
+
+vote_menu_web_err_e vote_menu_web_reset_data(void)
+{
+    (void)vote_history_archive_session_if_needed();
+    vote_status_reset_counts();
+    if (!vote_nvs_restore_default_cfg()) {
+        return VOTE_MENU_WEB_ERR_RESET;
+    }
+    return VOTE_MENU_WEB_OK;
+}

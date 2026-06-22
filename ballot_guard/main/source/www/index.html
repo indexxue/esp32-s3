@@ -100,10 +100,15 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
 .scan-h{font-size:.8rem;color:var(--muted);min-height:1.2em}
 .empty{color:var(--muted);font-size:.85rem;margin:0}
-.panel-lcd{display:none}
-.panel-lcd.on{display:block}
 .panel-manage{display:none}
 .panel-manage.on{display:block}
+.settings-block{margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--border)}
+.settings-block:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
+.settings-block h3{font-size:.88rem;font-weight:600;margin:0 0 10px}
+.settings-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.settings-row .field{flex:1;min-width:72px;margin-bottom:0}
+.inp-num{text-align:center}
+.settings-note{font-size:.78rem;color:var(--warn);margin:0 0 12px}
 .hist-list{margin:0;padding:0;list-style:none}
 .hist-list li{padding:10px 0;border-bottom:1px solid var(--border);font-size:.85rem}
 .hist-list li:last-child{border-bottom:0}
@@ -121,17 +126,6 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
 .session-hero{border-radius:10px;padding:16px;border:1px solid var(--border);background:var(--surface2);margin-bottom:14px}
 .session-hero .phase{font-size:1.1rem;font-weight:700;margin:0 0 6px}
 .cand-fields .field{margin-bottom:10px}
-.lcd-screens{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
-.lcd-screens .lcd-grp{width:100%;font-size:.72rem;color:var(--muted);margin:8px 0 4px}
-.lcd-screens .lcd-grp:first-child{margin-top:0}
-.lcd-screens button{padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font:inherit;font-size:.78rem;cursor:pointer;transition:background .12s,border-color .12s}
-.lcd-screens button.on{background:var(--accent);border-color:var(--accent-dim);color:#fff;font-weight:600}
-.lcd-screens button:disabled{opacity:.4;cursor:not-allowed}
-.lcd-acts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
-.lcd-acts button{padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:#0d1218;color:var(--accent);font:inherit;font-size:.82rem;cursor:pointer}
-.lcd-acts button:hover:not(:disabled){background:var(--surface2)}
-.lcd-acts button:disabled{opacity:.45;cursor:not-allowed}
-.lcd-status{font-size:.82rem;color:var(--muted);min-height:1.4em;margin:0}
 </style>
 </head>
 <body>
@@ -144,7 +138,6 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
 <div class="tabs">
   <button type="button" class="tab on" data-tab="dash">实时看板</button>
   <button type="button" class="tab" data-tab="manage">管理员</button>
-  <button type="button" class="tab" data-tab="lcd">LCD 调试</button>
   <button type="button" class="tab" data-tab="wifi">网络设置</button>
 </div>
 
@@ -185,17 +178,18 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
     <div class="card-b"><ul class="events" id="events"><li class="empty">暂无记录</li></ul></div>
   </section>
 
-  <p class="note">实时看板为只读；候选人、历史与进入投票请在「管理员」页操作；时段与票数重置在设备 LCD 菜单。</p>
+  <p class="note">实时看板为只读；候选人姓名、参数设置、历史与进入投票请在「管理员」页操作。</p>
 </div>
 
 <div id="panel-manage" class="panel-manage">
   <div class="manage-tabs" id="manage-tabs">
     <button type="button" class="manage-tab on" data-slide="0">候选人</button>
     <button type="button" class="manage-tab" data-slide="1">历史</button>
-    <button type="button" class="manage-tab" data-slide="2">进入投票</button>
+    <button type="button" class="manage-tab" data-slide="2">参数设置</button>
+    <button type="button" class="manage-tab" data-slide="3">进入投票</button>
   </div>
   <div class="manage-dots" id="manage-dots" aria-hidden="true">
-    <i class="on"></i><i></i><i></i>
+    <i class="on"></i><i></i><i></i><i></i>
   </div>
   <div class="manage-track" id="manage-track">
     <div class="manage-slide">
@@ -205,7 +199,7 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
           <button type="button" class="btn btn-ghost" id="btn-cand-reload" onclick="loadCandidates()">重新加载</button>
         </div>
         <div class="card-b">
-          <p class="hint">英文 A–Z、a–z、数字、空格、连字符，最多 20 字符。人数由 LCD「Candidate Count」设置。</p>
+          <p class="hint">英文 A–Z、a–z、数字、空格、连字符，最多 20 字符。人数在「参数设置」中配置。</p>
           <div class="cand-fields" id="cand-fields"><p class="empty">加载中…</p></div>
           <div class="row" style="margin-top:12px">
             <button type="button" class="btn btn-primary" id="btn-cand-save" onclick="saveCandidates()">保存姓名</button>
@@ -239,6 +233,70 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
     </div>
     <div class="manage-slide">
       <section class="card">
+        <div class="card-h">
+          <h2>参数设置</h2>
+          <button type="button" class="btn btn-ghost" id="btn-settings-reload" onclick="loadSettings()">重新加载</button>
+        </div>
+        <div class="card-b">
+          <p class="settings-note" id="settings-lock-note" hidden>投票进行中，参数暂不可修改。</p>
+
+          <div class="settings-block">
+            <h3>投票时段</h3>
+            <div class="settings-row">
+              <div class="field"><label for="sch-sh">开始时</label><input class="inp inp-num" id="sch-sh" type="number" min="0" max="23"/></div>
+              <div class="field"><label for="sch-sm">开始分</label><input class="inp inp-num" id="sch-sm" type="number" min="0" max="59"/></div>
+              <div class="field"><label for="sch-eh">结束时</label><input class="inp inp-num" id="sch-eh" type="number" min="0" max="23"/></div>
+              <div class="field"><label for="sch-em">结束分</label><input class="inp inp-num" id="sch-em" type="number" min="0" max="59"/></div>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <button type="button" class="btn btn-primary" id="btn-save-schedule" onclick="saveSchedule()">保存时段</button>
+            </div>
+          </div>
+
+          <div class="settings-block">
+            <h3>候选人数量</h3>
+            <div class="settings-row">
+              <div class="field" style="max-width:120px"><label for="set-count">人数 (2–6)</label><input class="inp inp-num" id="set-count" type="number" min="2" max="6"/></div>
+            </div>
+            <p class="hint">已有票数时不可减少人数；请先重置数据。</p>
+            <div class="row" style="margin-top:10px">
+              <button type="button" class="btn btn-primary" id="btn-save-count" onclick="saveCount()">保存人数</button>
+            </div>
+          </div>
+
+          <div class="settings-block">
+            <h3>冷却时长</h3>
+            <div class="settings-row">
+              <div class="field" style="max-width:120px"><label for="set-cooldown">秒 (3–10)</label><input class="inp inp-num" id="set-cooldown" type="number" min="3" max="10"/></div>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <button type="button" class="btn btn-primary" id="btn-save-cooldown" onclick="saveCooldown()">保存冷却</button>
+            </div>
+          </div>
+
+          <div class="settings-block">
+            <h3>系统时钟</h3>
+            <div class="settings-row">
+              <div class="field"><label for="clk-h">时</label><input class="inp inp-num" id="clk-h" type="number" min="0" max="23"/></div>
+              <div class="field"><label for="clk-m">分</label><input class="inp inp-num" id="clk-m" type="number" min="0" max="59"/></div>
+              <div class="field"><label for="clk-s">秒</label><input class="inp inp-num" id="clk-s" type="number" min="0" max="59"/></div>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <button type="button" class="btn btn-primary" id="btn-save-clock" onclick="saveClock()">保存时钟</button>
+            </div>
+          </div>
+
+          <div class="danger-zone">
+            <p class="dz-title">重置数据</p>
+            <p class="dz-desc">归档当前会话、清零全部有效票与废票，并恢复默认时段/人数/冷却配置。不可撤销。</p>
+            <button type="button" class="btn btn-danger" id="btn-settings-reset" onclick="openSettingsResetModal()">重置全部投票数据…</button>
+          </div>
+          <pre class="log" id="settings-log" hidden></pre>
+        </div>
+      </section>
+    </div>
+    <div class="manage-slide">
+      <section class="card">
         <div class="card-h"><h2>进入投票</h2></div>
         <div class="card-b">
           <div class="session-hero">
@@ -255,45 +313,6 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
       </section>
     </div>
   </div>
-</div>
-
-<div id="panel-lcd" class="panel-lcd">
-  <section class="card">
-    <div class="card-h">
-      <h2>LCD 画面切换</h2>
-      <button type="button" class="btn btn-ghost" id="btn-lcd-refresh" onclick="refreshLcdMenu()">刷新状态</button>
-    </div>
-    <div class="card-b">
-      <p class="lcd-status" id="lcd-status">加载中…</p>
-      <div class="lcd-screens" id="lcd-screens">
-        <div class="lcd-grp">业务屏</div>
-        <button type="button" data-page="home">主界面</button>
-        <button type="button" data-page="voting">投票等待</button>
-        <button type="button" data-page="select">选人</button>
-        <button type="button" data-page="cooldown">冷却</button>
-        <button type="button" data-page="violation">违规</button>
-        <button type="button" data-page="locked">结果锁定</button>
-        <button type="button" data-page="history">历史记录</button>
-        <div class="lcd-grp">管理员菜单</div>
-        <button type="button" data-page="admin">管理员菜单</button>
-        <button type="button" data-page="admin_time">投票时间</button>
-        <button type="button" data-page="admin_count">候选人数量</button>
-        <button type="button" data-page="admin_cooldown">冷却时长</button>
-        <button type="button" data-page="admin_reset">重置确认</button>
-        <button type="button" data-page="admin_enter">进入投票</button>
-      </div>
-      <h3 style="font-size:.9rem;margin:0 0 8px;font-weight:600">逻辑动作</h3>
-      <div class="lcd-acts" id="lcd-acts">
-        <button type="button" data-event="up">NAV_PREV ↑</button>
-        <button type="button" data-event="down">NAV_NEXT ↓</button>
-        <button type="button" data-event="left">NAV_LEFT ←</button>
-        <button type="button" data-event="right">NAV_RIGHT →</button>
-        <button type="button" data-event="enter">CONFIRM</button>
-        <button type="button" data-event="back">BACK</button>
-      </div>
-      <p class="hint">点击上方按钮切换设备 LCD 画面。业务屏（主界面、选人、冷却等）属于投票流程，不在管理员菜单内——选人界面在投票进行中由红外触发进入。子菜单最后一项按 CONFIRM 直接保存（已去掉 Save 按钮）。API：<code>GET/POST /api/lcd/menu</code>。</p>
-    </div>
-  </section>
 </div>
 
 <div id="panel-wifi" class="panel-wifi">
@@ -353,6 +372,17 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" onclick="closeHistClearModal()">取消</button>
       <button type="button" class="btn btn-danger" id="modal-confirm-hist-clear" onclick="confirmHistClear()">确认清空</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-wrap" id="modal-settings-reset" role="dialog" aria-modal="true">
+  <div class="modal">
+    <h3>确认重置全部投票数据？</h3>
+    <p>将归档当前会话、清零有效票与废票，并恢复默认时段、人数与冷却配置。此操作不可撤销。</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" onclick="closeSettingsResetModal()">取消</button>
+      <button type="button" class="btn btn-danger" id="modal-confirm-settings-reset" onclick="confirmSettingsReset()">确认重置</button>
     </div>
   </div>
 </div>
@@ -465,41 +495,46 @@ function stopDashPoll(){
 
 function switchTab(name){
   var dash=name==='dash';
-  var lcd=name==='lcd';
   var manage=name==='manage';
   document.querySelectorAll('.tab').forEach(function(t){
     t.classList.toggle('on',t.dataset.tab===name);
   });
   document.getElementById('panel-dash').style.display=dash?'block':'none';
   document.getElementById('panel-manage').classList.toggle('on',manage);
-  document.getElementById('panel-lcd').classList.toggle('on',lcd);
   document.getElementById('panel-wifi').classList.toggle('on',name==='wifi');
   var sub='选票监管 · 实时看板';
   if(name==='wifi')sub='选票监管 · 网络配置';
-  else if(name==='lcd')sub='选票监管 · LCD 调试';
   else if(name==='manage')sub='选票监管 · 管理员';
   document.getElementById('subtitle').textContent=sub;
   if(dash){startDashPoll();}else{stopDashPoll();}
-  if(name==='wifi'){stopLcdPoll();refreshStatus();location.hash='wifi';}
-  else if(name==='lcd'){startLcdPoll();location.hash='lcd';}
-  else if(name==='manage'){stopLcdPoll();loadManageData();location.hash='manage';}
-  else{stopLcdPoll();history.replaceState(null,'',location.pathname);}
+  if(name==='wifi'){refreshStatus();location.hash='wifi';}
+  else if(name==='manage'){loadManageData();location.hash='manage';}
+  else{history.replaceState(null,'',location.pathname);}
 }
 
 document.querySelectorAll('.tab').forEach(function(tab){
   tab.onclick=function(){switchTab(tab.dataset.tab);};
 });
 
-function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-disconnect','modal-confirm-dc','btn-cand-save','btn-cand-reload','btn-cand-reset','btn-hist-refresh','btn-hist-clear','modal-confirm-cand-reset','modal-confirm-hist-clear','btn-session-enter','btn-session-refresh'].forEach(function(id){
+function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-disconnect','modal-confirm-dc','btn-cand-save','btn-cand-reload','btn-cand-reset','btn-hist-refresh','btn-hist-clear','modal-confirm-cand-reset','modal-confirm-hist-clear','btn-session-enter','btn-session-refresh','btn-settings-reload','btn-save-schedule','btn-save-count','btn-save-cooldown','btn-save-clock','btn-settings-reset','modal-confirm-settings-reset'].forEach(function(id){
   var el=document.getElementById(id);if(el)el.disabled=b;
 });}
 function showLog(id,txt,show){var el=document.getElementById(id);if(!el)return;if(!txt){el.hidden=true;el.textContent='';return;}el.hidden=!show;el.textContent=txt;}
-function apiErrorText(j,fallback){if(!j)return fallback||'请求失败';if(j.error==='voting_in_progress')return '投票进行中，请稍后再试';if(j.error)return String(j.error);return fallback||'请求失败';}
+function apiErrorText(j,fallback){
+  if(!j)return fallback||'请求失败';
+  if(j.error==='voting_in_progress')return '投票进行中，请稍后再试';
+  if(j.error==='invalid_time')return '时段无效：开始时间须早于结束时间';
+  if(j.error==='count_reduce_blocked')return '已有票数时不可减少候选人数量，请先重置数据';
+  if(j.error==='clock_failed')return '时钟保存失败，请检查 DS3231';
+  if(j.error==='reset_failed')return '重置失败';
+  if(j.error)return String(j.error);
+  return fallback||'请求失败';
+}
 
 function renderCandidateFields(names){
   var box=document.getElementById('cand-fields');
   if(!names||!names.length){
-    box.innerHTML='<p class="empty">暂无候选人（请在 LCD 设置人数）</p>';
+    box.innerHTML='<p class="empty">暂无候选人（请在参数设置中配置人数）</p>';
     return;
   }
   box.innerHTML=names.map(function(name,idx){
@@ -564,9 +599,18 @@ async function loadHistory(){
       return;
     }
     list.innerHTML=recs.map(function(rec){
-      return '<li><div class="hist-title">'+esc(rec.title||'—')+'</div>'+
-        '<div class="hist-sum">'+esc(rec.summary||'')+' · 有效 '+esc(String(rec.valid!=null?rec.valid:0))+
-        ' · 废票 '+esc(String(rec.spoiled!=null?rec.spoiled:0))+'</div></li>';
+      var when=(rec.date&&rec.date!=='--'?rec.date+' ':'')+(rec.time||'');
+      var label;
+      if(rec.kind===0||rec.kind==='0'){
+        label=(rec.candidate&&String(rec.candidate).length)
+          ?'有效票 · '+esc(rec.candidate):'有效票';
+      }else{
+        var st=Number(rec.spoiled_type)||0;
+        var sub={1:'空白',2:'多选',3:'不规范'}[st]||'不规范';
+        label='废票 · '+sub;
+      }
+      return '<li><div class="hist-title">'+esc(when)+'</div>'+
+        '<div class="hist-sum">'+label+'</div></li>';
     }).join('');
   }catch(e){
     list.innerHTML='<li class="empty">'+esc(String(e))+'</li>';
@@ -591,8 +635,112 @@ async function confirmHistClear(){
 function loadManageData(){
   loadCandidates();
   loadHistory();
+  loadSettings();
   refreshSessionPanel();
   initManageSlider();
+}
+
+var settingsEditable=true;
+
+function setSettingsEditable(editable){
+  settingsEditable=!!editable;
+  var note=document.getElementById('settings-lock-note');
+  if(note)note.hidden=editable;
+  ['sch-sh','sch-sm','sch-eh','sch-em','set-count','set-cooldown','btn-save-schedule','btn-save-count','btn-save-cooldown','btn-settings-reset'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el)el.disabled=!editable;
+  });
+}
+
+function fillSettingsForm(j){
+  var sch=j.schedule||{};
+  document.getElementById('sch-sh').value=sch.start_h!=null?sch.start_h:8;
+  document.getElementById('sch-sm').value=sch.start_m!=null?sch.start_m:0;
+  document.getElementById('sch-eh').value=sch.end_h!=null?sch.end_h:16;
+  document.getElementById('sch-em').value=sch.end_m!=null?sch.end_m:0;
+  document.getElementById('set-count').value=j.candidate_count!=null?j.candidate_count:3;
+  document.getElementById('set-cooldown').value=j.cooldown_sec!=null?j.cooldown_sec:5;
+  var clk=j.clock||{};
+  document.getElementById('clk-h').value=clk.hour!=null?clk.hour:0;
+  document.getElementById('clk-m').value=clk.minute!=null?clk.minute:0;
+  document.getElementById('clk-s').value=clk.second!=null?clk.second:0;
+  setSettingsEditable(j.editable!==false);
+}
+
+async function loadSettings(){
+  showLog('settings-log','',false);
+  try{
+    var r=await fetch('/api/vote/settings');
+    var j=await r.json();
+    if(!j.ok){showLog('settings-log',apiErrorText(j,'无法加载参数'),true);return;}
+    fillSettingsForm(j);
+  }catch(e){
+    showLog('settings-log',String(e),true);
+  }
+}
+
+async function postSettings(url,body,okMsg){
+  showLog('settings-log','保存中…',true);setBusy(true);
+  try{
+    var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var j=await r.json();
+    if(!j.ok){showLog('settings-log',apiErrorText(j,r.status+' 保存失败'),true);return false;}
+    showLog('settings-log',okMsg,true);
+    await loadSettings();
+    if(url.indexOf('count')>=0){await loadCandidates();}
+    return true;
+  }catch(e){showLog('settings-log',String(e),true);return false;}
+  finally{setBusy(false);}
+}
+
+async function saveSchedule(){
+  if(!settingsEditable)return;
+  await postSettings('/api/vote/settings/schedule',{
+    start_h:Number(document.getElementById('sch-sh').value),
+    start_m:Number(document.getElementById('sch-sm').value),
+    end_h:Number(document.getElementById('sch-eh').value),
+    end_m:Number(document.getElementById('sch-em').value)
+  },'时段已保存');
+}
+
+async function saveCount(){
+  if(!settingsEditable)return;
+  await postSettings('/api/vote/settings/count',{
+    candidate_count:Number(document.getElementById('set-count').value)
+  },'人数已保存');
+}
+
+async function saveCooldown(){
+  if(!settingsEditable)return;
+  await postSettings('/api/vote/settings/cooldown',{
+    cooldown_sec:Number(document.getElementById('set-cooldown').value)
+  },'冷却时长已保存');
+}
+
+async function saveClock(){
+  await postSettings('/api/vote/settings/clock',{
+    hour:Number(document.getElementById('clk-h').value),
+    minute:Number(document.getElementById('clk-m').value),
+    second:Number(document.getElementById('clk-s').value)
+  },'时钟已保存');
+}
+
+function openSettingsResetModal(){if(settingsEditable)document.getElementById('modal-settings-reset').classList.add('on');}
+function closeSettingsResetModal(){document.getElementById('modal-settings-reset').classList.remove('on');}
+
+async function confirmSettingsReset(){
+  closeSettingsResetModal();
+  showLog('settings-log','正在重置…',true);setBusy(true);
+  try{
+    var r=await fetch('/api/vote/settings/reset',{method:'POST'});
+    var j=await r.json();
+    if(!j.ok){showLog('settings-log',apiErrorText(j,'重置失败'),true);return;}
+    showLog('settings-log','已重置全部投票数据',true);
+    await loadSettings();
+    await loadCandidates();
+    await refreshSessionPanel();
+  }catch(e){showLog('settings-log',String(e),true);}
+  finally{setBusy(false);}
 }
 
 var manageSliderBound=false;
@@ -659,7 +807,7 @@ async function enterVotingSession(){
       showLog('session-log',apiErrorText(j,'切换失败'),true);
       return;
     }
-    showLog('session-log','已进入：'+(j.page||'?')+(j.page_id!=null?' (id='+j.page_id+')':''),true);
+    showLog('session-log','已进入投票界面',true);
     await refreshSessionPanel();
   }catch(e){showLog('session-log',String(e),true);}
   finally{setBusy(false);}
@@ -750,119 +898,11 @@ document.getElementById('modal-cand-reset').addEventListener('click',function(ev
 document.getElementById('modal-hist-clear').addEventListener('click',function(ev){
   if(ev.target.id==='modal-hist-clear')closeHistClearModal();
 });
-
-var lcdActionBusy=false;
-var lcdTimer=null;
-var lcdPollInFlight=false;
-
-function setLcdPageHighlight(page){
-  if(!page){return;}
-  document.querySelectorAll('#lcd-screens button[data-page]').forEach(function(btn){
-    btn.classList.toggle('on',btn.dataset.page===page);
-  });
-}
-
-function setLcdActionBusy(b){
-  lcdActionBusy=b;
-  document.querySelectorAll('#lcd-screens button[data-page],#lcd-acts button,#btn-lcd-refresh').forEach(function(el){
-    el.disabled=b;
-  });
-}
-
-function renderLcdMenu(j){
-  var st=document.getElementById('lcd-status');
-  if(!j||!j.ok){
-    st.textContent='无法读取 LCD 状态';
-    return;
-  }
-  st.textContent=(j.active?'LCD 已激活 · 当前：':'LCD 未激活 · 当前：')+(j.page||'?')+' (id='+j.page_id+')';
-  if(j.page){
-    setLcdPageHighlight(j.page);
-  }else if(j.screens&&j.screens.length){
-    var i,cur=null;
-    for(i=0;i<j.screens.length;i++){
-      if(j.screens[i].current){cur=j.screens[i];break;}
-    }
-    if(cur){setLcdPageHighlight(cur.key);}
-  }
-}
-
-async function refreshLcdMenu(){
-  if(lcdPollInFlight||lcdActionBusy){return;}
-  lcdPollInFlight=true;
-  try{
-    var r=await fetch('/api/lcd/menu');
-    renderLcdMenu(await r.json());
-  }catch(e){
-    document.getElementById('lcd-status').textContent='请求失败：'+String(e);
-  }finally{
-    lcdPollInFlight=false;
-  }
-}
-
-function startLcdPoll(){
-  if(lcdTimer)return;
-  refreshLcdMenu();
-  lcdTimer=setInterval(refreshLcdMenu,1000);
-}
-
-function stopLcdPoll(){
-  if(lcdTimer){clearInterval(lcdTimer);lcdTimer=null;}
-}
-
-async function lcdGotoPage(page){
-  if(lcdActionBusy||!page)return;
-  setLcdPageHighlight(page);
-  setLcdActionBusy(true);
-  try{
-    var r=await fetch('/api/lcd/menu',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({page:page})});
-    var j=await r.json();
-    if(!j.ok){
-      document.getElementById('lcd-status').textContent='切换失败：'+(j.error||r.status);
-      await refreshLcdMenu();
-      return;
-    }
-    if(j.page){setLcdPageHighlight(j.page);}
-    else{await refreshLcdMenu();}
-    document.getElementById('lcd-status').textContent='LCD 已激活 · 当前：'+(j.page||page)+(j.page_id!=null?' (id='+j.page_id+')':'');
-  }catch(e){
-    document.getElementById('lcd-status').textContent='切换异常：'+String(e);
-    await refreshLcdMenu();
-  }finally{
-    setLcdActionBusy(false);
-  }
-}
-
-async function lcdDispatch(event){
-  if(lcdActionBusy||!event)return;
-  setLcdActionBusy(true);
-  try{
-    var r=await fetch('/api/lcd/menu',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event:event})});
-    var j=await r.json();
-    if(!j.ok){
-      document.getElementById('lcd-status').textContent='动作失败：'+(j.error||r.status);
-      return;
-    }
-    if(j.page){setLcdPageHighlight(j.page);}
-    document.getElementById('lcd-status').textContent='LCD 已激活 · 当前：'+(j.page||'?')+(j.page_id!=null?' (id='+j.page_id+')':'');
-    if(!j.page){await refreshLcdMenu();}
-  }catch(e){
-    document.getElementById('lcd-status').textContent='动作异常：'+String(e);
-  }finally{
-    setLcdActionBusy(false);
-  }
-}
-
-document.querySelectorAll('#lcd-screens button[data-page]').forEach(function(btn){
-  btn.onclick=function(){lcdGotoPage(btn.dataset.page);};
-});
-
-document.querySelectorAll('#lcd-acts button[data-event]').forEach(function(btn){
-  btn.onclick=function(){lcdDispatch(btn.dataset.event);};
+document.getElementById('modal-settings-reset').addEventListener('click',function(ev){
+  if(ev.target.id==='modal-settings-reset')closeSettingsResetModal();
 });
 
 if(location.hash==='#wifi'){switchTab('wifi');}
-else if(location.hash==='#lcd'){switchTab('lcd');}
 else if(location.hash==='#manage'){switchTab('manage');}
 else{startDashPoll();}
 </script>

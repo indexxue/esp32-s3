@@ -51,7 +51,7 @@ void vote_status_set_candidate_name(uint8_t idx, const char *name);
 /** 有效票 +1 / 废票 +1；返回 false 若 idx 无效。 */
 bool vote_status_add_valid(uint8_t idx);
 bool vote_status_add_spoiled(void);
-bool vote_status_add_spoiled_typed(vote_spoiled_type_e type);
+bool vote_status_add_spoiled_typed(vote_spoiled_type_e type, uint8_t cand_idx);
 
 vote_spoiled_type_e vote_status_last_spoiled_type(void);
 const char *vote_status_spoiled_type_label(vote_spoiled_type_e type);

@@ -9,13 +9,14 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 
 #include "board.h"
 #include "buzzer.h"
 #include "button.h"
 #include "device_profile.h"
-#include "led_scene.h"
+#include "vote_led.h"
 #include "log.h"
 #include "menu.h"
 #include "vote_menu_lcd.h"
@@ -24,15 +25,24 @@
 #include "vote_history.h"
 #include "vote_menu_zh.h"
 
-#define VOTE_MENU_TASK_STACK (4096U)
+#define VOTE_MENU_TASK_STACK (8192U)
 #define VOTE_MENU_TASK_PRIO (4U)
 #define VOTE_MENU_TICK_MS (200U)
 #define VOTE_MENU_CLOCK_MS (1000U)
 #define VOTE_MENU_TOAST_MS (1000U)
 #define VOTE_MENU_LCD_LOCK_MS (3000U)
+#define VOTE_BTN_QUEUE_LEN (16U)
+#define VOTE_KEY_BEEP_MIN_MS (120U)
+
+typedef struct {
+    btn_id_e id;
+    btn_event_e event;
+} vote_btn_msg_t;
 
 static TaskHandle_t s_task;
 static SemaphoreHandle_t s_lcd_mtx;
+static QueueHandle_t s_btn_queue;
+static TickType_t s_last_key_beep_tick;
 static volatile bool s_active;
 static volatile bool s_dirty;
 static volatile bool s_dirty_full;
@@ -88,17 +98,58 @@ static vote_lcd_screen_id_t screen_for_current_phase(void)
     return vote_status_lcd_screen_for_phase(phase);
 }
 
-static bool long_confirm_allowed(void)
+static bool phase_is_voting(void)
 {
-    if (s_menu_mode) {
+    const char *phase = vote_status_current_phase(NULL);
+    return (phase != NULL && strcmp(phase, "voting") == 0);
+}
+
+static bool vote_menu_six_keys(void);
+
+static void clear_select_session(void);
+static void enter_menu_mode(void);
+static void vote_menu_request_redraw(void);
+
+static btn_id_e admin_back_button(void)
+{
+    return vote_menu_six_keys() ? BTN_ID_BACK : BTN_ID_RIGHT;
+}
+
+static bool admin_back_enter_allowed(void)
+{
+    return s_active && !s_menu_mode;
+}
+
+static bool try_enter_admin_via_back_long(btn_id_e id, btn_event_e event)
+{
+    if (!admin_back_enter_allowed()) {
         return false;
     }
-    return (s_screen == VOTE_LCD_SCREEN_HOME || s_screen == VOTE_LCD_SCREEN_LOCKED);
+    if (id != admin_back_button() || event != BTN_EVENT_LONG_PRESS) {
+        return false;
+    }
+
+    if (s_screen == VOTE_LCD_SCREEN_SELECT) {
+        clear_select_session();
+        s_ir_trigger_armed = true;
+    }
+    enter_menu_mode();
+    vote_menu_request_redraw();
+    LOG_INFO("vote_menu_demo: back long %ums -> ADMIN", (unsigned)VOTE_ADMIN_BACK_HOLD_MS);
+    return true;
 }
 
 static void vote_menu_request_redraw(void)
 {
     s_dirty_full = true;
+    if (s_task != NULL) {
+        (void)xTaskNotifyGive(s_task);
+    }
+}
+
+/** 仅唤醒 UI 任务处理按键队列，不标记整屏重绘（避免先刷旧画面再跳转）。 */
+static void vote_menu_wake_task(void)
+{
     if (s_task != NULL) {
         (void)xTaskNotifyGive(s_task);
     }
@@ -120,20 +171,26 @@ static void show_toast(const char *msg, int is_error)
 
 static void vote_menu_key_beep(void)
 {
+    const TickType_t now = xTaskGetTickCount();
+
     if (!device_profile_platform_wants(DEVICE_PLATFORM_MASK_BUZZER) || !buzzer_is_ready()) {
         return;
     }
-    if (s_spoiled_alarm_until != 0U && xTaskGetTickCount() < s_spoiled_alarm_until) {
+    if (s_spoiled_alarm_until != 0U && now < s_spoiled_alarm_until) {
         return;
     }
+    if ((now - s_last_key_beep_tick) < pdMS_TO_TICKS(VOTE_KEY_BEEP_MIN_MS)) {
+        return;
+    }
+    if (buzzer_pattern_busy()) {
+        return;
+    }
+    s_last_key_beep_tick = now;
     (void)buzzer_play_pattern(BUZZER_PATTERN_SHORT);
 }
 
 static void start_spoiled_alarm(void)
 {
-    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
-        (void)led_scene_run(LED_SCENE_ID_ERROR);
-    }
     if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_BUZZER) && buzzer_is_ready()) {
         (void)buzzer_play_pattern(BUZZER_PATTERN_ALARM);
     }
@@ -148,9 +205,6 @@ static void stop_spoiled_alarm(void)
     s_spoiled_alarm_until = 0U;
     if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_BUZZER)) {
         buzzer_stop_pattern();
-    }
-    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
-        (void)led_scene_cancel(LED_SCENE_ID_ERROR);
     }
 }
 
@@ -243,9 +297,10 @@ static void finish_spoiled_vote(vote_spoiled_type_e stype)
     s_confirm_spoiled_fired    = true;
     s_select_deadline          = 0;
     s_confirm_down_since       = 0;
-    (void)vote_status_add_spoiled_typed(stype);
+    (void)vote_status_add_spoiled_typed(stype, s_select_idx);
     s_last_spoiled_display = stype;
     show_spoiled_toast(stype);
+    vote_led_on_spoiled_vote();
     start_spoiled_alarm();
     begin_cooldown_after_vote();
     vote_menu_request_redraw();
@@ -256,9 +311,7 @@ static void finish_valid_vote(void)
     clear_select_session();
     (void)vote_status_add_valid(s_select_idx);
     s_last_spoiled_display = VOTE_SPOILED_NONE;
-    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
-        (void)led_scene_run(LED_SCENE_ID_SUCCESS);
-    }
+    vote_led_on_valid_vote();
     begin_cooldown_after_vote();
 }
 
@@ -370,13 +423,8 @@ static menu_evt_t map_button(btn_id_e id, btn_event_e event)
         if (id == BTN_ID_RIGHT && event == BTN_EVENT_SINGLE_CLICK) {
             return MENU_EVT_RIGHT;
         }
-        if (id == BTN_ID_CONFIRM) {
-            if (event == BTN_EVENT_SINGLE_CLICK) {
-                return MENU_EVT_ENTER;
-            }
-            if (event == BTN_EVENT_LONG_PRESS && long_confirm_allowed()) {
-                return MENU_EVT_ENTER;
-            }
+        if (id == BTN_ID_CONFIRM && event == BTN_EVENT_SINGLE_CLICK) {
+            return MENU_EVT_ENTER;
         }
         if (id == BTN_ID_BACK && event == BTN_EVENT_SINGLE_CLICK) {
             return MENU_EVT_BACK;
@@ -504,6 +552,10 @@ static bool dispatch_business(menu_evt_t evt)
             s_home_scroll_idx = (uint8_t)((s_home_scroll_idx + 1U) % count);
             return true;
         }
+        if (evt == MENU_EVT_BACK && phase_is_voting()) {
+            business_nav_to(VOTE_LCD_SCREEN_VOTING);
+            return true;
+        }
         break;
     case VOTE_LCD_SCREEN_LOCKED:
         if (evt == MENU_EVT_UP) {
@@ -558,13 +610,28 @@ static bool dispatch_business(menu_evt_t evt)
             return true;
         }
         break;
+    case VOTE_LCD_SCREEN_VOTING:
+        if (evt == MENU_EVT_BACK) {
+            business_nav_to(VOTE_LCD_SCREEN_HOME);
+            return true;
+        }
+        break;
     case VOTE_LCD_SCREEN_COOLDOWN:
-    case VOTE_LCD_SCREEN_VIOLATION:
         if (evt == MENU_EVT_BACK) {
             return business_nav_back();
         }
         break;
+    case VOTE_LCD_SCREEN_VIOLATION:
+        if (evt == MENU_EVT_BACK) {
+            buzzer_stop_pattern();
+            vote_led_on_violation_end();
+            return business_nav_back();
+        }
+        break;
     case VOTE_LCD_SCREEN_HISTORY:
+    {
+        const uint8_t total = vote_history_count();
+
         if (evt == MENU_EVT_UP) {
             if (s_history_idx > 0U) {
                 s_history_idx--;
@@ -572,9 +639,7 @@ static bool dispatch_business(menu_evt_t evt)
             return true;
         }
         if (evt == MENU_EVT_DOWN) {
-            const uint8_t max_idx =
-                (vote_history_count() > 0U) ? (uint8_t)(vote_history_count() - 1U) : 0U;
-            if (s_history_idx < max_idx) {
+            if (s_history_idx + 1U < total) {
                 s_history_idx++;
             }
             return true;
@@ -583,6 +648,7 @@ static bool dispatch_business(menu_evt_t evt)
             return business_nav_back();
         }
         break;
+    }
     default:
         break;
     }
@@ -600,6 +666,17 @@ static void on_ui_notify(void *ctx, const char *msg, int is_error)
 {
     (void)ctx;
     show_toast(msg, is_error);
+}
+
+static void notify_phase_led(const char *phase)
+{
+    if (phase == NULL) {
+        return;
+    }
+    if (strcmp(phase, s_last_phase) == 0) {
+        return;
+    }
+    vote_led_sync_phase(phase);
 }
 
 static void notify_phase_buzzer(const char *phase)
@@ -646,6 +723,7 @@ static void poll_phase_and_archive(void)
         return;
     }
     notify_phase_buzzer(phase);
+    notify_phase_led(phase);
     if (strcmp(phase, "voting") == 0 && strcmp(s_last_phase, "voting") != 0) {
         if (!s_menu_mode && vote_status_cooldown_remaining() == 0U) {
             s_ir_trigger_armed = true;
@@ -667,6 +745,10 @@ static void poll_phase_and_archive(void)
     }
     if (strcmp(phase, "waiting") == 0 && strcmp(s_last_phase, "waiting") != 0) {
         vote_status_set_cooldown_remaining(0U);
+        if (!s_menu_mode && s_screen != VOTE_LCD_SCREEN_HOME && s_screen != VOTE_LCD_SCREEN_HISTORY) {
+            business_nav_to(VOTE_LCD_SCREEN_HOME);
+            s_dirty_full = true;
+        }
     }
     poll_cooldown_tick();
     (void)snprintf(s_last_phase, sizeof(s_last_phase), "%s", phase);
@@ -686,6 +768,24 @@ static bool ir_level_monitor_enabled(void)
     return (phase != NULL && strcmp(phase, "voting") == 0);
 }
 
+static bool vote_menu_demo_on_ir_violation(void)
+{
+    const char *phase;
+
+    if (!s_active || s_menu_mode) {
+        return false;
+    }
+    if (vote_status_cooldown_remaining() == 0U) {
+        return false;
+    }
+    phase = vote_status_current_phase(NULL);
+    if (phase == NULL || strcmp(phase, "voting") != 0) {
+        return false;
+    }
+    (void)vote_menu_demo_goto_screen(VOTE_LCD_SCREEN_VIOLATION);
+    return true;
+}
+
 static bool vote_menu_demo_on_ir_approach(void)
 {
     if (!ir_level_monitor_enabled()) {
@@ -700,9 +800,7 @@ static bool vote_menu_demo_on_ir_approach(void)
         s_ir_trigger_armed   = false;
         s_select_navigated   = false;
         s_select_idx         = 0U;
-        if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
-            (void)led_scene_run(LED_SCENE_ID_TRIGGER);
-        }
+        vote_led_on_ir_approach();
         (void)vote_menu_demo_goto_screen(VOTE_LCD_SCREEN_SELECT);
         return true;
     }
@@ -713,6 +811,11 @@ static bool vote_menu_demo_on_ir_approach(void)
 bool vote_menu_demo_on_ir_level(board_ir_channel_e channel, u32_t prev_level, u32_t new_level)
 {
     (void)channel;
+    if (prev_level == 1U && new_level == 0U) {
+        if (vote_menu_demo_on_ir_violation()) {
+            return true;
+        }
+    }
     if (!ir_level_monitor_enabled()) {
         return false;
     }
@@ -728,12 +831,29 @@ bool vote_menu_demo_on_ir(void)
     return vote_menu_demo_on_ir_approach();
 }
 
+static void vote_menu_handle_button(btn_id_e id, btn_event_e event);
+
+static void poll_button_queue(void)
+{
+    vote_btn_msg_t msg;
+
+    if (s_btn_queue == NULL) {
+        return;
+    }
+
+    while (xQueueReceive(s_btn_queue, &msg, 0) == pdTRUE) {
+        vote_menu_handle_button(msg.id, msg.event);
+    }
+}
+
 static void vote_menu_task(void *arg)
 {
     (void)arg;
 
     for (;;) {
         const TickType_t now = xTaskGetTickCount();
+
+        poll_button_queue();
 
         if (s_toast_until != 0U && now >= s_toast_until) {
             s_toast_until = 0U;
@@ -749,6 +869,7 @@ static void vote_menu_task(void *arg)
         poll_spoiled_alarm();
 
         if (s_dirty_full) {
+            poll_button_queue();
             redraw_full();
             s_dirty_full = false;
             s_dirty      = false;
@@ -786,6 +907,14 @@ status_t vote_menu_demo_start(void)
         s_lcd_mtx = xSemaphoreCreateMutex();
         if (s_lcd_mtx == NULL) {
             LOG_ERROR("vote_menu_demo: LCD mutex create failed");
+            return STATUS_FAIL;
+        }
+    }
+
+    if (s_btn_queue == NULL) {
+        s_btn_queue = xQueueCreate(VOTE_BTN_QUEUE_LEN, sizeof(vote_btn_msg_t));
+        if (s_btn_queue == NULL) {
+            LOG_ERROR("vote_menu_demo: button queue create failed");
             return STATUS_FAIL;
         }
     }
@@ -829,6 +958,8 @@ status_t vote_menu_demo_start(void)
         }
     }
 
+    vote_led_on_boot_ready();
+
     return STATUS_OK;
 }
 
@@ -839,16 +970,39 @@ bool vote_menu_demo_is_active(void)
 
 bool vote_menu_demo_on_button(btn_id_e id, btn_event_e event)
 {
+    vote_btn_msg_t msg;
+
+    if (!s_active || s_btn_queue == NULL) {
+        return false;
+    }
+
+    msg.id    = id;
+    msg.event = event;
+    if (xQueueSend(s_btn_queue, &msg, 0) != pdTRUE) {
+        LOG_WARN("vote_menu_demo: button queue full, drop id=%d evt=%d", (int)id, (int)event);
+        return false;
+    }
+
+    vote_menu_wake_task();
+    return true;
+}
+
+static void vote_menu_handle_button(btn_id_e id, btn_event_e event)
+{
     menu_engine_t *eng;
     menu_evt_t evt;
     menu_result_t r;
 
     if (!s_active) {
-        return false;
+        return;
     }
 
     if (event == BTN_EVENT_PRESS_DOWN) {
         vote_menu_key_beep();
+    }
+
+    if (try_enter_admin_via_back_long(id, event)) {
+        return;
     }
 
     if (!s_menu_mode && s_screen == VOTE_LCD_SCREEN_SELECT && event == BTN_EVENT_PRESS_DOWN &&
@@ -858,20 +1012,14 @@ bool vote_menu_demo_on_button(btn_id_e id, btn_event_e event)
 
     evt = map_button(id, event);
     if (evt == MENU_EVT_HOME) {
-        return false;
+        return;
     }
 
     if (!s_menu_mode) {
         if (dispatch_business(evt)) {
             vote_menu_request_redraw();
-            return true;
         }
-        if (evt == MENU_EVT_ENTER && long_confirm_allowed()) {
-            enter_menu_mode();
-            vote_menu_request_redraw();
-            return true;
-        }
-        return false;
+        return;
     }
 
     eng = vote_menu_engine();
@@ -879,7 +1027,7 @@ bool vote_menu_demo_on_button(btn_id_e id, btn_event_e event)
     if (evt == MENU_EVT_ENTER && (r == MENU_RESULT_AT_BOUND || r == MENU_RESULT_IGNORED)) {
         if (vote_menu_pages_confirm_save(eng)) {
             vote_menu_request_redraw();
-            return true;
+            return;
         }
     }
     if (r == MENU_RESULT_EXIT) {
@@ -887,7 +1035,6 @@ bool vote_menu_demo_on_button(btn_id_e id, btn_event_e event)
         LOG_INFO("vote_menu_demo: exit menu -> phase screen");
     }
     vote_menu_request_redraw();
-    return true;
 }
 
 vote_lcd_screen_id_t vote_menu_demo_current_screen(void)
@@ -934,6 +1081,7 @@ bool vote_menu_demo_goto_screen(vote_lcd_screen_id_t screen)
     } else {
         if (!s_menu_mode && s_screen == VOTE_LCD_SCREEN_VIOLATION && screen != VOTE_LCD_SCREEN_VIOLATION) {
             buzzer_stop_pattern();
+            vote_led_on_violation_end();
         }
         if (!s_menu_mode) {
             s_back_screen = s_screen;
@@ -942,11 +1090,12 @@ bool vote_menu_demo_goto_screen(vote_lcd_screen_id_t screen)
         }
         s_menu_mode = false;
         s_screen    = screen;
-        if (screen == VOTE_LCD_SCREEN_VIOLATION &&
-            device_profile_platform_wants(DEVICE_PLATFORM_MASK_BUZZER) && buzzer_is_ready()) {
-            (void)buzzer_play_pattern(BUZZER_PATTERN_ALARM);
-        }
-        if (screen == VOTE_LCD_SCREEN_SELECT && vote_status_candidate_count() > 0U) {
+        if (screen == VOTE_LCD_SCREEN_VIOLATION) {
+            vote_led_on_violation();
+            if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_BUZZER) && buzzer_is_ready()) {
+                (void)buzzer_play_pattern(BUZZER_PATTERN_ALARM);
+            }
+        } else if (screen == VOTE_LCD_SCREEN_SELECT && vote_status_candidate_count() > 0U) {
             s_select_idx           = 0U;
             s_select_navigated     = false;
             s_last_spoiled_display = VOTE_SPOILED_NONE;
@@ -986,11 +1135,6 @@ bool vote_menu_demo_dispatch(menu_evt_t evt)
 
     if (!s_menu_mode) {
         if (dispatch_business(evt)) {
-            vote_menu_request_redraw();
-            return true;
-        }
-        if (evt == MENU_EVT_ENTER && long_confirm_allowed()) {
-            enter_menu_mode();
             vote_menu_request_redraw();
             return true;
         }

@@ -19,15 +19,21 @@ extern "C" {
 #define LED_SCENE_ACTION_NUM    8
 #define LED_SCENE_MSEC          1
 #define CYCLE_ALWAYS            0xFFFF
-#define LED_SCENE_LED_NUM       2
+#define LED_SCENE_LED_NUM       3
 
 /** 与 STM32 一致：每帧调用间隔（ms），用于 `led_scene_update` */
 #define LED_SCENE_TICK_MS       50
+
+/** 全局亮度系数 0–255（255=原亮度，128≈一半）。可在工程 CMake 中覆盖。 */
+#ifndef LED_SCENE_BRIGHTNESS_SCALE
+#define LED_SCENE_BRIGHTNESS_SCALE 128U
+#endif
 
 typedef enum
 {
     LED_SCENE_LED_0 = 0,
     LED_SCENE_LED_1,
+    LED_SCENE_LED_2,
     LED_SCENE_LED_MAX_NUM,
 } led_scene_led_e;
 
@@ -54,6 +60,15 @@ typedef enum
     LED_SCENE_ID_CONFIG,         /**< 配置态：紫灯常亮（至取消） */
     LED_SCENE_ID_CHARGING,       /**< 充电：黄灯常亮约 3s */
     LED_SCENE_ID_LOW_BATTERY,    /**< 低电：黄灯约每 60s 闪一次（至取消） */
+    /** ballot_guard 投票业务灯效（见 doc/ballot_guard_product_usage.md §二） */
+    LED_SCENE_ID_BALLOT_IDLE,      /**< 待机/锁定：绿色常亮（至取消） */
+    LED_SCENE_ID_BALLOT_VOTING,    /**< 投票开始：蓝色慢闪 1 Hz 约 5 s 后恢复底色 */
+    LED_SCENE_ID_BALLOT_APPROACH,  /**< 红外靠近：蓝色快闪 2 Hz 约 2 s */
+    LED_SCENE_ID_BALLOT_VALID,     /**< 有效票：绿色快闪 2 次 */
+    LED_SCENE_ID_BALLOT_SPOILED,   /**< 废票：红色快闪 3 次 */
+    LED_SCENE_ID_BALLOT_VIOLATION, /**< 违规重复投票：红色急促闪（至取消） */
+    LED_SCENE_ID_BALLOT_FAULT,     /**< 系统异常：红色常亮（至取消） */
+    LED_SCENE_ID_BALLOT_WIFI_WARN, /**< Wi-Fi STA 离线：黄色常亮（至取消） */
     LED_SCENE_ID_MAX_NUM,
 } led_scene_id_e;
 

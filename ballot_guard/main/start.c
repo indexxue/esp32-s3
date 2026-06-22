@@ -20,17 +20,35 @@
 #include "buzzer.h"
 #include "boot_slot.h"
 #include "vote_menu_demo.h"
+#include "vote_led.h"
 
 #include "esp_ota_ops.h"
 
 #if CONFIG_WEB_CTRL_AUTO_START
 #include "esp_err.h"
+#include "esp_event.h"
+#include "esp_netif_types.h"
+#include "esp_wifi_types.h"
 #include "web_ctrl.h"
 #include "web_pages.h"
 #include "web_server.h"
 
 #define WEB_CTRL_BOOT_TASK_STACK_WORDS (10240U)
 #define WEB_CTRL_BOOT_TASK_PRIORITY (3U)
+
+static void vote_wifi_led_handler(void *arg, esp_event_base_t base, int32_t id, void *event_data)
+{
+    (void)arg;
+    (void)event_data;
+    if (!device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
+        return;
+    }
+    if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        vote_led_on_wifi_sta_connected();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        vote_led_on_wifi_sta_disconnected();
+    }
+}
 
 static void web_ctrl_boot_task(void *arg)
 {
@@ -48,13 +66,18 @@ static void web_ctrl_boot_task(void *arg)
         if (reg != ESP_OK) {
             LOG_WARN("web_pages_register failed: %s", esp_err_to_name(reg));
         }
+        if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
+            (void)esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, vote_wifi_led_handler, NULL, NULL);
+            (void)esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, vote_wifi_led_handler,
+                                                        NULL, NULL);
+        }
     }
     vTaskDelete(NULL);
 }
 #endif
 
 #define BUTTON_SCAN_PERIOD_MS (1000 / FLEX_BTN_SCAN_FREQ_HZ)
-#define BTN_SCAN_TASK_STACK_WORDS (3072U)
+#define BTN_SCAN_TASK_STACK_WORDS (6144U)
 #define BTN_SCAN_TASK_PRIORITY (5U)
 #define IR_POLL_TASK_STACK_WORDS (2048U)
 #define IR_POLL_TASK_PRIORITY (4U)
@@ -368,6 +391,9 @@ static status_t app_init(void)
         err = vote_menu_demo_start();
         if (err != STATUS_OK) {
             LOG_WARN("vote_menu_demo_start failed");
+            if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
+                vote_led_on_fault();
+            }
         }
     }
 
