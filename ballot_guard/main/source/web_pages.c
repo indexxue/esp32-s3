@@ -278,23 +278,6 @@ static esp_err_t vote_candidates_reset_post_handler(httpd_req_t *req)
     return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
 
-static esp_err_t vote_session_enter_post_handler(httpd_req_t *req)
-{
-    if (!vote_menu_demo_is_active()) {
-        (void)httpd_resp_set_status(req, "503 Service Unavailable");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"lcd_inactive\"}", HTTPD_RESP_USE_STRLEN);
-    }
-    if (!vote_menu_demo_enter_voting()) {
-        (void)httpd_resp_set_status(req, "500 Internal Server Error");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"enter_failed\"}", HTTPD_RESP_USE_STRLEN);
-    }
-
-    (void)httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
-}
-
 static bool json_extract_name_at(const char *body, int index, char *out, size_t out_cap)
 {
     const char *p = strstr(body, "\"names\"");
@@ -609,7 +592,6 @@ esp_err_t web_pages_register(httpd_handle_t server)
         {.uri = "/api/vote/candidates", .method = HTTP_GET, .handler = vote_candidates_get_handler, .user_ctx = NULL},
         {.uri = "/api/vote/candidates", .method = HTTP_POST, .handler = vote_candidates_post_handler, .user_ctx = NULL},
         {.uri = "/api/vote/candidates/reset", .method = HTTP_POST, .handler = vote_candidates_reset_post_handler, .user_ctx = NULL},
-        {.uri = "/api/vote/session/enter", .method = HTTP_POST, .handler = vote_session_enter_post_handler, .user_ctx = NULL},
         {.uri = "/api/vote/settings", .method = HTTP_GET, .handler = vote_settings_get_handler, .user_ctx = NULL},
         {.uri = "/api/vote/settings/schedule", .method = HTTP_POST, .handler = vote_settings_schedule_post_handler, .user_ctx = NULL},
         {.uri = "/api/vote/settings/count", .method = HTTP_POST, .handler = vote_settings_count_post_handler, .user_ctx = NULL},

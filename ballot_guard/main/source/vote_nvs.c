@@ -39,6 +39,11 @@ static void default_candidate_name(uint8_t idx, char *out, size_t cap)
     if (out == NULL || cap == 0U) {
         return;
     }
+    if (idx < 26U && cap >= 2U) {
+        out[0] = (char)('A' + idx);
+        out[1] = '\0';
+        return;
+    }
     (void)snprintf(out, cap, "Candidate %u", (unsigned)(idx + 1U));
 }
 

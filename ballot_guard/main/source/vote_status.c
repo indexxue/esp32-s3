@@ -26,6 +26,8 @@ static uint16_t s_votes[VOTE_STATUS_MAX_CANDIDATES];
 static uint16_t s_spoiled;
 static uint8_t s_cooldown_remaining;
 static vote_spoiled_type_e s_last_spoiled_type;
+static vote_interaction_phase_e s_interaction_phase;
+static bool s_post_reset_idle;
 
 static char s_event_text[VOTE_STATUS_MAX_EVENTS][48];
 static char s_event_time[VOTE_STATUS_MAX_EVENTS][12];
@@ -33,6 +35,11 @@ static uint8_t s_event_count;
 
 static void default_name(uint8_t idx, char *out, size_t cap)
 {
+    if (idx < 26U && cap >= 2U) {
+        out[0] = (char)('A' + idx);
+        out[1] = '\0';
+        return;
+    }
     (void)snprintf(out, cap, "Candidate %u", (unsigned)(idx + 1U));
 }
 
@@ -50,6 +57,8 @@ void vote_status_init_defaults(void)
     init_default_names();
     s_cooldown_remaining = 0U;
     s_last_spoiled_type  = VOTE_SPOILED_NONE;
+    s_interaction_phase  = VOTE_INTERACTION_NONE;
+    s_post_reset_idle    = false;
 }
 
 static bool vote_status_read_datetime(ds3231_datetime_t *dt)
@@ -165,6 +174,15 @@ static const char *phase_label_of(const char *phase)
     if (strcmp(phase, "voting") == 0) {
         return "投票进行中";
     }
+    if (strcmp(phase, "selecting") == 0) {
+        return "请选择候选人";
+    }
+    if (strcmp(phase, "cooldown") == 0) {
+        return "请稍候";
+    }
+    if (strcmp(phase, "violation") == 0) {
+        return "违规重复";
+    }
     if (strcmp(phase, "locked") == 0) {
         return "投票已锁定";
     }
@@ -177,10 +195,24 @@ static const char *phase_label_of(const char *phase)
     return "待机";
 }
 
-static void compute_phase(const vote_menu_settings_t *st,
-                          const char **out_phase,
-                          const char **out_label,
-                          int *out_countdown_sec)
+static const char *interaction_phase_str(vote_interaction_phase_e iphase)
+{
+    switch (iphase) {
+    case VOTE_INTERACTION_SELECTING:
+        return "selecting";
+    case VOTE_INTERACTION_COOLDOWN:
+        return "cooldown";
+    case VOTE_INTERACTION_VIOLATION:
+        return "violation";
+    default:
+        return NULL;
+    }
+}
+
+static void compute_schedule_phase(const vote_menu_settings_t *st,
+                                   const char **out_phase,
+                                   const char **out_label,
+                                   int *out_countdown_sec)
 {
     const int start_sec = ((int)st->start_h * 60 + (int)st->start_m) * 60;
     const int end_sec   = ((int)st->end_h * 60 + (int)st->end_m) * 60;
@@ -197,8 +229,8 @@ static void compute_phase(const vote_menu_settings_t *st,
     }
 
     if (start_sec >= end_sec) {
-        *out_phase = "idle";
-        *out_label = phase_label_of("idle");
+        *out_phase = "fault";
+        *out_label = phase_label_of("fault");
         return;
     }
 
@@ -224,6 +256,74 @@ static void compute_phase(const vote_menu_settings_t *st,
     }
 }
 
+void vote_status_set_interaction_phase(vote_interaction_phase_e phase)
+{
+    s_interaction_phase = phase;
+}
+
+void vote_status_clear_interaction_phase(void)
+{
+    s_interaction_phase = VOTE_INTERACTION_NONE;
+}
+
+vote_interaction_phase_e vote_status_interaction_phase(void)
+{
+    return s_interaction_phase;
+}
+
+void vote_status_on_vote_reset(void)
+{
+    s_post_reset_idle    = true;
+    s_interaction_phase  = VOTE_INTERACTION_NONE;
+    s_cooldown_remaining = 0U;
+}
+
+bool vote_status_post_reset_idle(void)
+{
+    return s_post_reset_idle;
+}
+
+void vote_status_clear_post_reset_idle(void)
+{
+    s_post_reset_idle = false;
+}
+
+const char *vote_status_schedule_phase(int *countdown_sec)
+{
+    vote_menu_settings_t *st = vote_menu_settings();
+    const char *phase;
+    const char *label;
+
+    if (st == NULL) {
+        return "idle";
+    }
+    compute_schedule_phase(st, &phase, &label, countdown_sec);
+    return phase;
+}
+
+bool vote_status_schedule_in_voting_window(void)
+{
+    const char *phase = vote_status_schedule_phase(NULL);
+    return (phase != NULL && strcmp(phase, "voting") == 0);
+}
+
+static void merge_interaction_phase(const char **phase, const char **label)
+{
+    const char *interaction;
+
+    if (phase == NULL || label == NULL || *phase == NULL) {
+        return;
+    }
+    if (strcmp(*phase, "voting") != 0) {
+        return;
+    }
+    interaction = interaction_phase_str(s_interaction_phase);
+    if (interaction != NULL) {
+        *phase = interaction;
+        *label = phase_label_of(interaction);
+    }
+}
+
 const char *vote_status_current_phase(int *countdown_sec)
 {
     vote_menu_settings_t *st = vote_menu_settings();
@@ -233,7 +333,11 @@ const char *vote_status_current_phase(int *countdown_sec)
     if (st == NULL) {
         return "idle";
     }
-    compute_phase(st, &phase, &label, countdown_sec);
+    compute_schedule_phase(st, &phase, &label, countdown_sec);
+    if (s_post_reset_idle && phase != NULL && strcmp(phase, "voting") == 0) {
+        return "idle";
+    }
+    merge_interaction_phase(&phase, &label);
     return phase;
 }
 
@@ -241,6 +345,15 @@ vote_lcd_screen_id_t vote_status_lcd_screen_for_phase(const char *phase)
 {
     if (phase == NULL) {
         return VOTE_LCD_SCREEN_HOME;
+    }
+    if (strcmp(phase, "selecting") == 0) {
+        return VOTE_LCD_SCREEN_SELECT;
+    }
+    if (strcmp(phase, "cooldown") == 0) {
+        return VOTE_LCD_SCREEN_COOLDOWN;
+    }
+    if (strcmp(phase, "violation") == 0) {
+        return VOTE_LCD_SCREEN_VIOLATION;
     }
     if (strcmp(phase, "voting") == 0) {
         return VOTE_LCD_SCREEN_VOTING;
@@ -444,7 +557,8 @@ size_t vote_status_build_json(char *out, size_t out_cap)
         return 0U;
     }
 
-    compute_phase(st, &phase, &phase_label, &countdown_sec);
+    compute_schedule_phase(st, &phase, &phase_label, &countdown_sec);
+    merge_interaction_phase(&phase, &phase_label);
     format_clock_hms(clk, sizeof(clk));
     (void)snprintf(schedule_start, sizeof(schedule_start), "%02u:%02u", (unsigned)st->start_h, (unsigned)st->start_m);
     (void)snprintf(schedule_end, sizeof(schedule_end), "%02u:%02u", (unsigned)st->end_h, (unsigned)st->end_m);

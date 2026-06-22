@@ -311,30 +311,15 @@ static void draw_time_page(st7789_t *lcd, const menu_engine_t *eng)
                 VOTE_MENU_FONT_MD);
     (void)snprintf(buf, sizeof(buf), "%02u", (unsigned)st->end_m);
     draw_digit_box(lcd, 76U, (uint16_t)(VOTE_MENU_BODY_Y + 64U), buf, (uint16_t)(idx == 3U));
-}
 
-static void draw_rtc_clock_page(st7789_t *lcd, const menu_engine_t *eng)
-{
-    vote_menu_clock_t *clk = vote_menu_clock_settings();
-    char buf[8];
-    uint16_t idx = menu_current_index(eng);
-
-    if (clk == NULL) {
-        return;
+    {
+        uint16_t bx = 80U;
+        uint16_t by = (uint16_t)(VOTE_MENU_BODY_Y + 96U);
+        uint16_t bg = (idx == 4U) ? VOTE_MENU_COLOR_ACCENT : VOTE_MENU_COLOR_SURFACE;
+        lcd_fill(lcd, bx, by, (uint16_t)(bx + 80U), (uint16_t)(by + 24U), bg);
+        lcd_draw_rectangle(lcd, bx, by, (uint16_t)(bx + 79U), (uint16_t)(by + 23U), VOTE_MENU_COLOR_BORDER);
+        draw_string_center_in_box(lcd, bx, by, 80U, 24U, VOTE_ZH_SAVE, VOTE_MENU_COLOR_TEXT, bg, VOTE_MENU_FONT_SM);
     }
-
-    draw_string_center(lcd, (uint16_t)(VOTE_MENU_BODY_Y + 4U), VOTE_ZH_PAGE_CLOCK, VOTE_MENU_COLOR_MUTED,
-                       VOTE_MENU_COLOR_BG, VOTE_MENU_FONT_SM);
-    (void)snprintf(buf, sizeof(buf), "%02u", (unsigned)clk->hour);
-    draw_digit_box(lcd, 24U, (uint16_t)(VOTE_MENU_BODY_Y + 24U), buf, (uint16_t)(idx == 0U));
-    draw_string(lcd, 64U, (uint16_t)(VOTE_MENU_BODY_Y + 30U), ":", VOTE_MENU_COLOR_TEXT, VOTE_MENU_COLOR_BG,
-                VOTE_MENU_FONT_MD);
-    (void)snprintf(buf, sizeof(buf), "%02u", (unsigned)clk->minute);
-    draw_digit_box(lcd, 76U, (uint16_t)(VOTE_MENU_BODY_Y + 24U), buf, (uint16_t)(idx == 1U));
-    draw_string(lcd, 116U, (uint16_t)(VOTE_MENU_BODY_Y + 30U), ":", VOTE_MENU_COLOR_TEXT, VOTE_MENU_COLOR_BG,
-                VOTE_MENU_FONT_MD);
-    (void)snprintf(buf, sizeof(buf), "%02u", (unsigned)clk->second);
-    draw_digit_box(lcd, 128U, (uint16_t)(VOTE_MENU_BODY_Y + 24U), buf, (uint16_t)(idx == 2U));
 }
 
 static void draw_count_page(st7789_t *lcd, const menu_engine_t *eng)
@@ -384,25 +369,27 @@ static void draw_cooldown_page(st7789_t *lcd, const menu_engine_t *eng)
     vote_menu_settings_t *st = vote_menu_settings();
     char buf[8];
     uint16_t idx             = menu_current_index(eng);
-    uint8_t v;
+
+    if (st == NULL) {
+        return;
+    }
 
     draw_string_center(lcd, (uint16_t)(VOTE_MENU_BODY_Y + 4U), VOTE_ZH_PAGE_COOLDOWN, VOTE_MENU_COLOR_MUTED,
                        VOTE_MENU_COLOR_BG, VOTE_MENU_FONT_SM);
-    for (v = 3U; v <= 10U; v++) {
-        uint16_t x = (uint16_t)(20U + (v - 3U) * 26U);
-        uint16_t fc =
-            (idx == 0U && v == st->cooldown_sec) ? VOTE_MENU_COLOR_ACCENT : VOTE_MENU_COLOR_MUTED;
-        char digit[4];
-        (void)snprintf(digit, sizeof(digit), "%u", (unsigned)v);
-        draw_string(lcd, x, (uint16_t)(VOTE_MENU_BODY_Y + 22U), digit, fc, VOTE_MENU_COLOR_BG, VOTE_MENU_FONT_SM);
-        if (idx == 0U && v == st->cooldown_sec) {
-            lcd_fill(lcd, (uint16_t)(x + 2U), (uint16_t)(VOTE_MENU_BODY_Y + 34U), (uint16_t)(x + 14U),
-                     (uint16_t)(VOTE_MENU_BODY_Y + 38U), VOTE_MENU_COLOR_ACCENT);
-        }
-    }
+    draw_string_center(lcd, (uint16_t)(VOTE_MENU_BODY_Y + 18U), VOTE_ZH_SECOND, VOTE_MENU_COLOR_MUTED,
+                       VOTE_MENU_COLOR_BG, VOTE_MENU_FONT_SM);
     (void)snprintf(buf, sizeof(buf), "%u", (unsigned)st->cooldown_sec);
-    draw_string_center(lcd, (uint16_t)(VOTE_MENU_BODY_Y + 44U), buf, VOTE_MENU_COLOR_TEXT, VOTE_MENU_COLOR_BG,
-                       VOTE_MENU_FONT_MD);
+    {
+        uint16_t bx = 88U;
+        uint16_t by = (uint16_t)(VOTE_MENU_BODY_Y + 34U);
+        uint16_t bg = (idx == 0U) ? VOTE_MENU_COLOR_SURFACE2 : VOTE_MENU_COLOR_SURFACE;
+        lcd_fill(lcd, bx, by, (uint16_t)(bx + 64U), (uint16_t)(by + 36U), bg);
+        lcd_draw_rectangle(lcd, bx, by, (uint16_t)(bx + 63U), (uint16_t)(by + 35U),
+                           (idx == 0U) ? VOTE_MENU_COLOR_ACCENT : VOTE_MENU_COLOR_BORDER);
+        draw_string_center_in_box(lcd, bx, by, 64U, 36U, buf, VOTE_MENU_COLOR_TEXT, bg, VOTE_MENU_FONT_MD);
+    }
+    draw_string_center(lcd, (uint16_t)(VOTE_MENU_BODY_Y + 76U), "3 - 10", VOTE_MENU_COLOR_MUTED, VOTE_MENU_COLOR_BG,
+                       VOTE_MENU_FONT_SM);
 }
 
 static void draw_reset_modal(st7789_t *lcd, const menu_engine_t *eng, const menu_page_t *page)
@@ -432,8 +419,11 @@ static void draw_reset_modal(st7789_t *lcd, const menu_engine_t *eng, const menu
 
 static const char *phase_lcd_label(const char *phase)
 {
-    if (phase == NULL || phase[0] == '\0' || strcmp(phase, "idle") == 0) {
-        return VOTE_ZH_IDLE;
+    if (phase == NULL || phase[0] == '\0') {
+        return VOTE_ZH_STANDBY;
+    }
+    if (strcmp(phase, "idle") == 0) {
+        return VOTE_ZH_STANDBY;
     }
     if (strcmp(phase, "waiting") == 0) {
         return VOTE_ZH_WAITING;
@@ -441,41 +431,44 @@ static const char *phase_lcd_label(const char *phase)
     if (strcmp(phase, "voting") == 0) {
         return VOTE_ZH_VOTING;
     }
+    if (strcmp(phase, "selecting") == 0) {
+        return VOTE_ZH_SELECT;
+    }
+    if (strcmp(phase, "cooldown") == 0) {
+        return VOTE_ZH_COOLDOWN;
+    }
+    if (strcmp(phase, "violation") == 0) {
+        return VOTE_ZH_VIOLATION;
+    }
     if (strcmp(phase, "locked") == 0) {
         return VOTE_ZH_LOCKED;
     }
     if (strcmp(phase, "fault") == 0) {
         return VOTE_ZH_FAULT;
     }
-    return VOTE_ZH_IDLE;
+    return VOTE_ZH_STANDBY;
 }
 
-static void draw_enter_voting_modal(st7789_t *lcd, const menu_engine_t *eng, const menu_page_t *page)
+static void draw_admin_entry_progress(st7789_t *lcd, uint8_t pct)
 {
-    uint16_t idx = menu_current_index(eng);
-    char aux_buf[32];
-    char phase_buf[32];
-    int cd = 0;
-    const char *phase = vote_status_current_phase(&cd);
+    const uint16_t cx = 208U;
+    const uint16_t cy = 108U;
+    const uint16_t r  = 16U;
 
-    lcd_fill(lcd, 0U, VOTE_MENU_BODY_Y, VOTE_MENU_LCD_W, VOTE_MENU_FOOT_Y, VOTE_MENU_COLOR_BG);
-    lcd_fill(lcd, 10U, (uint16_t)(VOTE_MENU_BODY_Y + 10U), 230U, (uint16_t)(VOTE_MENU_BODY_Y + 82U),
-             VOTE_MENU_COLOR_SURFACE);
-    lcd_draw_rectangle(lcd, 10U, (uint16_t)(VOTE_MENU_BODY_Y + 10U), 229U, (uint16_t)(VOTE_MENU_BODY_Y + 81U),
-                       VOTE_MENU_COLOR_BORDER);
+    if (lcd == NULL || pct == 0U) {
+        return;
+    }
 
-    draw_string(lcd, 18U, (uint16_t)(VOTE_MENU_BODY_Y + 18U), VOTE_ZH_LEAVE_ASK, VOTE_MENU_COLOR_TEXT,
-                VOTE_MENU_COLOR_SURFACE, VOTE_MENU_FONT_SM);
-    (void)snprintf(phase_buf, sizeof(phase_buf), "%s%s", VOTE_ZH_PHASE_PREFIX, phase_lcd_label(phase));
-    draw_string(lcd, 18U, (uint16_t)(VOTE_MENU_BODY_Y + 34U), phase_buf, VOTE_MENU_COLOR_MUTED,
-                VOTE_MENU_COLOR_SURFACE, VOTE_MENU_FONT_SM);
-
-    if (page != NULL && page->items != NULL && page->count >= 2U) {
-        uint16_t y = (uint16_t)(VOTE_MENU_BODY_Y + 54U);
-        draw_list_row(lcd, y, &page->items[0], (uint16_t)(idx == 0U), eng->app_ctx, aux_buf, sizeof(aux_buf),
-                      VOTE_MENU_ROW_H);
-        draw_list_row(lcd, (uint16_t)(y + VOTE_MENU_ROW_H), &page->items[1], (uint16_t)(idx == 1U), eng->app_ctx,
-                      aux_buf, sizeof(aux_buf), VOTE_MENU_ROW_H);
+    lcd_draw_circle(lcd, cx, cy, r, VOTE_MENU_COLOR_BORDER);
+    if (pct >= 100U) {
+        lcd_draw_circle(lcd, cx, cy, (uint16_t)(r - 2U), VOTE_MENU_COLOR_ACCENT);
+    } else if (pct >= 50U) {
+        lcd_draw_circle(lcd, cx, cy, (uint16_t)(r - 4U), VOTE_MENU_COLOR_SURFACE2);
+        lcd_fill(lcd, (uint16_t)(cx - 2U), (uint16_t)(cy - r + 2U), (uint16_t)(cx + 2U), (uint16_t)(cy - r + 6U),
+                 VOTE_MENU_COLOR_ACCENT);
+    } else {
+        lcd_fill(lcd, (uint16_t)(cx - 2U), (uint16_t)(cy + r - 6U), (uint16_t)(cx + 2U), (uint16_t)(cy + r - 2U),
+                 VOTE_MENU_COLOR_ACCENT);
     }
 }
 
@@ -613,7 +606,7 @@ static void draw_business_foot(st7789_t *lcd, const char *hint)
     }
 }
 
-static void draw_home_screen(st7789_t *lcd, uint8_t scroll_idx)
+static void draw_home_screen(st7789_t *lcd, uint8_t scroll_idx, uint8_t admin_progress)
 {
     char line[48];
     uint8_t count = vote_status_candidate_count();
@@ -693,6 +686,7 @@ static void draw_home_screen(st7789_t *lcd, uint8_t scroll_idx)
     } else {
         draw_business_foot(lcd, VOTE_ZH_FOOT_HOME);
     }
+    draw_admin_entry_progress(lcd, admin_progress);
 }
 
 static void draw_voting_screen(st7789_t *lcd)
@@ -845,7 +839,7 @@ static void draw_violation_screen(st7789_t *lcd)
     draw_business_foot(lcd, VOTE_ZH_FOOT_ALARM);
 }
 
-static void draw_locked_screen(st7789_t *lcd, uint8_t scroll_idx)
+static void draw_locked_screen(st7789_t *lcd, uint8_t scroll_idx, uint8_t admin_progress)
 {
     char line[48];
     uint8_t count = vote_status_candidate_count();
@@ -914,6 +908,7 @@ static void draw_locked_screen(st7789_t *lcd, uint8_t scroll_idx)
     } else {
         draw_business_foot(lcd, VOTE_ZH_FOOT_LOCKED_END);
     }
+    draw_admin_entry_progress(lcd, admin_progress);
 }
 
 static uint8_t list_viewport_start(uint8_t focus_idx, uint8_t total, uint8_t visible)
@@ -932,7 +927,7 @@ static uint8_t list_viewport_start(uint8_t focus_idx, uint8_t total, uint8_t vis
     return start;
 }
 
-static void draw_history_screen(st7789_t *lcd, uint8_t focus_idx)
+static void draw_history_screen(st7789_t *lcd, uint8_t focus_idx, uint8_t admin_progress)
 {
     char time_buf[16];
     char detail[48];
@@ -997,6 +992,7 @@ static void draw_history_screen(st7789_t *lcd, uint8_t focus_idx)
     } else {
         draw_business_foot(lcd, VOTE_ZH_FOOT_HISTORY);
     }
+    draw_admin_entry_progress(lcd, admin_progress);
 }
 
 void vote_lcd_draw(st7789_t *lcd, const vote_lcd_ctx_t *ctx)
@@ -1017,7 +1013,7 @@ void vote_lcd_draw(st7789_t *lcd, const vote_lcd_ctx_t *ctx)
 
     switch (ctx->screen) {
     case VOTE_LCD_SCREEN_HOME:
-        draw_home_screen(lcd, ctx->home_scroll_idx);
+        draw_home_screen(lcd, ctx->home_scroll_idx, ctx->admin_entry_progress);
         break;
     case VOTE_LCD_SCREEN_VOTING:
         draw_voting_screen(lcd);
@@ -1032,13 +1028,13 @@ void vote_lcd_draw(st7789_t *lcd, const vote_lcd_ctx_t *ctx)
         draw_violation_screen(lcd);
         break;
     case VOTE_LCD_SCREEN_LOCKED:
-        draw_locked_screen(lcd, ctx->locked_scroll_idx);
+        draw_locked_screen(lcd, ctx->locked_scroll_idx, ctx->admin_entry_progress);
         break;
     case VOTE_LCD_SCREEN_HISTORY:
-        draw_history_screen(lcd, ctx->history_idx);
+        draw_history_screen(lcd, ctx->history_idx, ctx->admin_entry_progress);
         break;
     default:
-        draw_home_screen(lcd, ctx->home_scroll_idx);
+        draw_home_screen(lcd, ctx->home_scroll_idx, ctx->admin_entry_progress);
         break;
     }
 }
@@ -1127,12 +1123,6 @@ void vote_menu_lcd_draw(st7789_t *lcd, const menu_engine_t *eng)
         break;
     case VOTE_MENU_PAGE_RESET:
         draw_reset_modal(lcd, eng, page);
-        break;
-    case VOTE_MENU_PAGE_ENTER:
-        draw_enter_voting_modal(lcd, eng, page);
-        break;
-    case VOTE_MENU_PAGE_CLOCK:
-        draw_rtc_clock_page(lcd, eng);
         break;
     default:
         draw_list_page(lcd, eng, page);

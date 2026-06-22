@@ -22,6 +22,14 @@ typedef enum {
     VOTE_SPOILED_IRREGULAR,
 } vote_spoiled_type_e;
 
+/** 投票时段内的交互 Phase（扁平 Phase 模型，见 docs/adr/0001）。 */
+typedef enum {
+    VOTE_INTERACTION_NONE = 0,
+    VOTE_INTERACTION_SELECTING,
+    VOTE_INTERACTION_COOLDOWN,
+    VOTE_INTERACTION_VIOLATION,
+} vote_interaction_phase_e;
+
 /** 写入 JSON 到 `out`；返回写入长度，失败返回 0。 */
 size_t vote_status_build_json(char *out, size_t out_cap);
 
@@ -33,6 +41,13 @@ void vote_status_push_event(const char *time_hms, const char *text);
 
 /** 重置票数与事件（管理员重置时调用）。 */
 void vote_status_reset_counts(void);
+
+/** Vote Reset 完成后：徽章显示 Idle，日程仍按时钟判断（见 CONTEXT.md）。 */
+void vote_status_on_vote_reset(void);
+
+/** Vote Reset 后是否仍显示 Idle 徽章（不影响红外/日程 voting 判定）。 */
+bool vote_status_post_reset_idle(void);
+void vote_status_clear_post_reset_idle(void);
 
 /** 从 NVS 加载票数镜像。 */
 void vote_status_load_counts(uint16_t valid, uint16_t spoiled, const uint32_t *cand_votes, uint8_t count);
@@ -63,11 +78,25 @@ void vote_status_set_cooldown_remaining(uint8_t sec);
 /** 手动设置 DS3231 时分秒（保留当前日期）；失败返回 false。 */
 bool vote_status_set_clock_hms(uint8_t hour, uint8_t minute, uint8_t second);
 
-/** phase: idle / waiting / voting / locked / booting / fault */
+/** 设置/清除投票时段内交互 Phase（selecting/cooldown/violation）。 */
+void vote_status_set_interaction_phase(vote_interaction_phase_e phase);
+void vote_status_clear_interaction_phase(void);
+vote_interaction_phase_e vote_status_interaction_phase(void);
+
+/**
+ * 当前扁平 Phase：booting | fault | idle | waiting | voting | selecting | cooldown | violation | locked
+ */
 const char *vote_status_current_phase(int *countdown_sec);
+
+/** 仅日程驱动 Phase（不含交互 overlay）。 */
+const char *vote_status_schedule_phase(int *countdown_sec);
+
 /** 按 phase 映射默认业务 LCD 屏（不含 admin / history）。 */
 vote_lcd_screen_id_t vote_status_lcd_screen_for_phase(const char *phase);
 bool vote_status_is_voting_phase(const char *phase);
+
+/** 当前是否处于 Vote Schedule 投票窗口内（日程 voting，不含交互态判断）。 */
+bool vote_status_schedule_in_voting_window(void);
 
 /** 格式化 DS3231 当前时间为 HH:MM:SS；失败写入 "--:--:--"。 */
 bool vote_status_format_clock(char *buf, size_t cap);

@@ -178,7 +178,7 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
     <div class="card-b"><ul class="events" id="events"><li class="empty">暂无记录</li></ul></div>
   </section>
 
-  <p class="note">实时看板为只读；候选人姓名、参数设置、历史与进入投票请在「管理员」页操作。</p>
+  <p class="note">实时看板为只读；参数设置与历史请在「管理员」页操作。</p>
 </div>
 
 <div id="panel-manage" class="panel-manage">
@@ -186,10 +186,9 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
     <button type="button" class="manage-tab on" data-slide="0">候选人</button>
     <button type="button" class="manage-tab" data-slide="1">历史</button>
     <button type="button" class="manage-tab" data-slide="2">参数设置</button>
-    <button type="button" class="manage-tab" data-slide="3">进入投票</button>
   </div>
   <div class="manage-dots" id="manage-dots" aria-hidden="true">
-    <i class="on"></i><i></i><i></i><i></i>
+    <i class="on"></i><i></i><i></i>
   </div>
   <div class="manage-track" id="manage-track">
     <div class="manage-slide">
@@ -288,27 +287,10 @@ body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14 0%,#121
 
           <div class="danger-zone">
             <p class="dz-title">重置数据</p>
-            <p class="dz-desc">归档当前会话、清零全部有效票与废票，并恢复默认时段/人数/冷却配置。不可撤销。</p>
+            <p class="dz-desc">归档当前会话并清零全部有效票与废票；时段/人数/冷却配置保持不变。不可撤销。</p>
             <button type="button" class="btn btn-danger" id="btn-settings-reset" onclick="openSettingsResetModal()">重置全部投票数据…</button>
           </div>
           <pre class="log" id="settings-log" hidden></pre>
-        </div>
-      </section>
-    </div>
-    <div class="manage-slide">
-      <section class="card">
-        <div class="card-h"><h2>进入投票</h2></div>
-        <div class="card-b">
-          <div class="session-hero">
-            <p class="phase" id="session-phase">—</p>
-            <p class="sub" id="session-sub">加载中…</p>
-          </div>
-          <p class="hint">让设备 LCD 退出管理员菜单，进入当前时段对应的投票业务界面（主界面 / 投票等待 / 结果锁定等）。</p>
-          <div class="row" style="margin-top:12px">
-            <button type="button" class="btn btn-primary" id="btn-session-enter" onclick="enterVotingSession()">进入投票界面</button>
-            <button type="button" class="btn btn-ghost" id="btn-session-refresh" onclick="refreshSessionPanel()">刷新状态</button>
-          </div>
-          <pre class="log" id="session-log" hidden></pre>
         </div>
       </section>
     </div>
@@ -409,14 +391,14 @@ function renderDash(j){
   var badge=document.getElementById('badge');
   var cd=document.getElementById('countdown');
   var title=document.getElementById('chart-title');
-  var pClass=(phase==='voting'||phase==='selecting'||phase==='cooldown')?'voting':(phase==='locked'?'locked':(phase==='waiting'?'waiting':'idle'));
+  var pClass=(phase==='violation')?'warn':((phase==='voting'||phase==='selecting'||phase==='cooldown')?'voting':(phase==='locked'?'locked':(phase==='waiting'?'waiting':(phase==='fault'?'warn':'idle'))));
 
   hero.className='hero '+pClass;
   badge.className='badge '+pClass;
   badge.textContent=j.phase_label||phase;
   document.getElementById('clock').textContent=j.ts||'--:--:--';
 
-  if(phase==='voting'||phase==='selecting'||phase==='cooldown'){
+  if(phase==='voting'||phase==='selecting'||phase==='cooldown'||phase==='violation'){
     cd.textContent=(j.countdown_sec>0)?fmtRemain(j.countdown_sec):'';
     title.textContent='候选人得票';
   }else if(phase==='locked'){
@@ -516,7 +498,7 @@ document.querySelectorAll('.tab').forEach(function(tab){
   tab.onclick=function(){switchTab(tab.dataset.tab);};
 });
 
-function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-disconnect','modal-confirm-dc','btn-cand-save','btn-cand-reload','btn-cand-reset','btn-hist-refresh','btn-hist-clear','modal-confirm-cand-reset','modal-confirm-hist-clear','btn-session-enter','btn-session-refresh','btn-settings-reload','btn-save-schedule','btn-save-count','btn-save-cooldown','btn-save-clock','btn-settings-reset','modal-confirm-settings-reset'].forEach(function(id){
+function setBusy(b){['btn-refresh','btn-scan','btn-save','btn-disconnect','modal-confirm-dc','btn-cand-save','btn-cand-reload','btn-cand-reset','btn-hist-refresh','btn-hist-clear','modal-confirm-cand-reset','modal-confirm-hist-clear','btn-settings-reload','btn-save-schedule','btn-save-count','btn-save-cooldown','btn-save-clock','btn-settings-reset','modal-confirm-settings-reset'].forEach(function(id){
   var el=document.getElementById(id);if(el)el.disabled=b;
 });}
 function showLog(id,txt,show){var el=document.getElementById(id);if(!el)return;if(!txt){el.hidden=true;el.textContent='';return;}el.hidden=!show;el.textContent=txt;}
@@ -636,7 +618,6 @@ function loadManageData(){
   loadCandidates();
   loadHistory();
   loadSettings();
-  refreshSessionPanel();
   initManageSlider();
 }
 
@@ -738,7 +719,6 @@ async function confirmSettingsReset(){
     showLog('settings-log','已重置全部投票数据',true);
     await loadSettings();
     await loadCandidates();
-    await refreshSessionPanel();
   }catch(e){showLog('settings-log',String(e),true);}
   finally{setBusy(false);}
 }
@@ -774,43 +754,6 @@ function initManageSlider(){
     var idx=Math.round(track.scrollLeft/w);
     setManageSlideHighlight(idx);
   },{passive:true});
-}
-
-async function refreshSessionPanel(){
-  var phaseEl=document.getElementById('session-phase');
-  var subEl=document.getElementById('session-sub');
-  try{
-    var r=await fetch('/api/vote/status');
-    var j=await r.json();
-    if(!j.ok){
-      phaseEl.textContent='—';
-      subEl.textContent='无法读取状态';
-      return;
-    }
-    phaseEl.textContent=j.phase_label||j.phase||'—';
-    var parts=[];
-    if(j.schedule&&j.schedule.start){parts.push('时段 '+j.schedule.start+' – '+j.schedule.end);}
-    if(j.countdown_sec>0){parts.push('倒计时 '+j.countdown_sec+'s');}
-    subEl.textContent=parts.length?parts.join(' · '):'按当前时钟与投票时段自动切换业务屏';
-  }catch(e){
-    phaseEl.textContent='—';
-    subEl.textContent=String(e);
-  }
-}
-
-async function enterVotingSession(){
-  showLog('session-log','正在切换 LCD…',true);setBusy(true);
-  try{
-    var r=await fetch('/api/vote/session/enter',{method:'POST'});
-    var j=await r.json();
-    if(!j.ok){
-      showLog('session-log',apiErrorText(j,'切换失败'),true);
-      return;
-    }
-    showLog('session-log','已进入投票界面',true);
-    await refreshSessionPanel();
-  }catch(e){showLog('session-log',String(e),true);}
-  finally{setBusy(false);}
 }
 
 function rssiPct(r){if(typeof r!=='number')return 15;return Math.max(8,Math.min(100,2*(r+100)));}

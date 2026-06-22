@@ -25,6 +25,7 @@ typedef struct {
     uint8_t cooldown_sec;
     uint8_t select_timeout_sec;
     vote_spoiled_type_e spoiled_type;
+    uint8_t admin_entry_progress;
 } vote_lcd_ctx_t;
 
 void vote_menu_lcd_draw(st7789_t *lcd, const menu_engine_t *eng);

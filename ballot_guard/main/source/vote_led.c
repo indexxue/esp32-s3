@@ -39,8 +39,8 @@ static void vote_led_apply_phase_base(const char *phase)
         return;
     }
 
-    if (phase != NULL && strcmp(phase, "voting") == 0) {
-        /* 绿常亮为底色；蓝慢闪 5 s 提示投票时段已开始（上电或到点进入 voting 各播一次） */
+    if (phase != NULL &&
+        (strcmp(phase, "voting") == 0 || strcmp(phase, "selecting") == 0 || strcmp(phase, "cooldown") == 0)) {
         (void)led_scene_run(LED_SCENE_ID_BALLOT_IDLE);
         (void)led_scene_run(LED_SCENE_ID_BALLOT_VOTING);
     } else {
@@ -61,6 +61,9 @@ void vote_led_on_boot_ready(void)
 void vote_led_sync_phase(const char *phase)
 {
     if (phase == NULL) {
+        return;
+    }
+    if (strcmp(phase, "violation") == 0) {
         return;
     }
     vote_led_apply_phase_base(phase);

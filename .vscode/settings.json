@@ -11,7 +11,7 @@
             "path": "C:/WINDOWS/system32/cmd.exe",
             "args": [
                 "/k",
-                "call D:\\desktopsrc\\TY\\ESP32-S3\\Espressif\\idf_cmd_init.bat && cd /d D:\\desktopsrc\\TY\\ESP32-S3\\project"
+                "call D:\\desktopsrc\\TY\\ESP32-S3\\Espressif\\idf_cmd_init.bat && cd /d D:\\desktopsrc\\TY\\ESP32-S3"
             ]
         }
     },
