@@ -24,6 +24,8 @@ static char s_names[VOTE_STATUS_MAX_CANDIDATES][VOTE_STATUS_NAME_LEN];
 
 static uint16_t s_votes[VOTE_STATUS_MAX_CANDIDATES];
 static uint16_t s_spoiled;
+static uint8_t s_cooldown_remaining;
+static vote_spoiled_type_e s_last_spoiled_type;
 
 static char s_event_text[VOTE_STATUS_MAX_EVENTS][48];
 static char s_event_time[VOTE_STATUS_MAX_EVENTS][12];
@@ -46,6 +48,8 @@ static void init_default_names(void)
 void vote_status_init_defaults(void)
 {
     init_default_names();
+    s_cooldown_remaining = 0U;
+    s_last_spoiled_type  = VOTE_SPOILED_NONE;
 }
 
 static bool vote_status_read_datetime(ds3231_datetime_t *dt)
@@ -81,6 +85,63 @@ int vote_status_seconds_of_day(void)
         return -1;
     }
     return (int)((unsigned)dt.hour * 3600U + (unsigned)dt.minute * 60U + (unsigned)dt.second);
+}
+
+bool vote_status_set_clock_hms(uint8_t hour, uint8_t minute, uint8_t second)
+{
+    ds3231_t *rtc = BoardDs3231();
+    ds3231_datetime_t dt;
+
+    if (rtc == NULL || !vote_status_read_datetime(&dt)) {
+        return false;
+    }
+    dt.hour   = hour;
+    dt.minute = minute;
+    dt.second = second;
+    return (ds3231_write_datetime(rtc, &dt) == DS3231_OK);
+}
+
+uint8_t vote_status_cooldown_remaining(void)
+{
+    return s_cooldown_remaining;
+}
+
+void vote_status_set_cooldown_remaining(uint8_t sec)
+{
+    s_cooldown_remaining = sec;
+}
+
+vote_spoiled_type_e vote_status_last_spoiled_type(void)
+{
+    return s_last_spoiled_type;
+}
+
+const char *vote_status_spoiled_type_label(vote_spoiled_type_e type)
+{
+    switch (type) {
+    case VOTE_SPOILED_BLANK:
+        return "Blank";
+    case VOTE_SPOILED_MULTIPLE:
+        return "Multiple";
+    case VOTE_SPOILED_IRREGULAR:
+        return "Irregular";
+    default:
+        return "Spoiled";
+    }
+}
+
+static const char *spoiled_event_text(vote_spoiled_type_e type)
+{
+    switch (type) {
+    case VOTE_SPOILED_BLANK:
+        return "spoiled: blank";
+    case VOTE_SPOILED_MULTIPLE:
+        return "spoiled: multiple";
+    case VOTE_SPOILED_IRREGULAR:
+        return "spoiled: irregular";
+    default:
+        return "spoiled ballot";
+    }
 }
 
 static void format_clock_hms(char *buf, size_t cap)
@@ -332,15 +393,24 @@ bool vote_status_add_valid(uint8_t idx)
     return true;
 }
 
-bool vote_status_add_spoiled(void)
+bool vote_status_add_spoiled_typed(vote_spoiled_type_e type)
 {
     char clk[16];
 
-    s_spoiled = (uint16_t)(s_spoiled + 1U);
+    if (type == VOTE_SPOILED_NONE) {
+        type = VOTE_SPOILED_IRREGULAR;
+    }
+    s_last_spoiled_type = type;
+    s_spoiled           = (uint16_t)(s_spoiled + 1U);
     format_clock_hms(clk, sizeof(clk));
-    vote_status_push_event(clk, "spoiled ballot");
+    vote_status_push_event(clk, spoiled_event_text(type));
     (void)vote_nvs_save_votes();
     return true;
+}
+
+bool vote_status_add_spoiled(void)
+{
+    return vote_status_add_spoiled_typed(VOTE_SPOILED_IRREGULAR);
 }
 
 size_t vote_status_build_json(char *out, size_t out_cap)
@@ -392,7 +462,7 @@ size_t vote_status_build_json(char *out, size_t out_cap)
                          "\"countdown_sec\":%d,\"cooldown_sec\":%u,"
                          "\"totals\":{\"valid\":%u,\"spoiled\":%u,\"all\":%u},"
                          "\"candidates\":[",
-                         clk, phase_to_str(phase), phase_label, countdown_sec, (unsigned)st->cooldown_sec,
+                         clk, phase_to_str(phase), phase_label, countdown_sec, (unsigned)s_cooldown_remaining,
                          (unsigned)valid, (unsigned)s_spoiled, (unsigned)(valid + s_spoiled));
     if (n <= 0U || (off + n >= out_cap)) {
         return 0U;

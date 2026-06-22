@@ -135,13 +135,14 @@ static void app_button_buzzer_feedback(btn_event_e event)
 static void app_button_notify(btn_id_e id, const char *name, btn_permission_e permission, btn_event_e event)
 {
     (void)permission;
-    app_button_buzzer_feedback(event);
     LOG_INFO("key %s (%s): %s", button_id_to_str(id), (name != NULL) ? name : "?", button_event_to_str(event));
 
     if (vote_menu_demo_is_active()) {
         if (vote_menu_demo_on_button(id, event)) {
             return;
         }
+    } else {
+        app_button_buzzer_feedback(event);
     }
 
     if ((id == BTN_ID_LEFT) && (event == BTN_EVENT_LONG_PRESS) && device_profile_button_count() < 6U) {
@@ -173,15 +174,49 @@ static void button_scan_task(void *arg)
 
 static void ir_poll_task(void *arg)
 {
+    u32_t last_level[BOARD_IR_CH_COUNT];
+    board_ir_channel_e ch;
+
     (void)arg;
 
-    for (;;) {
-        board_ir_event_t evt;
+    for (ch = BOARD_IR_CH0; ch < BOARD_IR_CH_COUNT; ch++) {
+        last_level[ch] = 2U;
+    }
 
-        while (board_ir_take_event(&evt) == TRUE) {
-            LOG_INFO("IR trigger ch%u (GPIO%d)",
-                     (unsigned)evt.channel,
-                     (evt.channel == BOARD_IR_CH0) ? BOARD_IR_SENSOR0_PIN : BOARD_IR_SENSOR1_PIN);
+    LOG_INFO("IR poll: approach=HIGH->LOW, leave=LOW->HIGH ignored; cooldown skips IR, period %ums",
+             (unsigned)IR_POLL_PERIOD_MS);
+
+    for (;;) {
+        for (ch = BOARD_IR_CH0; ch < BOARD_IR_CH_COUNT; ch++) {
+            u32_t level;
+
+            if (board_ir_read_level(ch, &level) != TRUE) {
+                continue;
+            }
+            if (last_level[ch] == 2U) {
+                LOG_INFO("IR init ch%u GPIO%d level=%u",
+                         (unsigned)ch,
+                         (ch == BOARD_IR_CH0) ? BOARD_IR_SENSOR0_PIN : BOARD_IR_SENSOR1_PIN,
+                         (unsigned)level);
+                last_level[ch] = level;
+            } else if (last_level[ch] != level) {
+                const u32_t prev = last_level[ch];
+                bool handled     = false;
+
+                LOG_INFO("IR level ch%u GPIO%d: %u -> %u",
+                         (unsigned)ch,
+                         (ch == BOARD_IR_CH0) ? BOARD_IR_SENSOR0_PIN : BOARD_IR_SENSOR1_PIN,
+                         (unsigned)prev,
+                         (unsigned)level);
+                last_level[ch] = level;
+
+                if (vote_menu_demo_is_active()) {
+                    handled = vote_menu_demo_on_ir_level(ch, prev, level);
+                }
+                if (prev == 1U && level == 0U) {
+                    LOG_INFO("IR approach ch%u -> vote: %s", (unsigned)ch, handled ? "handled" : "ignored");
+                }
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(IR_POLL_PERIOD_MS));

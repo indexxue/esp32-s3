@@ -6,11 +6,15 @@
 #include "vote_menu_pages.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "vote_menu_config.h"
 #include "vote_nvs.h"
 #include "vote_history.h"
 #include "vote_status.h"
+#include "vote_menu_zh.h"
+#include "board.h"
+#include "ds3231.h"
 
 static menu_engine_t s_eng;
 static vote_menu_settings_t s_settings = {
@@ -20,6 +24,12 @@ static vote_menu_settings_t s_settings = {
     .end_m            = 0U,
     .candidate_count  = 3U,
     .cooldown_sec     = 5U,
+};
+
+static vote_menu_clock_t s_clock = {
+    .hour   = 8U,
+    .minute = 0U,
+    .second = 0U,
 };
 
 static vote_menu_ui_notify_cb s_ui_notify;
@@ -40,6 +50,7 @@ static const vote_menu_page_id_t s_page_count_id    = VOTE_MENU_PAGE_COUNT;
 static const vote_menu_page_id_t s_page_cooldown_id = VOTE_MENU_PAGE_COOLDOWN;
 static const vote_menu_page_id_t s_page_reset_id    = VOTE_MENU_PAGE_RESET;
 static const vote_menu_page_id_t s_page_enter_id    = VOTE_MENU_PAGE_ENTER;
+static const vote_menu_page_id_t s_page_clock_id    = VOTE_MENU_PAGE_CLOCK;
 
 static void ui_toast(const char *msg, int is_error)
 {
@@ -238,7 +249,7 @@ static const char *aux_cooldown(void *ctx, const menu_item_t *item, char *buf, s
 {
     vote_menu_settings_t *st = (vote_menu_settings_t *)ctx;
     (void)item;
-    (void)snprintf(buf, n, "%us", (unsigned)st->cooldown_sec);
+    (void)snprintf(buf, n, "%u%s", (unsigned)st->cooldown_sec, VOTE_ZH_SECOND);
     return buf;
 }
 
@@ -249,10 +260,19 @@ static const char *aux_phase(void *ctx, const menu_item_t *item, char *buf, size
     (void)ctx;
     (void)item;
     phase = vote_status_current_phase(&cd);
-    if (phase == NULL || phase[0] == '\0') {
-        phase = "idle";
+    if (phase == NULL || phase[0] == '\0' || strcmp(phase, "idle") == 0) {
+        (void)snprintf(buf, n, "%s", VOTE_ZH_IDLE);
+    } else if (strcmp(phase, "waiting") == 0) {
+        (void)snprintf(buf, n, "%s", VOTE_ZH_WAITING);
+    } else if (strcmp(phase, "voting") == 0) {
+        (void)snprintf(buf, n, "%s", VOTE_ZH_VOTING);
+    } else if (strcmp(phase, "locked") == 0) {
+        (void)snprintf(buf, n, "%s", VOTE_ZH_LOCKED);
+    } else if (strcmp(phase, "fault") == 0) {
+        (void)snprintf(buf, n, "%s", VOTE_ZH_FAULT);
+    } else {
+        (void)snprintf(buf, n, "%s", phase);
     }
-    (void)snprintf(buf, n, "%s", phase);
     return buf;
 }
 
@@ -261,15 +281,15 @@ static void save_time_and_back(menu_engine_t *eng)
     vote_nvs_cfg_t cfg;
 
     if (schedule_minutes() >= schedule_end_minutes()) {
-        ui_toast("Invalid time", 1);
+        ui_toast(VOTE_ZH_ERR_TIME, 1);
         return;
     }
     cfg = settings_to_nvs_cfg();
     if (!vote_nvs_save_cfg(&cfg)) {
-        ui_toast("Save failed", 1);
+        ui_toast(VOTE_ZH_ERR_SAVE, 1);
         return;
     }
-    ui_toast("Saved", 0);
+    ui_toast(VOTE_ZH_OK_SAVED, 0);
     (void)menu_nav_back(eng);
 }
 
@@ -279,15 +299,15 @@ static void save_count_and_back(menu_engine_t *eng)
     vote_nvs_cfg_t cfg;
 
     if (vote_status_has_any_votes() && s_settings.candidate_count < old_count) {
-        ui_toast("Reset votes first", 1);
+        ui_toast(VOTE_ZH_ERR_RESET_FIRST, 1);
         return;
     }
     cfg = settings_to_nvs_cfg();
     if (!vote_nvs_save_cfg(&cfg)) {
-        ui_toast("Save failed", 1);
+        ui_toast(VOTE_ZH_ERR_SAVE, 1);
         return;
     }
-    ui_toast("Saved", 0);
+    ui_toast(VOTE_ZH_OK_SAVED, 0);
     (void)menu_nav_back(eng);
 }
 
@@ -297,10 +317,10 @@ static void save_cooldown_and_back(menu_engine_t *eng)
 
     cfg = settings_to_nvs_cfg();
     if (!vote_nvs_save_cfg(&cfg)) {
-        ui_toast("Save failed", 1);
+        ui_toast(VOTE_ZH_ERR_SAVE, 1);
         return;
     }
-    ui_toast("Saved", 0);
+    ui_toast(VOTE_ZH_OK_SAVED, 0);
     (void)menu_nav_back(eng);
 }
 
@@ -386,6 +406,8 @@ static void on_save_cooldown(void *app_ctx, menu_engine_t *eng, const menu_item_
     save_cooldown_and_back(eng);
 }
 
+static void save_clock_and_back(menu_engine_t *eng);
+
 bool vote_menu_pages_confirm_save(menu_engine_t *eng)
 {
     const menu_page_t *page;
@@ -419,6 +441,12 @@ bool vote_menu_pages_confirm_save(menu_engine_t *eng)
         }
         save_cooldown_and_back(eng);
         return true;
+    case VOTE_MENU_PAGE_CLOCK:
+        if (idx != 3U) {
+            return false;
+        }
+        save_clock_and_back(eng);
+        return true;
     default:
         return false;
     }
@@ -438,10 +466,10 @@ static void on_reset_confirm(void *app_ctx, menu_engine_t *eng, const menu_item_
     (void)vote_history_archive_session_if_needed();
     vote_status_reset_counts();
     if (!vote_nvs_restore_default_cfg()) {
-        ui_toast("Cfg reset fail", 1);
+        ui_toast(VOTE_ZH_ERR_CFG, 1);
         return;
     }
-    ui_toast("Reset OK", 0);
+    ui_toast(VOTE_ZH_OK_RESET, 0);
     while (menu_engine_depth(eng) > 0U) {
         (void)menu_nav_back(eng);
     }
@@ -470,91 +498,165 @@ static void on_enter_confirm(void *app_ctx, menu_engine_t *eng, const menu_item_
     leave_to_app();
 }
 
+static int32_t step_second(void *ctx, const menu_item_t *item, int32_t cur, int dir)
+{
+    return step_minute(ctx, item, cur, dir);
+}
+
+static void load_clock_from_rtc(void)
+{
+    ds3231_t *rtc = BoardDs3231();
+    ds3231_datetime_t dt;
+
+    if (rtc != NULL && ds3231_read_datetime(rtc, &dt) == DS3231_OK) {
+        s_clock.hour   = dt.hour;
+        s_clock.minute = dt.minute;
+        s_clock.second = dt.second;
+    }
+}
+
+static void save_clock_and_back(menu_engine_t *eng)
+{
+    if (!vote_status_set_clock_hms(s_clock.hour, s_clock.minute, s_clock.second)) {
+        ui_toast(VOTE_ZH_ERR_CLOCK, 1);
+        return;
+    }
+    ui_toast(VOTE_ZH_OK_CLOCK, 0);
+    (void)menu_nav_back(eng);
+}
+
+static void on_save_clock(void *app_ctx, menu_engine_t *eng, const menu_item_t *item)
+{
+    (void)app_ctx;
+    (void)item;
+    save_clock_and_back(eng);
+}
+
+static void on_clock_page_enter(void *app_ctx, menu_engine_t *eng, const menu_page_t *page)
+{
+    (void)app_ctx;
+    (void)eng;
+    (void)page;
+    load_clock_from_rtc();
+}
+
+static const char *aux_clock(void *ctx, const menu_item_t *item, char *buf, size_t n)
+{
+    vote_menu_clock_t *clk = (vote_menu_clock_t *)ctx;
+    (void)item;
+    (void)snprintf(buf, n, "%02u:%02u:%02u", (unsigned)clk->hour, (unsigned)clk->minute, (unsigned)clk->second);
+    return buf;
+}
+
+static const menu_param_vtbl_t s_vtbl_second = {
+    .get    = param_get_u8,
+    .set    = param_set_u8,
+    .step   = step_second,
+    .format = fmt_minute,
+};
+
+static const menu_item_t s_clock_items[] = {
+    { VOTE_ZH_HOUR, MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_hour, NULL, &s_clock.hour },
+    { VOTE_ZH_MINUTE, MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_minute, NULL, &s_clock.minute },
+    { VOTE_ZH_SECOND, MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_second, NULL, &s_clock.second },
+    { VOTE_ZH_SAVE, MENU_ITEM_ACTION, 0, NULL, on_save_clock, NULL, NULL, NULL },
+};
+
+static const menu_page_t s_page_clock = {
+    .title     = VOTE_ZH_PAGE_CLOCK,
+    .items     = s_clock_items,
+    .count     = (uint16_t)(sizeof(s_clock_items) / sizeof(s_clock_items[0])),
+    .user_ctx  = (void *)&s_page_clock_id,
+    .foot_hint = VOTE_ZH_FOOT_ADJ,
+    .on_enter  = on_clock_page_enter,
+};
+
 static const menu_item_t s_time_items[] = {
-    { "Start Hour", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_hour, NULL, &s_settings.start_h },
-    { "Start Min", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_minute, NULL, &s_settings.start_m },
-    { "End Hour", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_hour, NULL, &s_settings.end_h },
-    { "End Min", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_minute, NULL, &s_settings.end_m },
-    { "Save", MENU_ITEM_ACTION, 0, NULL, on_save_time, NULL, NULL, NULL },
+    { VOTE_ZH_START_H, MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_hour, NULL, &s_settings.start_h },
+    { VOTE_ZH_START_M, MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_minute, NULL, &s_settings.start_m },
+    { VOTE_ZH_END_H, MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_hour, NULL, &s_settings.end_h },
+    { VOTE_ZH_END_M, MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_minute, NULL, &s_settings.end_m },
+    { VOTE_ZH_SAVE, MENU_ITEM_ACTION, 0, NULL, on_save_time, NULL, NULL, NULL },
 };
 
 static const menu_item_t s_count_items[] = {
-    { "Count", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_count, NULL, &s_settings.candidate_count },
-    { "Save", MENU_ITEM_ACTION, 0, NULL, on_save_count, NULL, NULL, NULL },
+    { VOTE_ZH_COUNT, MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_count, NULL, &s_settings.candidate_count },
+    { VOTE_ZH_SAVE, MENU_ITEM_ACTION, 0, NULL, on_save_count, NULL, NULL, NULL },
 };
 
 static const menu_item_t s_cooldown_items[] = {
-    { "Seconds", MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_cooldown, NULL, &s_settings.cooldown_sec },
-    { "Save", MENU_ITEM_ACTION, 0, NULL, on_save_cooldown, NULL, NULL, NULL },
+    { VOTE_ZH_SECOND, MENU_ITEM_PARAM, MENU_ITEM_F_ENTER_NEXT, NULL, NULL, &s_vtbl_cooldown, NULL, &s_settings.cooldown_sec },
+    { VOTE_ZH_SAVE, MENU_ITEM_ACTION, 0, NULL, on_save_cooldown, NULL, NULL, NULL },
 };
 
 static const menu_item_t s_reset_items[] = {
-    { "Cancel", MENU_ITEM_ACTION, 0, NULL, on_reset_cancel, NULL, NULL, NULL },
-    { "Confirm Reset", MENU_ITEM_ACTION, MENU_ITEM_F_DANGER, NULL, on_reset_confirm, NULL, NULL, NULL },
+    { VOTE_ZH_CANCEL, MENU_ITEM_ACTION, 0, NULL, on_reset_cancel, NULL, NULL, NULL },
+    { VOTE_ZH_CONFIRM_RESET, MENU_ITEM_ACTION, MENU_ITEM_F_DANGER, NULL, on_reset_confirm, NULL, NULL, NULL },
 };
 
 static const menu_page_t s_page_time = {
-    .title     = "Vote Time",
+    .title     = VOTE_ZH_PAGE_SCHEDULE,
     .items     = s_time_items,
     .count     = (uint16_t)(sizeof(s_time_items) / sizeof(s_time_items[0])),
     .user_ctx  = (void *)&s_page_time_id,
-    .foot_hint = "Adj OK Back",
+    .foot_hint = VOTE_ZH_FOOT_ADJ,
     .on_exit   = on_time_page_exit,
 };
 
 static const menu_page_t s_page_count = {
-    .title     = "Candidates",
+    .title     = VOTE_ZH_PAGE_COUNT,
     .items     = s_count_items,
     .count     = (uint16_t)(sizeof(s_count_items) / sizeof(s_count_items[0])),
     .user_ctx  = (void *)&s_page_count_id,
-    .foot_hint = "Adj OK Back",
+    .foot_hint = VOTE_ZH_FOOT_ADJ,
     .on_exit   = on_count_page_exit,
 };
 
 static const menu_page_t s_page_cooldown = {
-    .title     = "Cooldown",
+    .title     = VOTE_ZH_PAGE_COOLDOWN,
     .items     = s_cooldown_items,
     .count     = (uint16_t)(sizeof(s_cooldown_items) / sizeof(s_cooldown_items[0])),
     .user_ctx  = (void *)&s_page_cooldown_id,
-    .foot_hint = "Adj OK Back",
+    .foot_hint = VOTE_ZH_FOOT_ADJ,
     .on_exit   = on_cooldown_page_exit,
 };
 
 static const menu_page_t s_page_reset = {
-    .title     = "Reset",
+    .title     = VOTE_ZH_PAGE_RESET,
     .items     = s_reset_items,
     .count     = (uint16_t)(sizeof(s_reset_items) / sizeof(s_reset_items[0])),
     .user_ctx  = (void *)&s_page_reset_id,
-    .foot_hint = "Sel OK Back",
+    .foot_hint = VOTE_ZH_FOOT_SEL,
 };
 
 static const menu_item_t s_enter_items[] = {
-    { "Cancel", MENU_ITEM_ACTION, 0, NULL, on_enter_cancel, NULL, NULL, NULL },
-    { "Enter Voting", MENU_ITEM_ACTION, 0, NULL, on_enter_confirm, NULL, NULL, NULL },
+    { VOTE_ZH_CANCEL, MENU_ITEM_ACTION, 0, NULL, on_enter_cancel, NULL, NULL, NULL },
+    { VOTE_ZH_ENTER_VOTING, MENU_ITEM_ACTION, 0, NULL, on_enter_confirm, NULL, NULL, NULL },
 };
 
 static const menu_page_t s_page_enter = {
-    .title     = "Enter Voting",
+    .title     = VOTE_ZH_ENTER_VOTING,
     .items     = s_enter_items,
     .count     = (uint16_t)(sizeof(s_enter_items) / sizeof(s_enter_items[0])),
     .user_ctx  = (void *)&s_page_enter_id,
-    .foot_hint = "Sel OK Back",
+    .foot_hint = VOTE_ZH_FOOT_SEL,
 };
 
 static const menu_item_t s_admin_items[] = {
-    { "1.Enter Voting", MENU_ITEM_SUBMENU, 0, &s_page_enter, NULL, NULL, aux_phase, NULL },
-    { "2.Vote Schedule", MENU_ITEM_SUBMENU, 0, &s_page_time, NULL, NULL, aux_schedule, NULL },
-    { "3.Candidate Count", MENU_ITEM_SUBMENU, 0, &s_page_count, NULL, NULL, aux_count, NULL },
-    { "4.Cooldown", MENU_ITEM_SUBMENU, 0, &s_page_cooldown, NULL, NULL, aux_cooldown, NULL },
-    { "5.Reset Data", MENU_ITEM_SUBMENU, MENU_ITEM_F_DANGER, &s_page_reset, NULL, NULL, NULL, NULL },
+    { VOTE_ZH_ADMIN_ENTER, MENU_ITEM_SUBMENU, 0, &s_page_enter, NULL, NULL, aux_phase, NULL },
+    { VOTE_ZH_ADMIN_SCHEDULE, MENU_ITEM_SUBMENU, 0, &s_page_time, NULL, NULL, aux_schedule, NULL },
+    { VOTE_ZH_ADMIN_COUNT, MENU_ITEM_SUBMENU, 0, &s_page_count, NULL, NULL, aux_count, NULL },
+    { VOTE_ZH_ADMIN_COOLDOWN, MENU_ITEM_SUBMENU, 0, &s_page_cooldown, NULL, NULL, aux_cooldown, NULL },
+    { VOTE_ZH_ADMIN_CLOCK, MENU_ITEM_SUBMENU, 0, &s_page_clock, NULL, NULL, aux_clock, &s_clock },
+    { VOTE_ZH_ADMIN_RESET, MENU_ITEM_SUBMENU, MENU_ITEM_F_DANGER, &s_page_reset, NULL, NULL, NULL, NULL },
 };
 
 static const menu_page_t s_page_admin = {
-    .title        = "Admin Settings",
+    .title        = VOTE_ZH_ADMIN_TITLE,
     .items        = s_admin_items,
     .count        = (uint16_t)(sizeof(s_admin_items) / sizeof(s_admin_items[0])),
     .user_ctx     = (void *)&s_page_admin_id,
-    .foot_hint    = "Slide Sel OK Back",
+    .foot_hint    = VOTE_ZH_FOOT_SLIDE,
     .on_root_back = on_admin_root_back,
 };
 
@@ -571,6 +673,11 @@ menu_engine_t *vote_menu_engine(void)
 vote_menu_settings_t *vote_menu_settings(void)
 {
     return &s_settings;
+}
+
+vote_menu_clock_t *vote_menu_clock_settings(void)
+{
+    return &s_clock;
 }
 
 void vote_menu_set_ui_notify(vote_menu_ui_notify_cb cb, void *ctx)
@@ -612,6 +719,8 @@ const menu_page_t *vote_menu_page_by_id(vote_menu_page_id_t id)
         return &s_page_reset;
     case VOTE_MENU_PAGE_ENTER:
         return &s_page_enter;
+    case VOTE_MENU_PAGE_CLOCK:
+        return &s_page_clock;
     default:
         return NULL;
     }

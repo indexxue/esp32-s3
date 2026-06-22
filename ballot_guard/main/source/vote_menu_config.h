@@ -20,6 +20,20 @@
 #define VOTE_MENU_ROW_H (22U)
 #define VOTE_MENU_VISIBLE_ROWS (4U)
 
+/** 顶栏左侧时钟起点。 */
+#define VOTE_MENU_TITLE_CLK_X (4U)
+/** 时钟文字与标题之间的间距。 */
+#define VOTE_MENU_TITLE_CLK_GAP (4U)
+/** 顶栏右侧 IP 预留宽度。 */
+#define VOTE_MENU_TITLE_IP_W (100U)
+
+/** 选人屏：确认键按住超过该时长记废票（ms）。 */
+#define VOTE_SELECT_SPOILED_HOLD_MS (5000U)
+/** 选人屏：超时未操作记废票（秒）。 */
+#define VOTE_SELECT_TIMEOUT_SEC (30U)
+/** 废票声光报警持续时间（ms）。 */
+#define VOTE_SPOILED_ALARM_MS (5000U)
+
 #define VOTE_MENU_RGB565(r, g, b)                                                                                     \
     ((uint16_t)((((uint16_t)(r) & 0xF8U) << 8) | (((uint16_t)(g) & 0xFCU) << 3) | ((uint16_t)(b) >> 3)))
 
@@ -50,6 +64,7 @@ typedef enum {
     VOTE_LCD_SCREEN_ADMIN_COOLDOWN,
     VOTE_LCD_SCREEN_ADMIN_RESET,
     VOTE_LCD_SCREEN_ADMIN_ENTER,
+    VOTE_LCD_SCREEN_ADMIN_CLOCK,
 } vote_lcd_screen_id_t;
 
 /** 管理员菜单页（menu 引擎子集）。 */
@@ -60,6 +75,7 @@ typedef enum {
     VOTE_MENU_PAGE_COOLDOWN = (int)VOTE_LCD_SCREEN_ADMIN_COOLDOWN,
     VOTE_MENU_PAGE_RESET = (int)VOTE_LCD_SCREEN_ADMIN_RESET,
     VOTE_MENU_PAGE_ENTER = (int)VOTE_LCD_SCREEN_ADMIN_ENTER,
+    VOTE_MENU_PAGE_CLOCK = (int)VOTE_LCD_SCREEN_ADMIN_CLOCK,
 } vote_menu_page_id_t;
 
 static inline bool vote_lcd_screen_is_menu(vote_lcd_screen_id_t id)

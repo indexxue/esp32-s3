@@ -22,9 +22,16 @@ typedef struct {
     uint8_t cooldown_sec;
 } vote_menu_settings_t;
 
+typedef struct {
+    uint8_t hour;
+    uint8_t minute;
+    uint8_t second;
+} vote_menu_clock_t;
+
 const menu_page_t *vote_menu_root_page(void);
 menu_engine_t *vote_menu_engine(void);
 vote_menu_settings_t *vote_menu_settings(void);
+vote_menu_clock_t *vote_menu_clock_settings(void);
 
 /** 保存后显示 Toast 等；由 demo 层注册。 */
 typedef void (*vote_menu_ui_notify_cb)(void *ctx, const char *msg, int is_error);

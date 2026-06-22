@@ -48,6 +48,9 @@ void lcd_draw_line(st7789_t *lcd, uint16_t x1, uint16_t y1, uint16_t x2, uint16_
 void lcd_draw_rectangle(st7789_t *lcd, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color);
 void lcd_draw_circle(st7789_t *lcd, uint16_t x0, uint16_t y0, uint8_t r, uint16_t color);
 
+/** 在当前 ST7789 写窗内向 GRAM 写入一个 RGB565 像素（需已 set_window）。 */
+void lcd_wr_rgb565(st7789_t *lcd, uint16_t color);
+
 void lcd_show_chinese(st7789_t *lcd, uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);
 void lcd_show_chinese_12x12(st7789_t *lcd, uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);
 void lcd_show_chinese_16x16(st7789_t *lcd, uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);

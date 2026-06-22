@@ -18,7 +18,7 @@
 static uint16_t s_linebuf[LCD_LINEBUF_MAX];
 static uint8_t s_fast_fill_blk[LCD_FAST_FILL_BLK];
 
-static void lcd_wr_rgb565(st7789_t *lcd, uint16_t color) {
+void lcd_wr_rgb565(st7789_t *lcd, uint16_t color) {
     (void)st7789_write_pixels(lcd, &color, 1U);
 }
 

@@ -46,6 +46,7 @@ static const lcd_screen_def_t s_lcd_screens[] = {
     { "admin_cooldown", "冷却时长", VOTE_LCD_SCREEN_ADMIN_COOLDOWN },
     { "admin_reset", "重置确认", VOTE_LCD_SCREEN_ADMIN_RESET },
     { "admin_enter", "进入投票", VOTE_LCD_SCREEN_ADMIN_ENTER },
+    { "admin_clock", "系统时钟", VOTE_LCD_SCREEN_ADMIN_CLOCK },
 };
 
 static const lcd_screen_def_t *lcd_screen_by_key(const char *key)

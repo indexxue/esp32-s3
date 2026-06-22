@@ -14,6 +14,14 @@
 #define VOTE_STATUS_MAX_CANDIDATES (6U)
 #define VOTE_STATUS_MAX_EVENTS (5U)
 
+/** 废票判定类型（按键模式：未选人/多选切换/标记不规范）。 */
+typedef enum {
+    VOTE_SPOILED_NONE = 0,
+    VOTE_SPOILED_BLANK,
+    VOTE_SPOILED_MULTIPLE,
+    VOTE_SPOILED_IRREGULAR,
+} vote_spoiled_type_e;
+
 /** 写入 JSON 到 `out`；返回写入长度，失败返回 0。 */
 size_t vote_status_build_json(char *out, size_t out_cap);
 
@@ -43,6 +51,17 @@ void vote_status_set_candidate_name(uint8_t idx, const char *name);
 /** 有效票 +1 / 废票 +1；返回 false 若 idx 无效。 */
 bool vote_status_add_valid(uint8_t idx);
 bool vote_status_add_spoiled(void);
+bool vote_status_add_spoiled_typed(vote_spoiled_type_e type);
+
+vote_spoiled_type_e vote_status_last_spoiled_type(void);
+const char *vote_status_spoiled_type_label(vote_spoiled_type_e type);
+
+/** 冷却剩余秒数（计票后递减；JSON 与 LCD 共用）。 */
+uint8_t vote_status_cooldown_remaining(void);
+void vote_status_set_cooldown_remaining(uint8_t sec);
+
+/** 手动设置 DS3231 时分秒（保留当前日期）；失败返回 false。 */
+bool vote_status_set_clock_hms(uint8_t hour, uint8_t minute, uint8_t second);
 
 /** phase: idle / waiting / voting / locked / booting / fault */
 const char *vote_status_current_phase(int *countdown_sec);
