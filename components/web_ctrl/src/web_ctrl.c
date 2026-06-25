@@ -22,6 +22,7 @@
 
 #include "web_ctrl_cmd.h"
 #include "web_ctrl_wifi_api.h"
+#include "web_ctrl_ota.h"
 #include "web_server.h"
 
 #ifndef CONFIG_WEB_CTRL_STA_CONNECT_TIMEOUT_MS
@@ -201,6 +202,15 @@ start_http_stack:
         err = web_ctrl_wifi_api_register(web_server_get_handle());
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "web_ctrl_wifi_api_register failed: %s", esp_err_to_name(err));
+            (void)web_server_stop();
+            (void)web_ctrl_cmd_stop();
+            (void)net_wifi_stop();
+            return err;
+        }
+
+        err = web_ctrl_ota_register(web_server_get_handle());
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "web_ctrl_ota_register failed: %s", esp_err_to_name(err));
             (void)web_server_stop();
             (void)web_ctrl_cmd_stop();
             (void)net_wifi_stop();

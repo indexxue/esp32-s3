@@ -1,0 +1,6 @@
+# Release binaries — see firmware/README.md for naming
+**/*
+!README.md
+!**/.gitkeep
+!**/manifest.json
+!**/README.txt

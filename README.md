@@ -37,18 +37,30 @@ cmd /k ".\Espressif\frameworks\esp-idf-v5.5.4\export.bat"
 建议在仓库根目录一键构建：
 
 ```powershell
+# cmd.exe（推荐 idf.cmd，勿直接运行 idf.ps1）
+idf build
+idf -Project ble_demo build
+
+# PowerShell
+.\idf.ps1 build
+.\idf.ps1 -Project ble_demo build
+
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Project ble_demo
 ```
 
 可选操作：
 
 ```powershell
+.\idf.ps1 reconfigure
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Action reconfigure
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Action clean
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Action fullclean
 ```
 
-传统 ESP-IDF 命令：
+`idf.ps1` / `scripts/build.ps1` 会自动配置 ESP-IDF 环境，并通过 `IDF_EXTRA_ACTIONS_PATH` 加载 `release` 等扩展（无需各工程 `idf_ext.py`）。
+
+传统 ESP-IDF 命令（须先 `export.ps1`，且手动设置 `IDF_EXTRA_ACTIONS_PATH=scripts/idf_py_actions` 才能用 `release`）：
 
 ```cmd
 idf.py -C project build
@@ -104,6 +116,31 @@ powershell -ExecutionPolicy Bypass -File .\factory\flash_dual_slot.example.ps1 -
 ### 运行时：在 A / B 之间切换下次启动
 
 固件中若已启用 USB 串口命令行，可使用 **`boot_a`**、**`boot_b`**、**`boot_q`**（见 `common/src/cmd.c`）。实现基于 `esp_ota_set_boot_partition()`（`common/src/boot_slot.c`）。
+
+### SoftAP 本地 OTA（维护页）
+
+量产工程 `project/` 已启用 **`CONFIG_WEB_CTRL_OTA`**（见 `doc/ota_development_plan.md`）。连接设备 SoftAP 后：
+
+1. 浏览器打开 **`http://192.168.4.1/ota`** — 选择 `project.bin` 上传，完成后点 **Apply & Reboot**
+2. 或使用 API：`GET /api/ota/status`、`POST /api/ota/upload`（二进制 body + `Content-Length`）、`POST /api/ota/apply`
+
+**注意：** 新固件版本须 **高于** 当前运行版本（`PROJECT_VER` / `esp_app_desc`）；上传写入对侧槽，确认前仍从旧槽启动。Bootloader rollback 已启用，新固件启动成功后自动 `mark_app_valid`。
+
+测试 OTA 时：打 **git tag**（如 `v1.0.3`）后 `idf build` 自动使用该版本；`idf -Project project release x.y.z` 不会低于最高 tag（详见 [`firmware/README.md`](firmware/README.md)）。
+
+### 发布版本（release）
+
+```powershell
+# 多工程同一版本：逐个追加
+idf -Project project release 1.2.3
+idf -Project ble_demo release 1.2.3
+
+# 或一次 release 全部
+idf -Project project release-all 1.2.3
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.2.3 -AllProjects
+```
+
+产物：`firmware/<版本>/{product}_{版本}_{编译日期}.bin` + `.hex` + `manifest.json`（见 [`firmware/README.md`](firmware/README.md)）。
 
 ## 校验环境脚本
 

@@ -78,6 +78,8 @@ static const char *const TAG = "nvs";
 #define NVS_KEY_HARDWARE_ID "hid"
 #define NVS_KEY_DEVICE_NAME "dname"
 #define NVS_KEY_BUILD_DATE "bdate"
+#define NVS_KEY_APP_VERSION "appver"
+#define NVS_KEY_FACTORY_VERSION "fver"
 #define NVS_KEY_RUN_TIME "rtime"
 #define NVS_KEY_WEB_CTRL "web_ctrl"
 #define NVS_KEY_LCD_GAL_BOOT "lcd_gal_boot"
@@ -383,6 +385,34 @@ static void sync_build_date(void)
     }
 }
 
+static void sync_version_string(const char *key, size_t max_len, const char *fw_ver)
+{
+    char stored[NVS_APP_VERSION_SIZE] = {0};
+
+    if ((key == NULL) || (fw_ver == NULL) || (fw_ver[0] == '\0') || (max_len == 0U)) {
+        return;
+    }
+    if (max_len > sizeof(stored)) {
+        max_len = sizeof(stored);
+    }
+    if (!read_str(key, stored, max_len) || (strcmp(stored, fw_ver) != 0)) {
+        if (stored[0] != '\0') {
+            LOG_WARN("NVS %s '%s' -> '%s'", key, stored, fw_ver);
+        }
+        (void)write_str(key, fw_ver, max_len);
+    }
+}
+
+static void sync_app_version(void)
+{
+    sync_version_string(NVS_KEY_APP_VERSION, NVS_APP_VERSION_SIZE, NVS_APP_VERSION_STRING);
+}
+
+static void sync_factory_version(void)
+{
+    sync_version_string(NVS_KEY_FACTORY_VERSION, NVS_FACTORY_VERSION_SIZE, NVS_FACTORY_VERSION_STRING);
+}
+
 static void sync_firmware_product_id(void);
 
 static void ensure_defaults(void)
@@ -451,6 +481,8 @@ static void ensure_defaults(void)
     sync_firmware_product_id();
     (void)device_name_apply(nvs_device_id_get());
     sync_build_date();
+    sync_app_version();
+    sync_factory_version();
 }
 
 static void sync_firmware_product_id(void)
@@ -513,13 +545,15 @@ static void log_boot_info(void)
     {
         char app[NVS_APP_VERSION_SIZE];
         if (nvs_app_version_get(app)) {
-            LOG_INFO("  app: %s", app);
+            LOG_INFO("  app: %s (fw=%s%s)", app, NVS_APP_VERSION_STRING,
+                     (strcmp(app, NVS_APP_VERSION_STRING) == 0) ? "" : " MISMATCH");
         }
     }
     {
         char factory[NVS_FACTORY_VERSION_SIZE];
         if (nvs_factory_version_get(factory)) {
-            LOG_INFO("  factory: %s", factory);
+            LOG_INFO("  factory: %s (fw=%s%s)", factory, NVS_FACTORY_VERSION_STRING,
+                     (strcmp(factory, NVS_FACTORY_VERSION_STRING) == 0) ? "" : " MISMATCH");
         }
     }
     if (read_str(NVS_KEY_REGION, region, sizeof(region))) {
@@ -700,6 +734,9 @@ bool nvs_app_version_get(char *version)
     if (version == NULL) {
         return false;
     }
+    if (read_str(NVS_KEY_APP_VERSION, version, NVS_APP_VERSION_SIZE)) {
+        return true;
+    }
     copy_version(version, NVS_APP_VERSION_SIZE, NVS_APP_VERSION_STRING);
     return true;
 }
@@ -708,6 +745,9 @@ bool nvs_factory_version_get(char *version)
 {
     if (version == NULL) {
         return false;
+    }
+    if (read_str(NVS_KEY_FACTORY_VERSION, version, NVS_FACTORY_VERSION_SIZE)) {
+        return true;
     }
     copy_version(version, NVS_FACTORY_VERSION_SIZE, NVS_FACTORY_VERSION_STRING);
     return true;

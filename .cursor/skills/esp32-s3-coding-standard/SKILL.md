@@ -47,7 +47,7 @@ New components must be registered via `EXTRA_COMPONENT_DIRS` or equivalent in `p
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
-# or: idf.py -C project build  (after IDF export)
+# or: .\idf.ps1 build
 ```
 
 Target: `esp32s3`. CMake root: `project/`.

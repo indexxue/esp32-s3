@@ -18,6 +18,7 @@
 #include "flexible_button.h"
 #include "led_scene.h"
 #include "boot_slot.h"
+#include "ota.h"
 
 #include "esp_ota_ops.h"
 
@@ -171,6 +172,13 @@ static status_t app_init_platform(void)
     if (BoardInit() != STATUS_OK) {
         LOG_ERROR("BoardInit failed");
         return STATUS_FAIL;
+    }
+
+    {
+        const status_t ota_st = ota_confirm_running_image();
+        if (ota_st != STATUS_OK) {
+            LOG_WARN("ota_confirm_running_image: %s", status_to_str(ota_st));
+        }
     }
 
 #if CONFIG_WEB_CTRL_AUTO_START

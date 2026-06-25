@@ -1,3 +1,2 @@
 # Bootloader-only defaults. Slot selection uses otadata + CONFIG_BOOTLOADER_APP_* from ESP-IDF.
-# After first clone, run: idf.py -C project menuconfig → Bootloader config, then save.
-# Typical review items: app rollback / anti-rollback (if you enable OTA later).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

@@ -42,4 +42,18 @@ menu "Web Control Library (web_ctrl)"
         help
             Entire multipart body limit for MJPEG AVI upload to /sdcard/videos/.
 
+    config WEB_CTRL_OTA
+        bool "Enable SoftAP local OTA HTTP endpoints (/ota, /api/ota/*)"
+        default n
+        help
+            Registers firmware upload/apply routes using common/ota. Intended for project/ maintenance.
+
+    config WEB_CTRL_OTA_UPLOAD_MAX
+        depends on WEB_CTRL_OTA
+        int "POST /api/ota/upload: max firmware body size (bytes)"
+        default 8388608
+        range 65536 8388608
+        help
+            Raw application .bin size limit. Must not exceed inactive OTA slot size (~0x7E0000 on N16R8).
+
 endmenu

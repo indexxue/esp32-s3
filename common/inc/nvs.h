@@ -72,8 +72,14 @@ extern "C" {
 #define NVS_DEVICE_NAME_DEFAULT "factory"
 
 #define NVS_HW_VERSION_STRING "1.0.0"
+/** 应用固件版本，由 common/CMakeLists.txt 从 PROJECT_VER 注入；未注入时见默认值。 */
+#ifndef NVS_APP_VERSION_STRING
 #define NVS_APP_VERSION_STRING "1.0.0"
+#endif
+/** 工厂固件版本，由 common/CMakeLists.txt 从 PROJECT_VER 注入。 */
+#ifndef NVS_FACTORY_VERSION_STRING
 #define NVS_FACTORY_VERSION_STRING "1.0.0"
+#endif
 #define NVS_DEFAULT_DEVICE_TYPE 1
 
 #define NVS_FLASH_START_ADDR FLASH_PART_NVS_START

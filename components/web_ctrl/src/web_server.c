@@ -15,6 +15,8 @@
 #define CONFIG_WEB_CTRL_CMD_SYNC_TIMEOUT_MS (3000)
 #endif
 
+#include "sdkconfig.h"
+
 #include "esp_http_server.h"
 #include "esp_log.h"
 
@@ -251,6 +253,12 @@ esp_err_t web_server_start(uint16_t port, web_root_handler_fn root_get_handler)
     config.max_uri_handlers = 32U;
     /* 默认栈 4096：`wifi_scan_result_get_handler` 等单帧 JSON 约 4KB，会栈溢出破坏 httpd 会话表。 */
     config.stack_size = 12288U;
+#if CONFIG_WEB_CTRL_OTA
+    /* OTA 上传 ~8MB 时 Flash 写入耗时长，默认 5s recv 超时易断连。 */
+    config.recv_wait_timeout = 120;
+    config.send_wait_timeout = 120;
+    config.stack_size        = 16384U;
+#endif
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {

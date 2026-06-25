@@ -9,6 +9,7 @@ idf_component_register(
         "src/sdcard.c"
         "src/nvs.c"
         "src/boot_slot.c"
+        "src/ota.c"
         "src/battery.c"
         "src/buzzer.c"
         "src/cmd.c"
@@ -19,6 +20,15 @@ idf_component_register(
 # 每次构建刷新 nvs.c 编译时间戳，使 __DATE__ 构建日期与本次编译一致
 string(TIMESTAMP NVS_FIRMWARE_BUILD_DATE_YMD "%Y%m%d" UTC)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE "NVS_FIRMWARE_BUILD_DATE=${NVS_FIRMWARE_BUILD_DATE_YMD}")
+
+# 与 esp_app_desc.version 同源：根 CMakeLists PROJECT_VER（release 通过 -DPROJECT_VER 注入）
+if(NOT DEFINED PROJECT_VER)
+    set(PROJECT_VER "1.0.0")
+endif()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    "NVS_APP_VERSION_STRING=\"${PROJECT_VER}\""
+    "NVS_FACTORY_VERSION_STRING=\"${PROJECT_VER}\""
+)
 
 set(_nvs_build_stamp "${CMAKE_CURRENT_BINARY_DIR}/nvs_build.stamp")
 add_custom_command(
