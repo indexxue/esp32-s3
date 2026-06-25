@@ -3,6 +3,23 @@ $ErrorActionPreference = "Stop"
 Write-Host "Checking ESP-IDF environment..."
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+
+$gitCmd = Get-Command git -ErrorAction SilentlyContinue
+if ($null -ne $gitCmd) {
+    Write-Host "Initializing git submodules (cbb)..."
+    Push-Location $repoRoot
+    try {
+        & git submodule update --init --recursive
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to initialize git submodules."
+        }
+    } finally {
+        Pop-Location
+    }
+} else {
+    Write-Warning "Git not found; skip submodule init. Run 'git submodule update --init --recursive' manually."
+}
+
 $espRoot = Join-Path $repoRoot "Espressif"
 $frameworkRoot = Join-Path $espRoot "frameworks"
 $idfVersion = "v5.5.4"

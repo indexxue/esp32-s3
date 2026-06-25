@@ -15,6 +15,12 @@
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_env.ps1
 ```
 
+克隆后需初始化 **Git 子模块**（`cbb` 器件驱动库）：
+
+```powershell
+git submodule update --init --recursive
+```
+
 配置脚本支持「零安装」流程：
 
 - 若未检测到 ESP-IDF，会自动克隆 `v5.5.4` 到 `.\Espressif\frameworks\esp-idf-v5.5.4`
@@ -114,5 +120,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_env.ps1 -RunInstall -R
 ## 说明
 
 - `Espressif/` 在 Git 中刻意忽略，各开发者本地自行安装工具。
+- **`cbb/`** 为 Git 子模块（`git@github.com:indexxue/cbb.git`），克隆主仓库后执行 `git submodule update --init --recursive`。
 - 若使用其他 ESP-IDF 版本或自定义安装路径，请同步修改 `scripts/setup_env.ps1`。
 - 可复用的自定义组件放在 `libraries/`（例如 `libraries/my_component/...`）或顶层组件目录（例如 `common/...`）。

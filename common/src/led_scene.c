@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 
 #include "ws2812b.h"
+#include "ws2812b_esp32.h"
 
 /** 板级 WS2812B：数据线 GPIO 与级联颗数（改硬件时只改此处） */
 #ifndef LED_SCENE_WS2812_GPIO
@@ -759,7 +760,7 @@ status_t led_scene_init(void)
 {
     memset(&self, 0, sizeof(led_scene_self_t));
 
-    const ws2812b_config_t cfg = {
+    const ws2812b_esp32_config_t cfg = {
         .gpio_num          = LED_SCENE_WS2812_GPIO,
         .num_leds          = LED_SCENE_WS2812_NUM_LEDS,
         .resolution_hz     = 0,
@@ -767,10 +768,9 @@ status_t led_scene_init(void)
         .trans_queue_depth = 0,
     };
 
-    status_t err = ws2812b_init(&s_ws2812, &cfg);
-    if (err != STATUS_OK)
+    if (ws2812b_esp32_init(&s_ws2812, &cfg) != ESP_OK)
     {
-        return err;
+        return STATUS_FAIL;
     }
 
     self.strip = &s_ws2812;
