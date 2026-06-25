@@ -99,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File .\factory\flash_app_b.example.ps1 -Port
 powershell -ExecutionPolicy Bypass -File .\factory\flash_dual_slot.example.ps1 -Port PORT
 ```
 
-对**已整片擦除**的芯片，建议先执行一次 `idf.py -C project -p PORT flash`（使 bootloader、分区表、`otadata` 等一致），再用 `flash_app_b.example.ps1` 写入槽位 B。更多说明见 `doc/factory_project.md`、`factory/README.txt` 与 `doc/compile_flash_erase_monitor.md`。
+对**已整片擦除**的芯片，建议先执行一次 `idf.py -C project -p PORT flash`（使 bootloader、分区表、`otadata` 等一致），再用 `flash_app_b.example.ps1` 写入槽位 B。更多说明见 `factory/README.txt` 与 `doc/partition_switch_development_plan.md`。
 
 ### 运行时：在 A / B 之间切换下次启动
 

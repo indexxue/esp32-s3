@@ -1,6 +1,6 @@
 /**
  * @file web_ctrl_wifi_api.h
- * @brief SoftAP 网页配网 REST（/api/wifi/... 与 GET /provision）。见 doc/softap_web_wifi_provisioning_plan.md。
+ * @brief SoftAP 网页配网 REST（/api/wifi/... 与 GET /provision）。
  */
 #pragma once
 

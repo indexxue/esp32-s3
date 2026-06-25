@@ -185,8 +185,7 @@
 
 - `flash_partition/partitions_16m_n16r8.md` — 分区地址、CSV、`sdkconfig` 片段。  
 - `tmp/boot_slot.c`、`tmp/boot_slot.h` — STM32 侧参考语义。  
-- `doc/application_architecture.md` — 新任务/串口命令放置分层建议。  
-- `doc/factory_project.md` — 厂测独立工程 **`factory/`** 源码布局、构建与烧录到 **`app_b`** 的步骤。  
+- `factory/README.txt` — 厂测工程 **`factory/`** 构建与烧录到 **`app_b`** 的步骤。  
 - ESP-IDF 编程指南：**Over-The-Air Updates**、**Partition Tables**、**Bootloader**（以当前 IDF 版本为准）。
 
 ---

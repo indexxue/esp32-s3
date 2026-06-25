@@ -2,7 +2,7 @@
 
 **适用范围**：本仓库在 **ESP32-S3** 上使用 **ESP-IDF v5.5.4** 的固件开发。  
 **应用工程目录**：`project/`（CMake 根目录）。  
-**烧录、整片擦除、串口监视**：见 [`compile_flash_erase_monitor.md`](compile_flash_erase_monitor.md)。
+**烧录、整片擦除、串口监视**：见根目录 [`README.md`](../README.md) 与 [`partition_switch_development_plan.md`](partition_switch_development_plan.md)。
 
 本文档结构：**开发规范** → **编码规范** → **文件与目录创建规范** → **编译与工程说明**。
 
@@ -49,8 +49,8 @@
 
 ## 1.5 与专项文档的关系
 
-- 工程从零搭建与阶段验收：[`how_to_create_custom_project.md`](how_to_create_custom_project.md)  
-- 应用分层与任务约定：[`application_architecture.md`](application_architecture.md)
+- 双 OTA 槽位与厂测烧录：[`partition_switch_development_plan.md`](partition_switch_development_plan.md)  
+- 环境与首次配置：根目录 [`README.md`](../README.md)
 
 ---
 
@@ -222,7 +222,7 @@ idf.py menuconfig
 |------|----------|
 | 镜像大小 | `idf.py size` / `size-components` / `size-files` |
 
-常见问题：`IDF_PATH` 未设置、`set-target` 与 `sdkconfig` 不一致、组件未列入 `EXTRA_COMPONENT_DIRS`、`idf_component_register` 缺少 `REQUIRES`、头文件目录未加入 `INCLUDE_DIRS`。详细烧录与监视见 [`compile_flash_erase_monitor.md`](compile_flash_erase_monitor.md)。
+常见问题：`IDF_PATH` 未设置、`set-target` 与 `sdkconfig` 不一致、组件未列入 `EXTRA_COMPONENT_DIRS`、`idf_component_register` 缺少 `REQUIRES`、头文件目录未加入 `INCLUDE_DIRS`。烧录与监视见根目录 [`README.md`](../README.md)。
 
 ---
 
@@ -231,9 +231,8 @@ idf.py menuconfig
 | 主题 | 文档 |
 |------|------|
 | 开发 / 编码 / 文件 / 编译（本文） | `embedded_coding_standard.md` |
-| 烧录、擦除、监视 | `compile_flash_erase_monitor.md` |
-| 环境与安装 | 根目录 `README.md` |
-| 自建工程与最小可运行要求 | `how_to_create_custom_project.md` |
+| 双 OTA 槽位与 boot 切换 | `partition_switch_development_plan.md` |
+| 环境与安装、烧录 | 根目录 `README.md` |
 
 ---
 

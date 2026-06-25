@@ -60,7 +60,7 @@ typedef enum
     LED_SCENE_ID_CONFIG,         /**< 配置态：紫灯常亮（至取消） */
     LED_SCENE_ID_CHARGING,       /**< 充电：黄灯常亮约 3s */
     LED_SCENE_ID_LOW_BATTERY,    /**< 低电：黄灯约每 60s 闪一次（至取消） */
-    /** ballot_guard 投票业务灯效（见 doc/ballot_guard_product_usage.md §二） */
+    /** ballot_guard 投票业务灯效（待机/投票/违规等 phase 驱动） */
     LED_SCENE_ID_BALLOT_IDLE,      /**< 待机/锁定：绿色常亮（至取消） */
     LED_SCENE_ID_BALLOT_VOTING,    /**< 投票开始：蓝色慢闪 1 Hz 约 5 s 后恢复底色 */
     LED_SCENE_ID_BALLOT_APPROACH,  /**< 红外靠近：蓝色快闪 2 Hz 约 2 s */

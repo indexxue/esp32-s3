@@ -1,6 +1,6 @@
 /**
  * @file web_ctrl_wifi_api.c
- * @brief SoftAP 网页配网 REST 与后台扫描任务（`doc/softap_web_wifi_provisioning_plan.md`）。
+ * @brief SoftAP 网页配网 REST 与后台扫描任务。
  */
 
 #include "web_ctrl_wifi_api.h"

@@ -5,7 +5,7 @@
  * @file start.h
  * @brief 应用生命周期壳层：在 app_main 上下文中顺序执行 init → run（均允许为 NULL）。
  *       `app_entry` 为本工程默认路径：板级与按键/灯效见 start.c，LCD/SD/IMU 等业务任务见 main.c。
- *       约定说明见 doc/application_architecture.md。
+ *       约定说明见 doc/embedded_coding_standard.md §1.1。
  */
 
 #include "type.h"

@@ -22,7 +22,7 @@ typedef enum {
     VOTE_SPOILED_IRREGULAR,
 } vote_spoiled_type_e;
 
-/** 投票时段内的交互 Phase（扁平 Phase 模型，见 doc/adr/0001）。 */
+/** 投票时段内的交互 Phase（扁平 Phase 模型，与 Web `phase` 字段一致）。 */
 typedef enum {
     VOTE_INTERACTION_NONE = 0,
     VOTE_INTERACTION_SELECTING,
@@ -42,7 +42,7 @@ void vote_status_push_event(const char *time_hms, const char *text);
 /** 重置票数与事件（管理员重置时调用）。 */
 void vote_status_reset_counts(void);
 
-/** Vote Reset 完成后：徽章显示 Idle，日程仍按时钟判断（见 CONTEXT.md）。 */
+/** Vote Reset 完成后：徽章显示 Idle，日程仍按时钟判断。 */
 void vote_status_on_vote_reset(void);
 
 /** Vote Reset 后是否仍显示 Idle 徽章（不影响红外/日程 voting 判定）。 */

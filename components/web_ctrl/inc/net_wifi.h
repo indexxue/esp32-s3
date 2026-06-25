@@ -1,6 +1,6 @@
 /**
  * @file net_wifi.h
- * @brief Wi‑Fi 与 TCP/IP 基座：SoftAP / STA 启动与停止（见 `doc/web_control_http_server_plan.md` 阶段 1）。
+ * @brief Wi‑Fi 与 TCP/IP 基座：SoftAP / STA 启动与停止。
  *
  * @note 调用方须已执行 `nvs_flash_init()`（本仓库通常在 `nvs_init` / 板级初始化之后）。
  */

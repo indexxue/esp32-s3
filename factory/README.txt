@@ -20,4 +20,4 @@
 
   powershell -ExecutionPolicy Bypass -File factory/flash_dual_slot.example.ps1 -Port COM3
 
-在 `main.c` 中增加你的厂测任务或调用；`factory.c` 已包含与量产类似的板级初始化、按键、灯效与 USB 厂测命令（`boot_a` / `boot_b` / `boot_q` 等）。说明见 `doc/factory_project.md`。
+在 `main.c` 中增加你的厂测任务或调用；`factory.c` 已包含与量产类似的板级初始化、按键、灯效与 USB 厂测命令（`boot_a` / `boot_b` / `boot_q` 等）。双槽说明见 `doc/partition_switch_development_plan.md`。

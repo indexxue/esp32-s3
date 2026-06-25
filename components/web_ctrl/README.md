@@ -1,6 +1,6 @@
 # web_ctrl 组件说明
 
-本目录为 ESP-IDF 自定义组件 **`web_ctrl`**，对应仓库文档 [`doc/web_control_http_server_plan.md`](../../doc/web_control_http_server_plan.md) 中的 **阶段 1～4**，以及 [`doc/softap_web_wifi_provisioning_plan.md`](../../doc/softap_web_wifi_provisioning_plan.md) 中的 **SoftAP 网页配网（REST + `/provision`）**。
+本目录为 ESP-IDF 自定义组件 **`web_ctrl`**，提供 SoftAP / STA 基座、HTTP 服务、`POST /api/cmd` 与 SoftAP 网页配网（REST + `/provision`）。
 
 ---
 
@@ -48,7 +48,7 @@
 | **生命周期** | `web_ctrl_start` / `web_ctrl_stop`；**`nvs_flash_init`** 须在之前完成（本工程 `nvs_init` 之后即可）。 |
 | **可选自动启动** | Kconfig **`WEB_CTRL_AUTO_START`**：`project/main/start.c` 在 **`BoardInit` 成功之后** 调用 `web_ctrl_start()`（内部 **`web_ctrl_config_merge_nvs`** 已包含 STA 字段）。 |
 
-### 2.1 SoftAP 网页配网（`doc/softap_web_wifi_provisioning_plan.md`）
+### 2.1 SoftAP 网页配网
 
 | 能力 | 说明 |
 |------|------|
@@ -112,9 +112,9 @@ Linux / macOS 将行续符 `^` 换为 `\`。
 ## 5. 尚未在本组件内完全覆盖的内容（见总计划）
 
 - **阶段 4 余量**：正式 UI、多指令面板、与 **灯效 / LCD / SD** 交错负载压测与问题闭环。  
-- **阶段 5**：`CONFIG_ESP_HTTP_SERVER_*` 调优、**`doc/compile_flash_erase_monitor.md`** 等文档中的「Web 控制」小节、API Token / HTTPS / 限流等。
+- **阶段 5**：`CONFIG_ESP_HTTP_SERVER_*` 调优、根目录 README「Web 控制」小节、API Token / HTTPS / 限流等。
 
-以上仍按 [`doc/web_control_http_server_plan.md`](../../doc/web_control_http_server_plan.md) 迭代即可。
+以上迭代以本 README 与 [`doc/embedded_coding_standard.md`](../../doc/embedded_coding_standard.md) 为准。
 
 ---
 
