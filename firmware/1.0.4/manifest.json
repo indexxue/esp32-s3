@@ -23,12 +23,48 @@
         "image": "project_1.0.4_20260625.bin",
         "note": "Upload this file at http://<device>/ota then Apply & Reboot"
       }
+    },
+    "ble_demo": {
+      "build_date": "20260625",
+      "built_at_utc": "2026-06-25T09:07:57Z",
+      "artifacts": [
+        {
+          "file": "ble_demo_1.0.4_20260625.bin",
+          "size": 692880,
+          "role": "app"
+        },
+        {
+          "file": "ble_demo_1.0.4_20260625.hex",
+          "size": 1905608,
+          "role": "app",
+          "format": "intel_hex",
+          "flash_offset": "0x30000"
+        }
+      ]
+    },
+    "ballot_guard": {
+      "build_date": "20260625",
+      "built_at_utc": "2026-06-25T09:09:36Z",
+      "artifacts": [
+        {
+          "file": "ballot_guard_1.0.4_20260625.bin",
+          "size": 1094112,
+          "role": "app"
+        },
+        {
+          "file": "ballot_guard_1.0.4_20260625.hex",
+          "size": 3009092,
+          "role": "app",
+          "format": "intel_hex",
+          "flash_offset": "0x30000"
+        }
+      ]
     }
   },
   "target": "esp32s3",
-  "git_commit": "505b4e5f",
+  "git_commit": "b64ee957",
   "naming": {
     "pattern": "{product}_{version}_{build_date}.{ext}",
-    "example": "project_1.0.4_20260625.bin"
+    "example": "ballot_guard_1.0.4_20260625.bin"
   }
 }

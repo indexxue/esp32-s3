@@ -23,3 +23,13 @@ project/managed_components/
 
 # PyInstaller: LCD 图转工具 Windows 打包中间目录
 tools/build_pyinstaller/
+
+# Local debug / release logs
+project/cmake_out.txt
+project/cmake_reconf.txt
+project/cmake_repro.txt
+project/release_log.txt
+
+# Python cache
+__pycache__/
+*.pyc
