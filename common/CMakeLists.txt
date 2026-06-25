@@ -8,12 +8,12 @@ idf_component_register(
         "src/device_profile.c"
         "src/sdcard.c"
         "src/nvs.c"
-        "src/boot_slot.c"
-        "src/ota.c"
+        "ota/src/boot_slot.c"
+        "ota/src/ota.c"
         "src/battery.c"
         "src/buzzer.c"
         "src/cmd.c"
-    INCLUDE_DIRS "inc"
+    INCLUDE_DIRS "inc" "ota/inc"
     REQUIRES log bsp_driver cbb freertos fatfs vfs esp_driver_sdmmc esp_timer sdmmc nvs_flash app_update
 )
 

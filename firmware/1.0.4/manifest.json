@@ -2,28 +2,6 @@
   "schema": 2,
   "version": "1.0.4",
   "products": {
-    "project": {
-      "build_date": "20260625",
-      "built_at_utc": "2026-06-25T08:50:30Z",
-      "artifacts": [
-        {
-          "file": "project_1.0.4_20260625.bin",
-          "size": 1163632,
-          "role": "app"
-        },
-        {
-          "file": "project_1.0.4_20260625.hex",
-          "size": 3200288,
-          "role": "app",
-          "format": "intel_hex",
-          "flash_offset": "0x30000"
-        }
-      ],
-      "ota": {
-        "image": "project_1.0.4_20260625.bin",
-        "note": "Upload this file at http://<device>/ota then Apply & Reboot"
-      }
-    },
     "ble_demo": {
       "build_date": "20260625",
       "built_at_utc": "2026-06-25T09:07:57Z",
@@ -59,12 +37,34 @@
           "flash_offset": "0x30000"
         }
       ]
+    },
+    "project": {
+      "build_date": "20260625",
+      "built_at_utc": "2026-06-25T09:35:51Z",
+      "artifacts": [
+        {
+          "file": "project_1.0.4_20260625.bin",
+          "size": 1163632,
+          "role": "app"
+        },
+        {
+          "file": "project_1.0.4_20260625.hex",
+          "size": 3200288,
+          "role": "app",
+          "format": "intel_hex",
+          "flash_offset": "0x30000"
+        }
+      ],
+      "ota": {
+        "image": "project_1.0.4_20260625.bin",
+        "note": "Upload this file at http://<device>/ota then Apply & Reboot"
+      }
     }
   },
   "target": "esp32s3",
-  "git_commit": "b64ee957",
+  "git_commit": "8b78e80e",
   "naming": {
     "pattern": "{product}_{version}_{build_date}.{ext}",
-    "example": "ballot_guard_1.0.4_20260625.bin"
+    "example": "project_1.0.4_20260625.bin"
   }
 }
