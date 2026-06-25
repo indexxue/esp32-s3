@@ -142,7 +142,6 @@ static void button_gpio_init(void)
 
 static void button_config(void)
 {
-    const device_product_profile_t *product = device_profile_product();
     uint8_t n = device_profile_button_count();
 
     if (n > BUTTON_MAX_NUM) {

@@ -22,7 +22,7 @@ typedef enum {
     VOTE_SPOILED_IRREGULAR,
 } vote_spoiled_type_e;
 
-/** 投票时段内的交互 Phase（扁平 Phase 模型，见 docs/adr/0001）。 */
+/** 投票时段内的交互 Phase（扁平 Phase 模型，见 doc/adr/0001）。 */
 typedef enum {
     VOTE_INTERACTION_NONE = 0,
     VOTE_INTERACTION_SELECTING,

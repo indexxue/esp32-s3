@@ -83,11 +83,6 @@ static void draw_gb12_glyph(st7789_t *lcd,
     st7789_end_write(lcd);
 }
 
-static bool is_gb2312_lead(uint8_t b)
-{
-    return (b >= 0xA1U && b <= 0xF7U);
-}
-
 uint16_t lcd_font_text_width(const char *text, uint8_t sizey)
 {
     const uint8_t *p = (const uint8_t *)text;

@@ -5,7 +5,7 @@
 **更新**：2026-06-21  
 
 > 本文是 **LCD 菜单控制** 与 **产品运行逻辑** 的合一说明，以当前源码为准，并标注与目标产品行为的差异。  
-> 像素级 UI 见 `tmp/ballot_guard_LCD菜单UI设计.md`；评审稿见 `doc/ballot_guard_lcd_menu_control_logic.md`；GPIO 与外设见 [`ballot_guard_product_usage.md`](./ballot_guard_product_usage.md)。
+> 像素级 UI 见 `tmp/ballot_guard_LCD菜单UI设计.md`；GPIO 与外设见 [`ballot_guard_product_usage.md`](./ballot_guard_product_usage.md)。
 
 ---
 
@@ -468,8 +468,8 @@ Wi‑Fi 凭据仍走 `web_ctrl` 既有 NVS 键，与投票命名空间分离。
 | 文档 | 说明 |
 |:---|:---|
 | [`ballot_guard_product_usage.md`](./ballot_guard_product_usage.md) | GPIO、RGB 目标、Web 字段 |
-| [`ballot_guard_lcd_menu_control_logic.md`](./ballot_guard_lcd_menu_control_logic.md) | 评审稿（设计意图，部分按键与本文不同） |
 | [`ballot_guard_implementation_status.md`](./ballot_guard_implementation_status.md) | 实现进度跟踪 |
+| [`adr/0001-flat-voting-phase-model.md`](./adr/0001-flat-voting-phase-model.md) | 扁平 Phase 模型 ADR |
 | `tmp/ballot_guard_LCD菜单UI设计.md` | 像素级 mockup |
 
 ---

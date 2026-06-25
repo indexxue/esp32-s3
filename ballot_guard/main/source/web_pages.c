@@ -26,46 +26,6 @@ extern const char index_html_end[] asm("_binary_index_html_end");
 #define VOTE_SETTINGS_JSON_BUF (512U)
 #define VOTE_SETTINGS_POST_BUF (256U)
 
-static bool json_extract_quoted(const char *body, const char *key, char *out, size_t out_cap)
-{
-    const char *p;
-    const char *start;
-    const char *end;
-    size_t len;
-
-    if (body == NULL || key == NULL || out == NULL || out_cap == 0U) {
-        return false;
-    }
-
-    p = strstr(body, key);
-    if (p == NULL) {
-        return false;
-    }
-    p = strchr(p, ':');
-    if (p == NULL) {
-        return false;
-    }
-    p++;
-    while (*p == ' ' || *p == '\t') {
-        p++;
-    }
-    if (*p != '"') {
-        return false;
-    }
-    start = p + 1;
-    end   = strchr(start, '"');
-    if (end == NULL) {
-        return false;
-    }
-    len = (size_t)(end - start);
-    if (len + 1U > out_cap) {
-        return false;
-    }
-    memcpy(out, start, len);
-    out[len] = '\0';
-    return true;
-}
-
 static bool json_extract_int(const char *body, const char *key, int *out)
 {
     const char *p;

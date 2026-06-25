@@ -50,7 +50,7 @@
 ## 1.5 与专项文档的关系
 
 - 工程从零搭建与阶段验收：[`how_to_create_custom_project.md`](how_to_create_custom_project.md)  
-- 分层演进与计划：[`common_module_development_framework.md`](common_module_development_framework.md)
+- 应用分层与任务约定：[`application_architecture.md`](application_architecture.md)
 
 ---
 

@@ -531,8 +531,8 @@ bool net_wifi_softap_peer_ipv4_on_ap_subnet(uint32_t addr_nbo)
     if (esp_netif_get_ip_info(s_ap_netif, &info) != ESP_OK) {
         return false;
     }
-    ap_h   = ip4_addr_get_u32((const ip4_addr_t *)&info.ip);
-    nm_h   = ip4_addr_get_u32((const ip4_addr_t *)&info.netmask);
+    ap_h   = ntohl(info.ip.addr);
+    nm_h   = ntohl(info.netmask.addr);
     peer_h  = ntohl(addr_nbo);
     if (nm_h == 0U) {
         return false;
