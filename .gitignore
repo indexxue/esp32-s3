@@ -7,12 +7,15 @@ build/
 project/build/
 factory/build/
 ballot_guard/build/
+ble_demo/build/
 project/sdkconfig
 factory/sdkconfig
 ballot_guard/sdkconfig
+ble_demo/sdkconfig
 project/sdkconfig.old
 factory/sdkconfig.old
 ballot_guard/sdkconfig.old
+ble_demo/sdkconfig.old
 
 # Component manager (if used)
 project/dependencies.lock
