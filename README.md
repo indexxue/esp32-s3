@@ -1,162 +1,181 @@
 # ESP32-S3 项目
 
-本仓库仅跟踪源代码。本地的 ESP-IDF 工具链与构建产物不会提交到版本库。
+本仓库为 ESP32-S3（N16R8）固件 monorepo，包含量产应用、工厂镜像与示例工程。仅跟踪源代码；本地 ESP-IDF 工具链（`Espressif/`）与构建产物默认不提交。
+
+| 工程 | 目录 | 说明 |
+|------|------|------|
+| `project` | `project/` | 量产主应用（SoftAP、Web 维护、OTA） |
+| `factory` | `factory/` | 工厂/维护镜像（可烧录槽位 B） |
+| `ble_demo` | `ble_demo/` | BLE GATT 示例 |
+| `ballot_guard` | `ballot_guard/` | 选票监管应用 |
+
+共享代码：`common/`（业务逻辑）、`bsp_driver/`（板级）、`cbb/`（器件驱动，**Git 子模块**）、`components/`（如 `web_ctrl`）。
 
 ## 环境要求
 
 - Windows 10/11
-- Git for Windows（零安装引导流程需要）
+- Git for Windows
 
 ## 首次配置
 
-在仓库根目录执行：
-
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_env.ps1
-```
-
-克隆后需初始化 **Git 子模块**（`cbb` 器件驱动库）：
-
-```powershell
 git submodule update --init --recursive
 ```
 
-配置脚本支持「零安装」流程：
+配置脚本会克隆 ESP-IDF **v5.5.4** 到 `.\Espressif\frameworks\esp-idf-v5.5.4` 并运行 `install.bat`。
 
-- 若未检测到 ESP-IDF，会自动克隆 `v5.5.4` 到 `.\Espressif\frameworks\esp-idf-v5.5.4`
-- 随后运行 `install.bat` 安装或更新工具链依赖
-
-然后**新开**一个终端，加载 ESP-IDF 环境：
+也可手动加载环境（传统方式）：
 
 ```cmd
 cmd /k ".\Espressif\frameworks\esp-idf-v5.5.4\export.bat"
 ```
 
+## 推荐命令入口：`idf.cmd` / `idf.ps1`
+
+仓库根目录提供封装脚本，**自动配置 ESP-IDF、Ninja/CMake 路径**，并加载 `release` / `release-all` 扩展（`scripts/idf_py_actions/`）。
+
+| 终端 | 用法 |
+|------|------|
+| **cmd.exe** | `idf build`、`idf -Project ble_demo build`（用 `idf.cmd`，勿直接双击 `idf.ps1`） |
+| **PowerShell** | `.\idf.ps1 build` |
+
+等价的 PowerShell 脚本：`scripts/build.ps1`、`scripts/release.ps1`。
+
+支持的 `-Project`：`project`（默认）、`ble_demo`、`factory`、`ballot_guard`。
+
 ## 构建
 
-建议在仓库根目录一键构建：
-
 ```powershell
-# cmd.exe（推荐 idf.cmd，勿直接运行 idf.ps1）
+# 默认构建 project
 idf build
+
+# 其他工程
 idf -Project ble_demo build
+idf -Project factory build
 
-# PowerShell
-.\idf.ps1 build
-.\idf.ps1 -Project ble_demo build
-
-powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Project ble_demo
+# 或通过 build.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Project project
 ```
 
-可选操作：
+维护操作：
 
 ```powershell
-.\idf.ps1 reconfigure
-powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Action reconfigure
+idf reconfigure
+idf -Project project fullclean
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Action clean
-powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Action fullclean
 ```
 
-`idf.ps1` / `scripts/build.ps1` 会自动配置 ESP-IDF 环境，并通过 `IDF_EXTRA_ACTIONS_PATH` 加载 `release` 等扩展（无需各工程 `idf_ext.py`）。
-
-传统 ESP-IDF 命令（须先 `export.ps1`，且手动设置 `IDF_EXTRA_ACTIONS_PATH=scripts/idf_py_actions` 才能用 `release`）：
+传统方式（须先 `export.bat`，且手动设置 `IDF_EXTRA_ACTIONS_PATH=scripts/idf_py_actions` 才能用 `release`）：
 
 ```cmd
 idf.py -C project build
 ```
 
-若当前工作目录已是 `project`，可使用：
+## 版本号（`PROJECT_VER`）
 
-```cmd
-idf.py build
+版本在 **`esp_app_desc.version`**、**NVS `appver`**、**release 产物文件名** 之间保持同源（见 `common/cmake/git_project_version.cmake`）。
+
+| 场景 | `PROJECT_VER` 来源 |
+|------|-------------------|
+| `idf build` | 当前 commit 上的 **git semver tag**（`v1.0.4` / `1.0.4`）；否则 **最近祖先 tag**；再否则 CMakeLists 默认值 |
+| `idf release <ver>` | 命令行指定；若 **低于** 仓库最高 semver tag，则**抬升到 tag 版本**并覆盖 `firmware/<tag>/` 同名产物 |
+
+示例：
+
+```powershell
+git tag -a v1.0.4 -m "release 1.0.4"
+git push origin v1.0.4          # tag 须单独推送
+idf build                       # 在 tag 所在 commit 上 → PROJECT_VER = 1.0.4
+
+idf -Project project release 1.0.5   # 高于 tag → 正常发布 1.0.5
+idf -Project project release 1.0.2   # 低于 tag → 实际为 1.0.4，覆盖旧产物
+```
+
+设备启动后 `nvs_init()` 会将 NVS 中的 `appver` / `fver` 与固件内 `PROJECT_VER` 同步。
+
+## 发布版本（release）
+
+```powershell
+# 单工程
+idf -Project project release 1.0.4
+
+# 多工程同一版本（逐个追加到 firmware/1.0.4/）
+idf -Project project release 1.0.4
+idf -Project ble_demo release 1.0.4
+
+# 一次 release 全部工程
+idf -Project project release-all 1.0.4
+powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.0.4 -AllProjects
+```
+
+产物目录：`firmware/<版本>/`，含 `{product}_{版本}_{编译日期}.bin` / `.hex`、`manifest.json`、`README.txt`。详见 [`firmware/README.md`](firmware/README.md)。
+
+可选参数：`--flash-bundle`（bootloader / 分区表 / flash 脚本）、`--debug`（elf / map）。
+
+**release 编译失败（`Ninja ()`、CMake 0.0s）**：多为 `project/build` 缓存损坏，在 cmd 中执行：
+
+```bat
+clean_build.cmd
+idf -Project project release 1.0.4
 ```
 
 ## 烧录固件（双 OTA 槽位）
 
-本仓库使用**自定义分区表**（`flash_partition/partitions_16m_n16r8.csv`）：**`app_a` / `ota_0` = 槽位 A**，**`app_b` / `ota_1` = 槽位 B**，另有 `otadata` 用于启动选择。详见 `flash_partition/partitions_16m_n16r8.md` 与 `doc/partition_switch_development_plan.md`。
+自定义分区表：`flash_partition/partitions_16m_n16r8.csv` — **`app_a` / `ota_0` = 槽位 A**，**`app_b` / `ota_1` = 槽位 B**。详见 `flash_partition/partitions_16m_n16r8.md` 与 `doc/partition_switch_development_plan.md`。
 
-### 默认 `idf.py flash` 始终写入槽位 **A**（`app_a`）
+### 默认 `flash` 写入槽位 A
 
-无论是量产应用（`project/`）还是工厂应用（`factory/`），常规 ESP-IDF 烧录都会写入分区表中的**第一个**应用分区，即 **`app_a`（槽位 A）**。
+| 命令 | 写入位置 |
+|------|----------|
+| `idf -Project project -p PORT flash` | 槽位 A（`project.bin` → `app_a`） |
+| `idf -Project factory -p PORT flash` | 仍是槽位 A（覆盖同一槽） |
 
-| 命令 | 应用镜像写入位置 |
-|--------|----------------------------------|
-| `idf.py -C project -p PORT flash` | **槽位 A**（`project/build/project.bin` → `app_a`） |
-| `idf.py -C factory -p PORT flash` | **仍是槽位 A**（`factory/build/factory.bin` → `app_a`） |
+### 烧录槽位 A（量产）
 
-**注意：**`idf.py -C factory flash` **不会**烧录到槽位 B，它会覆盖与量产工程相同的**槽位 A** 镜像。若你只想更新**槽位 B**，请使用下文脚本。
+1. `idf build`（或 `idf -Project project build`）
+2. `idf -Project project -p PORT flash`（可加 `monitor`）
 
-### 烧录槽位 **A**（量产应用）
+### 烧录槽位 B（工厂镜像，不改动 A）
 
-1. 构建：`.\scripts\build.ps1`
-2. 烧录：`idf.py -C project -p PORT flash`（可选：末尾加 `monitor` 监视串口）
+1. `idf -Project factory build`
+2. `powershell -ExecutionPolicy Bypass -File .\factory\flash_app_b.example.ps1 -Port PORT`
 
-### 烧录槽位 **B**（工厂应用，不改动 A）
+### 整片烧录（A + B）
 
-1. 构建工厂镜像：`powershell -ExecutionPolicy Bypass -File .\scripts\build_factory.ps1`
-2. **仅**将 `app_b` 烧录到偏移 `0x00810000`：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\factory\flash_app_b.example.ps1 -Port PORT
-```
-
-将 `PORT` 替换为你的 COM 口（例如 `COM13`）。脚本使用仓库内的 IDF Python 环境（`python -m esptool`）；若缺少该 Python，请先运行 `.\scripts\setup_env.ps1`。
-
-### 一步烧录：bootloader + 分区表 + 槽位 A + 槽位 B
-
-在**同时**构建好 `project` 与 `factory` 之后：
+构建好 `project` 与 `factory` 后：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\factory\flash_dual_slot.example.ps1 -Port PORT
 ```
 
-对**已整片擦除**的芯片，建议先执行一次 `idf.py -C project -p PORT flash`（使 bootloader、分区表、`otadata` 等一致），再用 `flash_app_b.example.ps1` 写入槽位 B。更多说明见 `factory/README.txt` 与 `doc/partition_switch_development_plan.md`。
+新芯片建议先 `idf -Project project -p PORT flash`，再写槽位 B。更多见 `factory/README.txt`。
 
-### 运行时：在 A / B 之间切换下次启动
+### 运行时切换启动槽
 
-固件中若已启用 USB 串口命令行，可使用 **`boot_a`**、**`boot_b`**、**`boot_q`**（见 `common/src/cmd.c`）。实现基于 `esp_ota_set_boot_partition()`（`common/src/boot_slot.c`）。
+串口命令 **`boot_a`**、**`boot_b`**、**`boot_q`**（`common/src/cmd.c`，基于 `esp_ota_set_boot_partition()`）。
 
-### SoftAP 本地 OTA（维护页）
+## SoftAP 本地 OTA
 
-量产工程 `project/` 已启用 **`CONFIG_WEB_CTRL_OTA`**（见 `doc/ota_development_plan.md`）。连接设备 SoftAP 后：
+量产工程 `project/` 已启用 **`CONFIG_WEB_CTRL_OTA`**（设计见 [`doc/ota_development_plan.md`](doc/ota_development_plan.md)）。连接设备 SoftAP 后：
 
-1. 浏览器打开 **`http://192.168.4.1/ota`** — 选择 `project.bin` 上传，完成后点 **Apply & Reboot**
-2. 或使用 API：`GET /api/ota/status`、`POST /api/ota/upload`（二进制 body + `Content-Length`）、`POST /api/ota/apply`
+1. 浏览器 **`http://192.168.4.1/ota`** — 上传 `project_*.bin`，点 **Apply & Reboot**
+2. API：`GET /api/ota/status`、`POST /api/ota/upload`、`POST /api/ota/apply`
 
-**注意：** 新固件版本须 **高于** 当前运行版本（`PROJECT_VER` / `esp_app_desc`）；上传写入对侧槽，确认前仍从旧槽启动。Bootloader rollback 已启用，新固件启动成功后自动 `mark_app_valid`。
+**规则：** 新固件版本须 **严格高于** 当前运行版本；镜像写入对侧 OTA 槽，Bootloader rollback 在新固件确认后 `mark_app_valid`。测试时可用 `idf -Project project release x.y.z` 生成 OTA 包。
 
-测试 OTA 时：打 **git tag**（如 `v1.0.3`）后 `idf build` 自动使用该版本；`idf -Project project release x.y.z` 不会低于最高 tag（详见 [`firmware/README.md`](firmware/README.md)）。
-
-### 发布版本（release）
-
-```powershell
-# 多工程同一版本：逐个追加
-idf -Project project release 1.2.3
-idf -Project ble_demo release 1.2.3
-
-# 或一次 release 全部
-idf -Project project release-all 1.2.3
-powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 1.2.3 -AllProjects
-```
-
-产物：`firmware/<版本>/{product}_{版本}_{编译日期}.bin` + `.hex` + `manifest.json`（见 [`firmware/README.md`](firmware/README.md)）。
-
-## 校验环境脚本
+## 校验环境
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\verify_env.ps1
-```
-
-可选完整检查：
-
-```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\verify_env.ps1 -RunInstall -RequireIdfInPath -RunBuildTest
 ```
 
-## 说明
+## 仓库说明
 
-- `Espressif/` 在 Git 中刻意忽略，各开发者本地自行安装工具。
-- **`cbb/`** 为 Git 子模块（`git@github.com:indexxue/cbb.git`），克隆主仓库后执行 `git submodule update --init --recursive`。
-- 若使用其他 ESP-IDF 版本或自定义安装路径，请同步修改 `scripts/setup_env.ps1`。
-- 可复用的自定义组件放在 `libraries/`（例如 `libraries/my_component/...`）或顶层组件目录（例如 `common/...`）。
+- `Espressif/` 在 Git 中忽略，各开发者本地通过 `setup_env.ps1` 安装。
+- `cbb/` 子模块：`git@github.com:indexxue/cbb.git`，克隆后须 `git submodule update --init --recursive`。
+- `firmware/` 提交 `manifest.json` / `README.txt`；`.bin` / `.hex` 等大文件见 `firmware/.gitignore`。
+- Git **tag 不会随 `git push` 自动上传**，须 `git push origin v1.0.4`；GitHub **Releases** 页需在网页或 `gh release create` 单独发布。
+- 自定义 ESP-IDF 路径或非 v5.5.4 版本时，请同步修改 `scripts/setup_env.ps1` / `scripts/IdfEnv.ps1`。
+- 编码与分层规范见 `doc/embedded_coding_standard.md`；Cursor skill：`.cursor/skills/esp32-s3-coding-standard/`。
