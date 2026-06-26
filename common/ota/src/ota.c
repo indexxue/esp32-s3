@@ -14,6 +14,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
+#include "mbedtls/sha256.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -28,6 +30,11 @@ static size_t              s_expected;
 static size_t              s_written;
 static ota_session_state_e s_state;
 static char                s_pending_version[sizeof(((esp_app_desc_t *)0)->version)];
+static mbedtls_sha256_context s_sha256;
+static bool                s_sha256_active;
+static uint8_t             s_expected_sha256[32];
+static bool                s_expect_sha256;
+static bool                s_cloud_pull;
 
 static status_t ota_lock(void)
 {
@@ -56,6 +63,9 @@ static void ota_reset_session(void)
     s_written    = 0U;
     s_state      = OTA_SESSION_IDLE;
     s_pending_version[0] = '\0';
+    s_sha256_active      = false;
+    s_expect_sha256      = false;
+    s_cloud_pull         = false;
 }
 
 static bool ota_find_app_desc(const uint8_t *data, size_t len, esp_app_desc_t *out)
@@ -96,7 +106,7 @@ static bool ota_parse_version_triplet(const char *ver, int *maj, int *min, int *
     return true;
 }
 
-static bool ota_version_is_greater(const char *new_ver, const char *cur_ver)
+bool ota_version_is_greater(const char *new_ver, const char *cur_ver)
 {
     int nma = 0;
     int nmi = 0;
@@ -118,6 +128,73 @@ static bool ota_version_is_greater(const char *new_ver, const char *cur_ver)
         return nmi > cmi;
     }
     return npa > cpa;
+}
+
+static bool ota_hex_nibble(char c, uint8_t *out)
+{
+    if ((c >= '0') && (c <= '9')) {
+        *out = (uint8_t)(c - '0');
+        return true;
+    }
+    if ((c >= 'a') && (c <= 'f')) {
+        *out = (uint8_t)(c - 'a' + 10);
+        return true;
+    }
+    if ((c >= 'A') && (c <= 'F')) {
+        *out = (uint8_t)(c - 'A' + 10);
+        return true;
+    }
+    return false;
+}
+
+static bool ota_parse_sha256_hex(const char *hex, uint8_t out[32])
+{
+    size_t i;
+
+    if (hex == NULL) {
+        return false;
+    }
+    if (strlen(hex) != 64U) {
+        return false;
+    }
+    for (i = 0U; i < 32U; i++) {
+        uint8_t hi;
+        uint8_t lo;
+
+        if (!ota_hex_nibble(hex[i * 2U], &hi) || !ota_hex_nibble(hex[(i * 2U) + 1U], &lo)) {
+            return false;
+        }
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return true;
+}
+
+static void ota_sha256_update(const uint8_t *data, size_t len)
+{
+    if (!s_sha256_active || (data == NULL) || (len == 0U)) {
+        return;
+    }
+    (void)mbedtls_sha256_update(&s_sha256, data, len);
+}
+
+static status_t ota_sha256_verify(void)
+{
+    uint8_t digest[32];
+
+    if (!s_expect_sha256) {
+        return ESP_OK;
+    }
+    if (!s_sha256_active) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    (void)mbedtls_sha256_finish(&s_sha256, digest);
+    s_sha256_active = false;
+    if (memcmp(digest, s_expected_sha256, sizeof(digest)) != 0) {
+        ESP_LOGW(TAG, "SHA256 mismatch");
+        return ESP_ERR_INVALID_CRC;
+    }
+    ESP_LOGI(TAG, "SHA256 verified");
+    return ESP_OK;
 }
 
 static void ota_copy_label(char *dst, size_t cap, const char *label)
@@ -170,6 +247,9 @@ status_t ota_get_status(ota_status_t *out)
     }
     (void)memset(out, 0, sizeof(*out));
     out->state         = s_state;
+    if (s_cloud_pull && (s_state == OTA_SESSION_WRITING)) {
+        out->state = OTA_SESSION_PULLING;
+    }
     out->expected_size = s_expected;
     out->written       = s_written;
     (void)snprintf(out->pending_version, sizeof(out->pending_version), "%s", s_pending_version);
@@ -248,6 +328,10 @@ status_t ota_upload_begin(size_t image_size, const uint8_t *header_peek, size_t 
     s_written  = header_len;
     s_state    = OTA_SESSION_WRITING;
     (void)snprintf(s_pending_version, sizeof(s_pending_version), "%s", new_desc.version);
+    (void)mbedtls_sha256_init(&s_sha256);
+    (void)mbedtls_sha256_starts(&s_sha256, 0);
+    s_sha256_active = true;
+    ota_sha256_update(header_peek, header_len);
     ESP_LOGI(TAG, "begin -> %s size=%u ver=%s", update->label, (unsigned)image_size, new_desc.version);
     ota_unlock();
     return ESP_OK;
@@ -285,6 +369,7 @@ status_t ota_upload_write(const uint8_t *data, size_t len)
     }
 
     s_written += len;
+    ota_sha256_update(data, len);
     ota_unlock();
     return ESP_OK;
 }
@@ -312,6 +397,13 @@ status_t ota_upload_end(void)
     s_ota_handle = 0;
     if (st != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(st));
+        ota_reset_session();
+        ota_unlock();
+        return st;
+    }
+
+    st = ota_sha256_verify();
+    if (st != ESP_OK) {
         ota_reset_session();
         ota_unlock();
         return st;
@@ -412,4 +504,56 @@ status_t ota_confirm_running_image(void)
 
     ESP_LOGI(TAG, "running image on %s marked valid", run->label);
     return ESP_OK;
+}
+
+status_t ota_upload_set_expected_sha256_hex(const char *sha256_hex)
+{
+    status_t st;
+
+    st = ota_lock();
+    if (st != ESP_OK) {
+        return st;
+    }
+    if (s_state != OTA_SESSION_IDLE) {
+        ota_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_expect_sha256 = false;
+    if ((sha256_hex != NULL) && (sha256_hex[0] != '\0')) {
+        if (!ota_parse_sha256_hex(sha256_hex, s_expected_sha256)) {
+            ota_unlock();
+            return ESP_ERR_INVALID_ARG;
+        }
+        s_expect_sha256 = true;
+    }
+    ota_unlock();
+    return ESP_OK;
+}
+
+status_t ota_session_begin_cloud_pull(void)
+{
+    status_t st;
+
+    st = ota_lock();
+    if (st != ESP_OK) {
+        return st;
+    }
+    if (s_state != OTA_SESSION_IDLE) {
+        if (s_state == OTA_SESSION_WRITING) {
+            (void)esp_ota_abort(s_ota_handle);
+        }
+        ota_reset_session();
+    }
+    s_cloud_pull = true;
+    ota_unlock();
+    return ESP_OK;
+}
+
+void ota_session_end_cloud_pull(void)
+{
+    if (ota_lock() != ESP_OK) {
+        return;
+    }
+    s_cloud_pull = false;
+    ota_unlock();
 }

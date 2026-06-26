@@ -10,11 +10,13 @@ idf_component_register(
         "src/nvs.c"
         "ota/src/boot_slot.c"
         "ota/src/ota.c"
+        "ota/src/ota_manifest.c"
+        "ota/src/ota_pull.c"
         "src/battery.c"
         "src/buzzer.c"
         "src/cmd.c"
     INCLUDE_DIRS "inc" "ota/inc"
-    REQUIRES log bsp_driver cbb freertos fatfs vfs esp_driver_sdmmc esp_timer sdmmc nvs_flash app_update
+    REQUIRES log bsp_driver cbb freertos fatfs vfs esp_driver_sdmmc esp_timer sdmmc nvs_flash app_update esp_http_client mbedtls
 )
 
 # 每次构建刷新 nvs.c 编译时间戳，使 __DATE__ 构建日期与本次编译一致

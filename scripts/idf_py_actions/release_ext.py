@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -303,7 +304,14 @@ def _copy_artifact(
     if not os.path.isfile(src):
         return None
     shutil.copy2(src, dst)
-    return {'file': out_name, 'size': os.path.getsize(dst)}
+    entry: Dict[str, Any] = {'file': out_name, 'size': os.path.getsize(dst)}
+    if out_name.endswith('.bin'):
+        digest = hashlib.sha256()
+        with open(dst, 'rb') as fh:
+            for chunk in iter(lambda: fh.read(65536), b''):
+                digest.update(chunk)
+        entry['sha256'] = digest.hexdigest()
+    return entry
 
 
 def _copy_first_existing(
@@ -456,10 +464,15 @@ def _product_release_entry(
         'artifacts': artifacts,
     }
     if product == 'project':
-        entry['ota'] = {
+        ota_entry: Dict[str, Any] = {
             'image': ota_image,
             'note': 'Upload this file at http://<device>/ota then Apply & Reboot',
         }
+        for art in artifacts:
+            if art.get('role') == 'app' and art.get('file') == ota_image and art.get('sha256'):
+                ota_entry['sha256'] = art['sha256']
+                break
+        entry['ota'] = ota_entry
     if flash_bundle:
         entry['flash'] = {
             'bootloader': _release_basename(product, ver, build_date, 'bootloader', 'bin'),

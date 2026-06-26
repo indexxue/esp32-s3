@@ -1,8 +1,8 @@
 # ESP32-S3 OTA 开发计划与决策记录
 
-**版本**：1.7  
+**版本**：1.9  
 **依据**：[`flash_partition/partitions_16m_n16r8.md`](../flash_partition/partitions_16m_n16r8.md)、[`doc/partition_switch_development_plan.md`](partition_switch_development_plan.md)、[`common/ota/`](../common/ota/)  
-**状态**：阶段 1（SoftAP 本地 OTA）**全部 WBS 与测试矩阵 O1–O6 实机验收通过**（2026-06-26，`run_ver` 1.0.4→1.0.5）；阶段 2（STA + HTTPS 云端拉包）**未开始**。
+**状态**：阶段 1 **O1–O6 实机验收通过**（2026-06-26）；阶段 2 **W5–W7 已完成，O7 实机验收通过**（2026-06-26，STA + 本机 HTTP manifest 拉包 **1.0.6→1.0.7**，`apply=1`）；O8–O10、W9 待办。
 
 ---
 
@@ -73,10 +73,24 @@ OTA **`apply`** 同样经 IDF OTA API 切槽，**不经过** `boot_slot_request_
 | `POST` | `/api/ota/upload` | 二进制 body（`Content-Length` 必填）；`ota_upload_begin` → 分块 `ota_upload_write` → `ota_upload_end` |
 | `POST` | `/api/ota/abort` | 放弃当前会话（S1、S5） |
 | `POST` | `/api/ota/apply` | `OTA_SESSION_READY` 时 `esp_ota_set_boot_partition` + `esp_restart()`（S2） |
+| `POST` | `/api/ota/pull` | **阶段 2**：JSON body `manifest_url`；STA 有 IPv4 时后台 HTTP(S) 拉包（见下） |
+
+### 阶段 2 HTTP API（`/api/ota/pull`）
+
+| 字段 | 说明 |
+|------|------|
+| `manifest_url` | `firmware/<ver>/manifest.json` 完整 URL（**http:// 或 https://**） |
+| `product` | 默认 `project` |
+| `apply` | `true` 时拉取成功后自动 `ota_apply` 并重启 |
+
+**前置**：设备 STA 已取得 IPv4（`net_wifi_sta_has_ipv4()`）；SoftAP 且无 STA 时返回 **503** `sta_required`。  
+**并发**：与 upload 相同，全局单会话；拉取进行中 `state=pulling`（写入阶段 `writing`，status 仍可能显示 `pulling`）。  
+**校验**：manifest `version` 须高于 `run_ver`（begin 前）；镜像 SHA256 须与 manifest 一致（`ota_upload_end` 后，O8）。  
+**完成判定**：`POST /api/ota/pull` 立即返回 `{"state":"pulling"}` 仅表示后台任务已启动；须轮询 `GET /api/ota/status` 至 `state=ready`（或 `apply=1` 后设备重启、`run_ver` 升高）。
 
 ### 会话与并发
 
-- **全局单会话**：内存状态机 `idle` / `writing` / `ready`（[`common/ota/inc/ota.h`](../common/ota/inc/ota.h)）。
+- **全局单会话**：内存状态机 `idle` / `writing` / `ready` / `pulling`（[`common/ota/inc/ota.h`](../common/ota/inc/ota.h)）。
 - **抢占策略**：新 `upload` 会先 `abort` 旧会话再 `begin`（S5）；**非**「进行中返回 503 拒绝第二路」。
 - 互斥：`ota` 内部 mutex；HTTP 层与 `web_ctrl_ota.c` 串行处理单连接上传。
 
@@ -89,7 +103,7 @@ OTA **`apply`** 同样经 IDF OTA API 切槽，**不经过** `boot_slot_request_
 | **411** | 缺少 `Content-Length` |
 | **413** | 超过 `CONFIG_WEB_CTRL_OTA_UPLOAD_MAX`（默认 8 MiB） |
 | **408** | 接收超时（触发 abort，S1） |
-| **503** | 内部 `ESP_ERR_INVALID_STATE`（少见；正常流程靠 abort 重置） |
+| **503** | 内部 `ESP_ERR_INVALID_STATE`（少见）；**pull** 时 STA 无 IPv4（`sta_required`） |
 
 实现：[`components/web_ctrl/src/web_ctrl_ota.c`](../components/web_ctrl/src/web_ctrl_ota.c)。
 
@@ -99,13 +113,16 @@ OTA **`apply`** 同样经 IDF OTA API 切槽，**不经过** `boot_slot_request_
 
 ```
 common/
-  Kconfig            # CONFIG_OTA_ROLLBACK_TEST（O5 专用，量产默认关）
-  ota/inc/ota.h      # 会话 API + ota_status_t
+  Kconfig            # CONFIG_OTA_ROLLBACK_TEST、CONFIG_OTA_HTTPS_PULL
+  ota/inc/ota.h      # 会话 API + pull + SHA256 期望
+  ota/inc/ota_manifest.h
   ota/inc/boot_slot.h
-  ota/src/ota.c      # begin/write/end/abort/apply/confirm
+  ota/src/ota.c      # begin/write/end/abort/apply/confirm + SHA256
+  ota/src/ota_manifest.c
+  ota/src/ota_pull.c # HTTPS 流式下载 → ota_upload_*
   ota/src/boot_slot.c
 components/web_ctrl/
-  src/web_ctrl_ota.c # HTTP 适配层（Kconfig WEB_CTRL_OTA）
+  src/web_ctrl_ota.c # HTTP 适配层（upload + pull）
 project/
   sdkconfig.defaults # rollback ON；ANTI_ROLLBACK / OTA_ROLLBACK_TEST 默认 OFF
   bootloader/sdkconfig.defaults
@@ -122,7 +139,7 @@ project/
 flowchart LR
   subgraph transport [Transport 适配层]
     WEB[web_ctrl_ota]
-    HTTPS["阶段2 HTTPS 客户端"]
+    PULL[ota_pull HTTP(S)]
   end
   subgraph core [ota 深模块]
     OTA[ota_upload_* / ota_apply]
@@ -131,7 +148,7 @@ flowchart LR
     EU[esp_ota_ops]
   end
   WEB --> OTA
-  HTTPS -.-> OTA
+  PULL --> OTA
   OTA --> EU
 ```
 
@@ -187,7 +204,7 @@ flowchart LR
 
 ---
 
-### 阶段 2 — STA + HTTPS 云端 OTA（未开始）
+### 阶段 2 — STA + HTTP(S) 云端 OTA（O7 已通过）
 
 #### 目标
 
@@ -195,32 +212,52 @@ flowchart LR
 - 设备端消费 [`firmware/<ver>/manifest.json`](../firmware/README.md)（schema 2）中的 **SHA256**（D4）。
 - `ballot_guard/` 启用 `CONFIG_WEB_CTRL_OTA`（D2 v1.1）。
 
-#### 待决事项（阶段 2 开工前 Grill）
+#### 已冻结决策（阶段 2 Grill）
 
-| # | 议题 | 选项 | 倾向 |
+| # | 议题 | 决策 | 日期 |
 |---|------|------|------|
-| P2-1 | 下载实现 | A) `esp_https_ota` 整体 B) HTTP(S) 流式下载 + 喂给 `ota_upload_*` | **B**（复用状态机） |
-| P2-2 | manifest 校验点 | A) begin 前仅比 version B) end 后比 SHA256 C) 两者 | **C** |
-| P2-3 | STA 写操作安全 | A) 维护 PIN B) 仅允许已配对 VLAN C) mTLS 客户端证书 | 待产品定 |
-| P2-4 | eFuse anti-rollback | 是否启用 `CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK` | 与产线烧录流程一并评估 |
-| P2-5 | 断点续传 | v2.0 是否需要 Range / 已写字节续传 | 阶段 2 可不做 |
+| P2-1 | 下载实现 | **B**：HTTP(S) 流式下载 + 喂给 `ota_upload_*` | 2026-06-26 |
+| P2-2 | manifest 校验点 | **C**：begin 前比 manifest version；end 后比 SHA256 | 2026-06-26 |
+| P2-3 | STA 写操作安全 | **暂定**：pull 须 STA 有 IPv4；upload/apply 仍沿用 SoftAP 子网限制 | 2026-06-26 |
+| P2-4 | eFuse anti-rollback | 暂不启用（与产线一并评估） | — |
+| P2-5 | 断点续传 | 阶段 2 不做 | 2026-06-26 |
 
-#### WBS 草案
+#### WBS
 
-| 任务 | 内容 | 估时 |
+| 任务 | 内容 | 状态 |
 |------|------|------|
-| **W5** | `ota`：导出可复用的 header 校验 / SHA256 钩子；HTTPS 下载 adapter（`ota_pull_from_url` 或独立 `ota_transport_https.c`） | 2～3 天 |
-| **W6** | manifest 解析（轻量 JSON 或 codegen）；与 release 脚本 schema 对齐 | 1 天 |
-| **W7** | `web_ctrl` 或后台任务：STA 触发入口（API / 定时 / NVS 配置 URL）；**非 SoftAP 安全策略**（P2-3） | 1～2 天 |
-| **W8** | 测试矩阵 O7–O10：HTTPS 拉包、篡改包拒绝、STA 权限、断网重试 | 1～2 天 |
-| **W9** | `ballot_guard` 集成 + 文档 | 0.5～1 天 |
+| **W5** | `ota`：SHA256 钩子；`ota_pull.c` HTTP(S) adapter | ✅ |
+| **W6** | `ota_manifest.c`；release 脚本写入 `sha256` | ✅ |
+| **W7** | `POST /api/ota/pull` + `/ota` 页云端区；Kconfig | ✅ |
+| **W7.1** | 联调修复：`fetch_headers` 误用、云端 UI 位置、拉包进度轮询 | ✅ 2026-06-26 |
+| **W8** | 测试矩阵 O7–O10 | O7 ✅；O8–O10 待实机 |
+| **W9** | `ballot_guard` 集成 + 文档 | 待办 |
 
 #### 阶段 2 验收要点
 
-- O7：STA 下从 manifest URL 拉取合法包 → apply → 对侧槽运行
+- O7：STA 下从 manifest URL 拉取合法包 → apply → 对侧槽运行 — **✅ 2026-06-26**（本机 HTTP `8090`，1.0.6→1.0.7）
 - O8：SHA256 不匹配 → 拒绝，`ota_abort`，旧槽不变
 - O9：拉取中断 → 同 S1
-- O10：仍满足 D6 降级拒绝、D3 rollback（在 W1.1 完成后复测 O5）
+- O10：仍满足 D6 降级拒绝、D3 rollback（阶段 1 已验 O5，阶段 2 代码变更后建议复测）
+
+#### 本机 HTTP 联调（开发/验收 O7）
+
+| 步骤 | 说明 |
+|------|------|
+| 1 | `idf -Project project release <ver>`，`<ver>` **高于** 设备 `run_ver` |
+| 2 | `cd firmware/<ver>`，`python -m http.server 8090 --bind <PC_LAN_IP>` |
+| 3 | 浏览器先验证 `http://<PC_IP>:8090/manifest.json` 返回 JSON（非 404） |
+| 4 | 设备 STA 联网；`/ota` 或 `POST /api/ota/pull`，URL 须 **`http://` 双斜杠** |
+| 5 | 轮询 status 至 `ready`，或 `apply=1` 等待重启后确认 `run_ver` |
+
+**常见坑（2026-06-26 实机）**
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| 假 `HTTP 182` | 误把 `esp_http_client_fetch_headers()` 返回值当状态码（实为 Content-Length） | 已修：改用 `esp_http_client_get_status_code()` |
+| `HTTP 404` + HTML「Access Error」 | PC 上 **8080 被其它服务占用**（如 ApplicationWebServer），Python 仅绑 `::` | 换端口（如 **8090**）+ `--bind <LAN_IP>` |
+| 页面无 manifest 输入框 | 云端 HTML 曾误嵌入 `<script>` 内 | 已修 W7.1 |
+| begin 拒绝 / 409 | manifest `version` ≤ `run_ver` | release 更高版本（如设备 1.0.6 → 托管 1.0.7） |
 
 ---
 
@@ -246,6 +283,9 @@ flowchart LR
 | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | **y** |
 | `CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK` | **关闭**（D6；勿在 menuconfig 误开） |
 | `CONFIG_OTA_ROLLBACK_TEST` | **关闭** |
+| `CONFIG_WEB_CTRL_OTA` | **y**（`project/`） |
+| `CONFIG_OTA_HTTPS_PULL` | **y**（阶段 2 云端/HTTP 拉包） |
+| `CONFIG_WEB_CTRL_OTA_CLOUD_PULL` | **y**（`/api/ota/pull` + `/ota` 云端区） |
 
 **O5 构建**（仅专项测试，测完须关回并重新 release 正常包）：
 
@@ -256,14 +296,14 @@ flowchart LR
 
 启用 `CONFIG_OTA_ROLLBACK_TEST` 后，`app_init()` 入口 `abort()`（mark_valid 之前），Bootloader 应在下一次启动回旧槽。
 
-### 阶段 2（规划）
+### 阶段 2（验收）
 
-| 编号 | 操作 | 期望 |
-|------|------|------|
-| O7 | STA + manifest URL 拉包 | 同 O1 |
-| O8 | 篡改 bin 或 SHA256 | end 或校验阶段失败，旧槽运行 |
-| O9 | HTTPS 下载中断 | 同 O2 |
-| O10 | 阶段 2 变更后 | 复测 O5；rollback 在「平台自检失败」时仍生效（阶段 1 已验 O5） |
+| 编号 | 操作 | 期望 | 状态 |
+|------|------|------|------|
+| O7 | STA + manifest URL 拉包（HTTP 本机或 HTTPS 云端） | 同 O1；manifest SHA256 + 版本校验 | ✅ 2026-06-26（1.0.6→1.0.7，`apply=1`，`ota begin → app_b`） |
+| O8 | 篡改 bin 或 SHA256 | end 或校验阶段失败，旧槽运行 | 待测 |
+| O9 | HTTP(S) 下载中断 | 同 O2 | 待测 |
+| O10 | 阶段 2 变更后 | 复测 O5；rollback 仍生效 | 待测（阶段 1 O5 已通过） |
 
 ---
 
@@ -277,11 +317,13 @@ flowchart LR
 - **范围**：仅 `project/`（D2）
 - **发布**：`idf.py release` → [`firmware/`](../firmware/README.md)
 
-### 阶段 2 — STA + HTTPS 云端 OTA
+### 阶段 2 — STA + HTTP(S) 云端 OTA（O7 ✅）
 
-- SHA256 + manifest（D4）；下载 adapter 对接 `ota`
-- STA 安全模型（P2-3）；可选 eFuse anti-rollback（P2-4）
-- `ballot_guard/` 复用（D2）；验收仍须 D3/D6/D7
+- **传输**：`POST /api/ota/pull` + `/ota` 云端拉包区；`ota_pull.c`（HTTP/HTTPS 流式）
+- **校验**：manifest version + SHA256（D4）；仍走 `ota_upload_*` + rollback（D3）
+- **安全**：pull 须 STA IPv4（P2-3）；SoftAP upload 子网限制不变
+- **范围**：`project/` 已打通；`ballot_guard/` 待 W9
+- **发布**：`idf release` → 托管 `firmware/<ver>/manifest.json`（含 `sha256`）
 
 ---
 
@@ -292,7 +334,8 @@ flowchart LR
 | 打 release 包 | `idf -Project project release 1.2.3`（注入 `PROJECT_VER`；默认仅 OTA app；产线首次烧录加 `--flash-bundle`） |
 | 归档位置 | `firmware/1.2.3/project_1.2.3_YYYYMMDD.bin` 等 |
 | 选哪个文件 | `firmware/<ver>/manifest.json` → `products.project.ota.image` |
-| 现场 OTA | SoftAP 连接 → `http://192.168.4.1/ota` → 上传上述 `.bin`（版本须 **高于** 设备 `run_ver`） |
+| 现场 SoftAP OTA | 连接 AP → `http://192.168.4.1/ota` → 上传 `.bin`（版本须 **高于** `run_ver`） |
+| 现场 STA 拉包 | STA 联网 → `/ota` 填 `http(s)://<host>/firmware/<ver>/manifest.json`，或 `POST /api/ota/pull` |
 
 PowerShell 包装：[`idf.ps1`](../idf.ps1)、[`scripts/release.ps1`](../scripts/release.ps1)。详见 [`firmware/README.md`](../firmware/README.md)。
 
@@ -307,8 +350,8 @@ PowerShell 包装：[`idf.ps1`](../idf.ps1)、[`scripts/release.ps1`](../scripts
 
 **阶段 2 待 Grill**
 
-- [ ] P2-1 下载实现　[ ] P2-2 manifest 校验点　[ ] P2-3 STA 安全  
-- [ ] P2-4 eFuse anti-rollback　[ ] P2-5 断点续传范围  
+- [x] P2-1 下载实现　[x] P2-2 manifest 校验点　[x] P2-3 STA 安全（暂定）  
+- [ ] P2-4 eFuse anti-rollback　[x] P2-5 断点续传范围  
 
 ---
 
@@ -324,3 +367,5 @@ PowerShell 包装：[`idf.ps1`](../idf.ps1)、[`scripts/release.ps1`](../scripts
 | 2026-06-26 | 1.4 | 文档与实现对齐：术语表、路径修正、并发/HTTP 码、rollback 窗口与 O5 说明、架构 seam、阶段 2 WBS/P2 待决、W1.1/W4.1 待办 |
 | 2026-06-26 | 1.6 | W1.1 rollback 窗口：`ota_confirm` 后移至 app_init / web_boot；`CONFIG_OTA_ROLLBACK_TEST`；W4.1 `/ota` 页文案 |
 | 2026-06-26 | 1.7 | 阶段 1 收尾：O5 + 1.0.4→1.0.5 实机验收；sdkconfig 量产基线（rollback ON，ANTI_ROLLBACK / OTA_ROLLBACK_TEST OFF）；W4.1 apply 防连点；代码路径改 `common/ota` |
+| 2026-06-26 | 1.8 | 阶段 2 W5–W7：SHA256、`ota_manifest`/`ota_pull`、`POST /api/ota/pull`、release manifest sha256 |
+| 2026-06-26 | 1.9 | 阶段 2 O7 实机通过（本机 HTTP 8090，1.0.6→1.0.7）；W7.1 联调修复与「本机 HTTP 联调」章节；O8–O10/W9 仍待办 |

@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -31,6 +32,47 @@ static const char *TAG = "web_ctrl_ota";
 
 #define OTA_HTTP_RECV_CHUNK (4096U)
 #define OTA_HEADER_PEEK     (4096U)
+
+#if CONFIG_WEB_CTRL_OTA_CLOUD_PULL
+#define OTA_PAGE_CLOUD_PULL_HTML \
+    "<hr><p class=hint><strong>云端拉包</strong>（STA 联网）：填写 manifest.json 完整 URL（本机测试可用 http://），" \
+    "设备将按 manifest 校验版本与 SHA256 后写入对侧槽。</p>" \
+    "<input type=url id=mu placeholder=http://192.168.x.x:8080/manifest.json style=width:100%><br>" \
+    "<label><input type=checkbox id=aa> 拉取完成后自动 apply 并重启</label><br>" \
+    "<button type=button id=pl disabled>开始拉包</button>"
+#define OTA_PAGE_CLOUD_PULL_JS \
+    "function syncPull(st){const pl=document.getElementById('pl');" \
+    "if(pl)pl.disabled=pullBusy||uploadBusy||applyBusy||(st==='writing')||(st==='pulling');}" \
+    "const oldSync=syncButtons;syncButtons=function(st){oldSync(st);syncPull(st);};" \
+    "document.getElementById('pl').onclick=async()=>{" \
+    "const url=document.getElementById('mu').value.trim();" \
+    "if(!url||pullBusy)return;" \
+    "if(!/^https?:\\/\\//i.test(url)){L('URL 须以 http:// 或 https:// 开头');return;}" \
+    "pullBusy=true;syncPull('pulling');L('拉包 '+url+'…');" \
+    "try{const r=await fetch('/api/ota/pull',{method:'POST'," \
+    "headers:{'Content-Type':'application/json'}," \
+    "body:JSON.stringify({manifest_url:url,product:'project'," \
+    "apply:document.getElementById('aa').checked})});" \
+    "const txt=await r.text();L('HTTP '+r.status+' '+txt);" \
+    "if(r.status!==200){pullBusy=false;refresh();return;}" \
+    "let lastLog=0;" \
+    "while(pullBusy){await new Promise(res=>setTimeout(res,800));" \
+    "try{const sr=await fetch('/api/ota/status');const sj=await sr.json();" \
+    "if(!sj.ok)continue;" \
+    "if(sj.written>0&&sj.total>0){fill.style.width=Math.min(100,Math.round(100*sj.written/sj.total))+'%';}" \
+    "const pct=(sj.total>0)?Math.round(100*sj.written/sj.total):0;" \
+    "const now=Date.now();" \
+    "if(sj.state==='pulling'||sj.state==='writing'){" \
+    "if(now-lastLog>1200){L('下载中 '+sj.written+'/'+sj.total+' ('+pct+'%)');lastLog=now;}" \
+    "syncPull(sj.state);continue;}" \
+    "if(sj.state==='ready'){L('拉包完成，待切换版本 '+(sj.pending_ver||'?')+' → 点「确认重启」');pullBusy=false;break;}" \
+    "L('拉包结束：state='+sj.state+'（若仍为 idle 可能失败，见串口 ota_pull 日志）');pullBusy=false;break;" \
+    "}catch(e){L('轮询异常: '+e);}}" \
+    "refresh();}catch(e){L(String(e));pullBusy=false;refresh();}};"
+#else
+#define OTA_PAGE_CLOUD_PULL_HTML ""
+#define OTA_PAGE_CLOUD_PULL_JS   ""
+#endif
 
 static const char s_ota_page_html[] =
     "<!DOCTYPE html><html lang=zh-CN><head><meta charset=utf-8><meta name=viewport "
@@ -53,13 +95,15 @@ static const char s_ota_page_html[] =
     "<button id=up disabled>上传</button>"
     "<button id=ab disabled>放弃</button>"
     "<button id=ap disabled>确认重启</button>"
-    "<div id=bar><div id=fill></div></div><pre id=log></pre>"
+    "<div id=bar><div id=fill></div></div>"
+    OTA_PAGE_CLOUD_PULL_HTML
+    "<pre id=log></pre>"
     "<script>"
     "const MAGIC=0xABCD5432,info=document.getElementById('info'),hint=document.getElementById('hint'),"
     "log=document.getElementById('log'),fill=document.getElementById('fill'),"
     "up=document.getElementById('up'),ab=document.getElementById('ab'),ap=document.getElementById('ap'),"
     "fi=document.getElementById('f');"
-    "let runVer='',uploadBusy=false,applyBusy=false,pickedVer='';"
+    "let runVer='',uploadBusy=false,applyBusy=false,pickedVer='',pullBusy=false;"
     "function L(m){log.textContent+=m+'\\n';log.scrollTop=log.scrollHeight;}"
     "function verParts(v){const p=String(v||'').trim().split('.').map(x=>parseInt(x,10)||0);"
     "while(p.length<3)p.push(0);return p;}"
@@ -73,7 +117,7 @@ static const char s_ota_page_html[] =
     ".replace(/\\0.*/,'');break;}}res(ver);};"
     "fr.readAsArrayBuffer(file.slice(0,4096));});}"
     "function syncButtons(st){"
-    "const w=(st==='writing'),rd=(st==='ready'),id=(st==='idle');"
+    "const w=(st==='writing'||st==='pulling'),rd=(st==='ready'),id=(st==='idle');"
     "up.disabled=uploadBusy||!fi.files.length||w;"
     "ab.disabled=uploadBusy||applyBusy||id;ap.disabled=uploadBusy||applyBusy||!rd;}"
     "async function refresh(){try{"
@@ -83,8 +127,9 @@ static const char s_ota_page_html[] =
     "info.className='';"
     "info.textContent='运行槽 '+j.run+' 版本 '+runVer+' → 写入 '+j.target+' | 状态 '+j.state"
     "+(j.pending_ver?(' 待切换版本 '+j.pending_ver):'');"
+    "+((j.state==='pulling'||j.state==='writing')&&j.total>0?(' '+j.written+'/'+j.total+' 字节'):'');"
     "if(j.written>0&&j.total>0){fill.style.width=Math.min(100,Math.round(100*j.written/j.total))+'%';}"
-    "else if(!uploadBusy){fill.style.width='0';}"
+    "else if(!uploadBusy&&!pullBusy){fill.style.width='0';}"
     "syncButtons(j.state);"
     "}catch(e){info.textContent='状态异常: '+e;info.className='err';}}"
     "setInterval(refresh,1500);refresh();"
@@ -125,6 +170,7 @@ static const char s_ota_page_html[] =
     "applyBusy=true;syncButtons('ready');L('确认重启…');"
     "try{const r=await fetch('/api/ota/apply',{method:'POST'});L(await r.text());refresh();}"
     "catch(e){L(String(e));applyBusy=false;refresh();}};"
+    OTA_PAGE_CLOUD_PULL_JS
     "</script></body></html>";
 
 static bool ota_http_write_allowed(httpd_req_t *req)
@@ -171,6 +217,8 @@ static const char *ota_state_str(ota_session_state_e st)
         return "writing";
     case OTA_SESSION_READY:
         return "ready";
+    case OTA_SESSION_PULLING:
+        return "pulling";
     default:
         return "idle";
     }
@@ -361,6 +409,185 @@ static esp_err_t ota_upload_post_handler(httpd_req_t *req)
     return httpd_resp_send(req, "{\"ok\":true,\"state\":\"ready\"}", HTTPD_RESP_USE_STRLEN);
 }
 
+#if CONFIG_WEB_CTRL_OTA_CLOUD_PULL
+
+static esp_err_t ota_http_read_post_body(httpd_req_t *req, char *body, size_t body_cap, size_t *out_len)
+{
+    size_t body_len;
+    size_t total;
+    int    rlen;
+
+    if ((out_len == NULL) || (body_cap <= 1U)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_len = 0U;
+    body_len = (size_t)req->content_len;
+    if (body_len == 0U) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (body_len >= body_cap) {
+        return ESP_ERR_NO_MEM;
+    }
+    total = 0U;
+    while (total < body_len) {
+        rlen = httpd_req_recv(req, body + total, body_len - total);
+        if (rlen < 0) {
+            return ESP_FAIL;
+        }
+        if (rlen == 0) {
+            return ESP_FAIL;
+        }
+        total += (size_t)rlen;
+    }
+    *out_len = total;
+    return ESP_OK;
+}
+
+static bool ota_json_skip_ws(const char **pp)
+{
+    const char *p = *pp;
+
+    if (p == NULL) {
+        return false;
+    }
+    while ((*p != '\0') && (isspace((unsigned char)*p) != 0)) {
+        p++;
+    }
+    *pp = p;
+    return (*p != '\0');
+}
+
+static bool ota_json_extract_quoted(const char *body, const char *key, char *out, size_t out_cap)
+{
+    const char *found = strstr(body, key);
+    const char *colon;
+    const char *p;
+    size_t      o = 0U;
+
+    if ((found == NULL) || (out_cap == 0U)) {
+        return false;
+    }
+    colon = strchr(found + strlen(key), ':');
+    if (colon == NULL) {
+        return false;
+    }
+    p = colon + 1U;
+    if (!ota_json_skip_ws(&p) || (*p != '"')) {
+        return false;
+    }
+    p++;
+    while ((*p != '\0') && (*p != '"')) {
+        if ((*p == '\\') && (p[1] != '\0')) {
+            p++;
+        }
+        if (o + 1U >= out_cap) {
+            return false;
+        }
+        out[o++] = *p++;
+    }
+    if (*p != '"') {
+        return false;
+    }
+    out[o] = '\0';
+    return true;
+}
+
+static bool ota_json_extract_bool(const char *body, const char *key, bool *out)
+{
+    const char *found = strstr(body, key);
+    const char *colon;
+    const char *p;
+
+    if ((found == NULL) || (out == NULL)) {
+        return false;
+    }
+    colon = strchr(found + strlen(key), ':');
+    if (colon == NULL) {
+        return false;
+    }
+    p = colon + 1U;
+    if (!ota_json_skip_ws(&p)) {
+        return false;
+    }
+    if (strncmp(p, "true", 4) == 0) {
+        *out = true;
+        return true;
+    }
+    if (strncmp(p, "false", 5) == 0) {
+        *out = false;
+        return true;
+    }
+    return false;
+}
+
+static bool ota_pull_allowed(httpd_req_t *req)
+{
+    (void)req;
+    if (!net_wifi_sta_has_ipv4()) {
+        return false;
+    }
+    return ota_http_write_allowed(req);
+}
+
+static esp_err_t ota_pull_post_handler(httpd_req_t *req)
+{
+    char              body[512];
+    size_t            body_len = 0U;
+    ota_pull_request_t pull;
+    status_t          err;
+    esp_err_t         herr;
+
+    if (!ota_pull_allowed(req)) {
+        if (!net_wifi_sta_has_ipv4()) {
+            return ota_send_json_err(req, "503 Service Unavailable", "sta_required",
+                                     "STA must have IPv4 to pull from cloud");
+        }
+        return ota_send_json_err(req, "403 Forbidden", "forbidden", NULL);
+    }
+
+    if (req->content_len <= 0) {
+        return ota_send_json_err(req, "411 Length Required", "need_body", NULL);
+    }
+    if ((size_t)req->content_len >= sizeof(body)) {
+        return ota_send_json_err(req, "413 Payload Too Large", "body_too_large", NULL);
+    }
+
+    herr = ota_http_read_post_body(req, body, sizeof(body), &body_len);
+    if (herr != ESP_OK) {
+        return ota_send_json_err(req, "400 Bad Request", "read_body", NULL);
+    }
+    body[body_len] = '\0';
+
+    (void)memset(&pull, 0, sizeof(pull));
+    if (!ota_json_extract_quoted(body, "\"manifest_url\"", pull.manifest_url, sizeof(pull.manifest_url))) {
+        return ota_send_json_err(req, "400 Bad Request", "manifest_url", "manifest_url required");
+    }
+    if (ota_json_extract_quoted(body, "\"product\"", pull.product, sizeof(pull.product))) {
+        /* optional */
+    } else {
+        (void)snprintf(pull.product, sizeof(pull.product), "project");
+    }
+    (void)ota_json_extract_bool(body, "\"apply\"", &pull.apply_after_pull);
+
+    ESP_LOGI(TAG, "pull request url=%s apply=%d", pull.manifest_url, (int)pull.apply_after_pull);
+
+    err = ota_pull_start(&pull);
+    if (err == ESP_ERR_INVALID_STATE) {
+        return ota_send_json_err(req, "409 Conflict", "busy", "pull already in progress");
+    }
+    if (err == ESP_ERR_NOT_SUPPORTED) {
+        return ota_send_json_err(req, "503 Service Unavailable", "not_enabled", NULL);
+    }
+    if (err != ESP_OK) {
+        return ota_send_json_err(req, "500 Internal Server Error", "pull", esp_err_to_name(err));
+    }
+
+    (void)httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true,\"state\":\"pulling\"}", HTTPD_RESP_USE_STRLEN);
+}
+
+#endif /* CONFIG_WEB_CTRL_OTA_CLOUD_PULL */
+
 esp_err_t web_ctrl_ota_register(httpd_handle_t server)
 {
     const httpd_uri_t uri_page = {
@@ -420,6 +647,20 @@ esp_err_t web_ctrl_ota_register(httpd_handle_t server)
     if (err != ESP_OK) {
         return err;
     }
+#if CONFIG_WEB_CTRL_OTA_CLOUD_PULL
+    {
+        const httpd_uri_t uri_pull = {
+            .uri = "/api/ota/pull",
+            .method = HTTP_POST,
+            .handler = ota_pull_post_handler,
+            .user_ctx = NULL,
+        };
+        err = httpd_register_uri_handler(server, &uri_pull);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+#endif
 
     ESP_LOGI(TAG, "OTA HTTP routes registered");
     return ESP_OK;

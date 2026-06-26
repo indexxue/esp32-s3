@@ -10,4 +10,35 @@ menu "OTA"
 
             Do not enable in production firmware.
 
+    config OTA_HTTPS_PULL
+        bool "Enable HTTPS manifest/image pull (OTA phase 2)"
+        default n
+        help
+            Stream-download release firmware from manifest.json URL into the OTA session.
+            Requires esp_http_client and certificate bundle.
+
+    config OTA_HTTPS_PULL_CHUNK
+        depends on OTA_HTTPS_PULL
+        int "HTTPS pull read chunk size (bytes)"
+        default 4096
+        range 1024 16384
+
+    config OTA_HTTPS_PULL_MANIFEST_MAX
+        depends on OTA_HTTPS_PULL
+        int "Max manifest.json download size (bytes)"
+        default 8192
+        range 2048 65536
+
+    config OTA_HTTPS_PULL_TIMEOUT_MS
+        depends on OTA_HTTPS_PULL
+        int "HTTPS GET timeout per connection (ms)"
+        default 60000
+        range 5000 300000
+
+    config OTA_HTTPS_PULL_TASK_STACK
+        depends on OTA_HTTPS_PULL
+        int "Background ota_pull task stack (bytes)"
+        default 8192
+        range 4096 16384
+
 endmenu

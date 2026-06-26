@@ -12,6 +12,9 @@ extern "C" {
 
 #include "type.h"
 
+#include "sdkconfig.h"
+
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -20,6 +23,7 @@ typedef enum {
     OTA_SESSION_IDLE = 0,
     OTA_SESSION_WRITING,
     OTA_SESSION_READY,
+    OTA_SESSION_PULLING,
 } ota_session_state_e;
 
 typedef struct {
@@ -56,6 +60,33 @@ status_t ota_apply(void);
 
 /** 新固件启动并通过自检后调用，取消 rollback 待定状态（D3）。 */
 status_t ota_confirm_running_image(void);
+
+/** semver 三段比较：new 严格大于 cur 时返回 true。 */
+bool ota_version_is_greater(const char *new_ver, const char *cur_ver);
+
+/**
+ * @brief 设置下一会话写入完成后须匹配的 SHA256（hex64）；空串或 NULL 表示不校验。
+ * @note 须在 `ota_upload_begin` 之前调用；会话 abort/end 后清除。
+ */
+status_t ota_upload_set_expected_sha256_hex(const char *sha256_hex);
+
+typedef struct {
+    char manifest_url[512];
+    char product[32];
+    bool apply_after_pull;
+} ota_pull_request_t;
+
+/** 后台从 manifest URL 拉取镜像并写入对侧槽（单任务；进行中返回 ESP_ERR_INVALID_STATE）。 */
+status_t ota_pull_start(const ota_pull_request_t *req);
+
+/** 同步拉取（须在独立任务中调用，勿阻塞 HTTP 处理线程）。 */
+status_t ota_pull_from_manifest(const ota_pull_request_t *req);
+
+/** 云端拉取 transport 用：idle → pulling 标记。 */
+status_t ota_session_begin_cloud_pull(void);
+
+/** 清除 pulling 标记。 */
+void ota_session_end_cloud_pull(void);
 
 #ifdef __cplusplus
 }
