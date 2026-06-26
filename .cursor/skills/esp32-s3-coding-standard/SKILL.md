@@ -17,11 +17,12 @@ Read and follow `doc/embedded_coding_standard.md` before making firmware changes
 
 ### Layering (dependency direction)
 
-- `project/main` → `common`, `bsp_driver`, `cbb`, IDF components
-- `common` → `bsp_driver` (never reverse)
+- `project/main` → `common`, `ota`, `bsp_driver`, `cbb`, IDF components
+- `common` → `bsp_driver`, `ota` (never reverse)
+- `ota` → IDF only (`app_update`, `freertos`；不依赖 `common`，避免循环)
 - `bsp_driver` → IDF only (no `common`, avoid `cbb`)
 - `cbb` → `bsp_driver` or IDF (no `common`)
-- **Forbidden**: `bsp_driver` → `common`, `cbb` → `common`
+- **Forbidden**: `bsp_driver` → `common`, `cbb` → `common`, `ota` → `common`
 
 ### Where new code goes
 
@@ -30,6 +31,7 @@ Read and follow `doc/embedded_coding_standard.md` before making firmware changes
 | Board GPIO/UART/I2C/Timer | `bsp_driver/inc`, `bsp_driver/src` |
 | Chip/display/sensor drivers | `cbb/` |
 | Hardware-agnostic logic | `common/inc`, `common/src` |
+| OTA 写入 / 双槽切换 | `ota/inc`, `ota/src` |
 | Product flow / `app_main` | `project/main/` |
 
 New components must be registered via `EXTRA_COMPONENT_DIRS` or equivalent in `project/CMakeLists.txt`.

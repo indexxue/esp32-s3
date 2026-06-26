@@ -15,10 +15,13 @@
 本仓库以 ESP-IDF **组件**为边界组织代码，约定依赖关系如下（箭头表示「允许依赖」）：
 
 - **`project/main`**：应用入口与业务编排（`app_main`、板级初始化调用顺序等）。  
-  允许依赖：`common`、`bsp_driver`、`cbb` 以及 ESP-IDF 官方组件。
+  允许依赖：`common`、`ota`、`bsp_driver`、`cbb` 以及 ESP-IDF 官方组件。
 
 - **`common`**：与具体电路板无关的通用能力（如按键语义、灯效、统一日志封装等）。  
-  允许依赖：`bsp_driver`（及 IDF 组件）；**不得**被 `bsp_driver` 依赖。
+  允许依赖：`bsp_driver`、`ota`（及 IDF 组件）；**不得**被 `bsp_driver` 依赖。
+
+- **`ota`**：双槽 OTA 写入会话与启动槽切换（`ota_upload_*`、`boot_slot_*`）。  
+  仅依赖 IDF（`app_update`、`freertos` 等）；**不得**依赖 `common`（避免与 `common` → `ota` 形成环）。
 
 - **`bsp_driver`**：板级外设封装（GPIO、UART、I2C、Timer 等与 ESP 外设驱动相关的薄封装）。  
   不依赖 `common`；尽量不依赖 `cbb`，避免底层反向依赖器件层。
@@ -26,7 +29,7 @@
 - **`cbb`**（circuit / chip building blocks）：具体器件或功能块驱动（如显示屏控制器、传感器芯片等）。  
   可依赖 `bsp_driver` 提供的总线/GPIO 抽象或 IDF 驱动；**不得**依赖 `common`。
 
-**禁止**：`bsp_driver` → `common`，`cbb` → `common`；尽量避免环状组件依赖。新增模块前先确定所属层级，再决定放在哪个目录。
+**禁止**：`bsp_driver` → `common`，`cbb` → `common`，`ota` → `common`；尽量避免环状组件依赖。新增模块前先确定所属层级，再决定放在哪个目录。
 
 ## 1.2 初始化与错误处理
 
@@ -186,7 +189,7 @@
 ## 4.2 工程与组件布局（摘要）
 
 - CMake 根：`project/CMakeLists.txt`。  
-- **`EXTRA_COMPONENT_DIRS`**：`../common`、`../bsp_driver`、`../cbb`。  
+- **`EXTRA_COMPONENT_DIRS`**：`../common`、`../ota`、`../bsp_driver`、`../cbb`。  
 - 入口：`project/main/`。  
 - 构建输出：`project/build/`（勿提交）。
 
