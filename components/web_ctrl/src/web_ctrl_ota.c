@@ -30,6 +30,12 @@ static const char *TAG = "web_ctrl_ota";
 #define WEB_CTRL_OTA_UPLOAD_MAX_BYTES ((size_t)CONFIG_WEB_CTRL_OTA_UPLOAD_MAX)
 #endif
 
+#ifndef CONFIG_WEB_CTRL_OTA_DEFAULT_PRODUCT
+#define WEB_CTRL_OTA_PRODUCT "project"
+#else
+#define WEB_CTRL_OTA_PRODUCT CONFIG_WEB_CTRL_OTA_DEFAULT_PRODUCT
+#endif
+
 #define OTA_HTTP_RECV_CHUNK (4096U)
 #define OTA_HEADER_PEEK     (4096U)
 
@@ -51,7 +57,7 @@ static const char *TAG = "web_ctrl_ota";
     "pullBusy=true;syncPull('pulling');L('拉包 '+url+'…');" \
     "try{const r=await fetch('/api/ota/pull',{method:'POST'," \
     "headers:{'Content-Type':'application/json'}," \
-    "body:JSON.stringify({manifest_url:url,product:'project'," \
+    "body:JSON.stringify({manifest_url:url,product:'" WEB_CTRL_OTA_PRODUCT "'," \
     "apply:document.getElementById('aa').checked})});" \
     "const txt=await r.text();L('HTTP '+r.status+' '+txt);" \
     "if(r.status!==200){pullBusy=false;refresh();return;}" \
@@ -565,7 +571,7 @@ static esp_err_t ota_pull_post_handler(httpd_req_t *req)
     if (ota_json_extract_quoted(body, "\"product\"", pull.product, sizeof(pull.product))) {
         /* optional */
     } else {
-        (void)snprintf(pull.product, sizeof(pull.product), "project");
+        (void)snprintf(pull.product, sizeof(pull.product), "%s", WEB_CTRL_OTA_PRODUCT);
     }
     (void)ota_json_extract_bool(body, "\"apply\"", &pull.apply_after_pull);
 

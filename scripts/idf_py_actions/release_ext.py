@@ -13,6 +13,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import click
 from click.core import Context
 from idf_py_actions.constants import GENERATORS
 from idf_py_actions.errors import FatalError
@@ -20,6 +21,13 @@ from idf_py_actions.global_options import global_options
 from idf_py_actions.tools import PropertyDict, ensure_build_directory, get_target, run_target
 
 from git_version import clamp_release_version, git_max_semver_tag
+from signing_common import (
+    SIGNING_PROFILES,
+    apply_signing_profile,
+    detect_signing_meta,
+    dev_signing_key_path,
+    sdkconfig_defaults_for_profile,
+)
 
 _VERSION_RE = re.compile(r'^V?(?P<maj>\d+)\.(?P<min>\d+)\.(?P<pat>\d+)$', re.IGNORECASE)
 _CMAKE_PROJECT_RE = re.compile(r'project\s*\(\s*(\w+)\s*\)')
@@ -154,7 +162,24 @@ def _reset_broken_build_dir(project_dir: str) -> None:
     shutil.rmtree(build_dir, ignore_errors=True)
 
 
-def _prepare_release_build(args: PropertyDict, project_dir: str, ver: str) -> None:
+def _prepare_release_build(
+    args: PropertyDict,
+    project_dir: str,
+    ver: str,
+    signing_profile: Optional[str] = None,
+) -> None:
+    if signing_profile:
+        key_path = dev_signing_key_path(project_dir)
+        if not os.path.isfile(key_path):
+            raise FatalError(
+                'Signing profile %r requires dev key at %s — run: idf signing-key-gen'
+                % (signing_profile, key_path)
+            )
+        apply_signing_profile(project_dir, signing_profile)
+        defaults = sdkconfig_defaults_for_profile(signing_profile)
+        if defaults:
+            _set_cache_entry(args, 'SDKCONFIG_DEFAULTS', defaults)
+
     _reset_broken_build_dir(project_dir)
     _set_cache_entry(args, 'PROJECT_VER', ver)
     ninja_exe = _ninja_executable()
@@ -457,12 +482,18 @@ def _product_release_entry(
     artifacts: List[Dict[str, Any]],
     ota_image: str,
     flash_bundle: bool,
+    signing_meta: Optional[Dict[str, str]] = None,
+    signing_key_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     entry: Dict[str, Any] = {
         'build_date': build_date,
         'built_at_utc': built_at,
         'artifacts': artifacts,
     }
+    if signing_meta:
+        entry['signing'] = dict(signing_meta)
+        if signing_key_id:
+            entry['signing']['signing_key_id'] = signing_key_id
     if product == 'project':
         ota_entry: Dict[str, Any] = {
             'image': ota_image,
@@ -472,6 +503,10 @@ def _product_release_entry(
             if art.get('role') == 'app' and art.get('file') == ota_image and art.get('sha256'):
                 ota_entry['sha256'] = art['sha256']
                 break
+        if signing_key_id:
+            ota_entry['signing_key_id'] = signing_key_id
+        if signing_meta:
+            ota_entry['signing_profile'] = signing_meta.get('profile')
         entry['ota'] = ota_entry
     if flash_bundle:
         entry['flash'] = {
@@ -508,6 +543,8 @@ def _release_one_product(
     project_dir: str,
     flash_bundle: bool,
     debug: bool,
+    signing_profile: Optional[str] = None,
+    signing_key_id: Optional[str] = None,
 ) -> None:
     product = _cmake_project_name(project_dir)
     release_dir = os.path.join(repo_root, 'firmware', ver)
@@ -517,6 +554,8 @@ def _release_one_product(
         'Build with -DPROJECT_VER=%s (esp_app_desc + NVS_APP_VERSION_STRING)'
         % ver
     )
+    if signing_profile:
+        print('Signing profile: %s' % signing_profile)
 
     saved_project_dir = args.project_dir
     saved_build_dir = getattr(args, 'build_dir', None)
@@ -524,7 +563,7 @@ def _release_one_product(
     if saved_build_dir is not None:
         args.build_dir = os.path.join(project_dir, 'build')
 
-    _prepare_release_build(args, project_dir, ver)
+    _prepare_release_build(args, project_dir, ver, signing_profile)
 
     prev_release_ver = os.environ.get('TY_RELEASE_PROJECT_VER')
     os.environ['TY_RELEASE_PROJECT_VER'] = ver
@@ -568,6 +607,10 @@ def _release_one_product(
             build_dir, release_dir, product, ver, build_date, flash_bundle, debug
         )
 
+        signing_meta = detect_signing_meta(project_dir)
+        if signing_meta and not signing_key_id:
+            signing_key_id = 'dev'
+
         manifest['schema'] = 2
         manifest['version'] = ver
         manifest['target'] = get_target(project_dir)
@@ -577,7 +620,8 @@ def _release_one_product(
             'example': _release_basename(product, ver, build_date, 'app', 'bin'),
         }
         manifest.setdefault('products', {})[product] = _product_release_entry(
-            product, ver, build_date, built_at, artifacts, ota_image, flash_bundle
+            product, ver, build_date, built_at, artifacts, ota_image, flash_bundle,
+            signing_meta, signing_key_id,
         )
 
         with open(manifest_path, 'w', encoding='utf-8') as f:
@@ -606,6 +650,8 @@ def release(
     version: str,
     flash_bundle: bool,
     debug: bool,
+    signing_profile: Optional[str] = None,
+    signing_key_id: Optional[str] = None,
 ) -> None:
     """Build one product and archive under ../firmware/<version>/."""
     if isinstance(version, (list, tuple)):
@@ -624,7 +670,7 @@ def release(
         print('Using release version %s (PROJECT_VER / NVS_APP_VERSION_STRING)' % ver)
     _release_one_product(
         target_name, ctx, args, ver, repo_root, project_dir,
-        flash_bundle, debug,
+        flash_bundle, debug, signing_profile, signing_key_id,
     )
 
 
@@ -635,6 +681,8 @@ def release_all(
     version: str,
     flash_bundle: bool,
     debug: bool,
+    signing_profile: Optional[str] = None,
+    signing_key_id: Optional[str] = None,
 ) -> None:
     """Build every ESP-IDF product into the same firmware/<version>/ directory."""
     if isinstance(version, (list, tuple)):
@@ -662,7 +710,7 @@ def release_all(
         print('=== %s ===' % name)
         _release_one_product(
             target_name, ctx, args, ver, repo_root, project_dir,
-            flash_bundle, debug,
+            flash_bundle, debug, signing_profile, signing_key_id,
         )
 
     release_dir = os.path.join(repo_root, 'firmware', ver)
@@ -685,6 +733,17 @@ _RELEASE_OPTIONS = global_options + [
         'names': ['--debug'],
         'is_flag': True,
         'help': 'Also pack .elf and .map (not for field OTA).',
+    },
+    {
+        'names': ['--signing-profile'],
+        'type': click.Choice(['signed_ota', 'secure_boot']),
+        'default': None,
+        'help': 'Merge sdkconfig.defaults.<profile> and build signed images (wipes sdkconfig).',
+    },
+    {
+        'names': ['--signing-key-id'],
+        'default': None,
+        'help': 'Manifest signing_key_id for audit (default: dev when profile is set).',
     },
 ]
 

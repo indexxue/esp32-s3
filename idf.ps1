@@ -1,14 +1,14 @@
 # Generic idf.py wrapper for all ESP-IDF projects in this repository.
 #
 # Examples:
-#   .\idf.ps1 build
-#   .\idf.ps1 -Project ble_demo build
-#   .\idf.ps1 -Project project release 1.2.3
-#   .\idf.ps1 -p COM13 flash monitor
+#   idf build                    (cmd, or PowerShell with ESP-IDF profile — see README)
+#   idf -Project ble_demo build
+#   idf -Project project release 1.2.3
+#   idf signing-profile signed_ota --build
+#   idf signing-key-gen
+#   idf -p COM13 flash monitor
 #
-# Note: use $args (no param block) so idf.py flags like -p / -D are not consumed by
-# PowerShell parameter binding (including .\idf.ps1 -p COM13 … in PowerShell 5.1).
-
+# PowerShell without repo `idf` alias: use  .\idf.cmd  (not bare `idf`).
 $ErrorActionPreference = "Stop"
 
 $validProjects = @("project", "ble_demo", "factory", "ballot_guard")
@@ -36,6 +36,60 @@ while ($i -lt $RawArgs.Count) {
     $IdfArgs += $arg
     $i += 1
 }
+
+function Resolve-IdfSigningProfileArgs {
+    param([string[]]$Arguments)
+    $profiles = @('none', 'signed_ota', 'secure_boot')
+    for ($idx = 0; $idx -lt $Arguments.Count; $idx++) {
+        if ($Arguments[$idx] -ne 'signing-profile') { continue }
+        # idf.py multi-command: "signing-profile <profile> --build" leaves --build as a second command.
+        if ($idx + 2 -lt $Arguments.Count -and $Arguments[$idx + 2] -eq '--build') {
+            $profile = $Arguments[$idx + 1]
+            if ($profiles -contains $profile) {
+                $out = @()
+                if ($idx -gt 0) { $out += $Arguments[0..($idx - 1)] }
+                $out += 'signing-profile', '--build', $profile
+                if ($idx + 3 -lt $Arguments.Count) { $out += $Arguments[($idx + 3)..($Arguments.Count - 1)] }
+                return $out
+            }
+        }
+        break
+    }
+    return $Arguments
+}
+
+function Resolve-IdfReleaseArgs {
+    param([string[]]$Arguments)
+    $releaseNames = @('release', 'release-all')
+    for ($idx = 0; $idx -lt $Arguments.Count; $idx++) {
+        if ($releaseNames -notcontains $Arguments[$idx]) { continue }
+        $cmd = $Arguments[$idx]
+        $spIdx = -1
+        for ($j = $idx + 1; $j -lt $Arguments.Count; $j++) {
+            if ($Arguments[$j] -eq '--signing-profile') { $spIdx = $j; break }
+        }
+        if ($spIdx -lt 0) { break }
+        $verIdx = -1
+        for ($j = $idx + 1; $j -lt $spIdx; $j++) {
+            if ($Arguments[$j] -match '^\d+\.\d+\.\d+') { $verIdx = $j; break }
+        }
+        if ($verIdx -lt 0) { break }
+        $version = $Arguments[$verIdx]
+        $out = @()
+        if ($idx -gt 0) { $out += $Arguments[0..($idx - 1)] }
+        $out += $cmd
+        for ($j = $idx + 1; $j -lt $Arguments.Count; $j++) {
+            if ($j -eq $verIdx) { continue }
+            $out += $Arguments[$j]
+        }
+        $out += $version
+        return $out
+    }
+    return $Arguments
+}
+
+$IdfArgs = @(Resolve-IdfReleaseArgs -Arguments $IdfArgs)
+$IdfArgs = @(Resolve-IdfSigningProfileArgs -Arguments $IdfArgs)
 
 if ($IdfArgs.Count -eq 0) {
     Write-Error "Missing idf.py arguments. Example: .\idf.ps1 build"

@@ -180,6 +180,8 @@ firmware/1.0.3/
 上传 **`project_{version}_{build_date}.bin`**（见 `manifest.json` → `products.project.ota.image`）。版本须高于设备 `run_ver`。  
 **阶段 2 云端拉包**：将 `manifest.json` 托管到 HTTPS 可访问路径，设备 STA 联网后 `POST /api/ota/pull` 或 `/ota` 页填写 manifest URL。manifest 中 app 镜像须含 **`sha256`**（`idf release` 自动生成）。详见 [`doc/ota_development_plan.md`](../doc/ota_development_plan.md)。
 
+**阶段 3 签名包**：`idf release <ver> --signing-profile signed_ota --signing-key-id dev`；manifest 含 `ota.signing_key_id`。设备须先 `apply_profile.ps1 -Profile signed_ota` 后烧录。见 [`doc/secure_boot_production.md`](../doc/secure_boot_production.md)。
+
 
 
 ## Git

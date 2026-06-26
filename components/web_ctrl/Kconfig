@@ -64,4 +64,12 @@ menu "Web Control Library (web_ctrl)"
             Registers cloud pull endpoint; requires CONFIG_OTA_HTTPS_PULL.
             Pull is allowed only when STA has IPv4 (device can reach the manifest URL).
 
+    config WEB_CTRL_OTA_DEFAULT_PRODUCT
+        depends on WEB_CTRL_OTA
+        string "Default manifest product key (products.<name>.ota)"
+        default "project"
+        help
+            Used by POST /api/ota/pull when JSON body omits product, and by /ota cloud pull UI.
+            Set to ballot_guard for ballot_guard/ builds; project for project/.
+
 endmenu

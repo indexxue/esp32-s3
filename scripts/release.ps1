@@ -5,41 +5,27 @@ param(
     [string]$Project = "project",
     [switch]$AllProjects,
     [switch]$FlashBundle,
-    [switch]$WithDebug
+    [switch]$WithDebug,
+    [ValidateSet("signed_ota", "secure_boot")]
+    [string]$SigningProfile,
+    [string]$SigningKeyId
 )
 
 $ErrorActionPreference = "Stop"
+Write-Warning "Deprecated: use idf release instead."
 
-. (Join-Path $PSScriptRoot "IdfEnv.ps1")
-
-$idf = Initialize-IdfEnvironment
-
-$releaseArgs = @()
-if ($FlashBundle) { $releaseArgs += '--flash-bundle' }
-if ($WithDebug) { $releaseArgs += '--debug' }
-
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$idfArgs = @('-Project', $Project)
 if ($AllProjects) {
-    Write-Host "Release-all version: $Version"
-    $projectPath = Resolve-IdfProjectPath -Project project -IdfEnv $idf
-    Ensure-IdfTarget -IdfEnv $idf -ProjectPath $projectPath
-    $allArgs = @('release-all', $Version) + $releaseArgs
-    $exitCode = Invoke-IdfPy -IdfEnv $idf -ProjectPath $projectPath -Arguments $allArgs
-    if ($exitCode -ne 0) {
-        Write-Error "idf.py release-all failed with exit code $exitCode"
-    }
-    Write-Host "Done. See firmware\$Version\"
-    exit 0
+    $idfArgs += @('release-all', $Version)
+} else {
+    $idfArgs += @('release', $Version)
 }
+if ($FlashBundle) { $idfArgs += '--flash-bundle' }
+if ($WithDebug) { $idfArgs += '--debug' }
+if ($SigningProfile) { $idfArgs += @('--signing-profile', $SigningProfile) }
+if ($SigningKeyId) { $idfArgs += @('--signing-key-id', $SigningKeyId) }
 
-$projectPath = Resolve-IdfProjectPath -Project $Project -IdfEnv $idf
-Ensure-IdfTarget -IdfEnv $idf -ProjectPath $projectPath
-
-Write-Host "Release $Project version: $Version → firmware\$Version\"
-$singleArgs = @('release', $Version) + $releaseArgs
-
-$exitCode = Invoke-IdfPy -IdfEnv $idf -ProjectPath $projectPath -Arguments $singleArgs
-if ($exitCode -ne 0) {
-    Write-Error "idf.py release failed with exit code $exitCode"
-}
-
-Write-Host "Done. See firmware\$Version\"
+Write-Host "  idf $($idfArgs -join ' ')"
+& (Join-Path $repoRoot "idf.cmd") @idfArgs
+exit $LASTEXITCODE

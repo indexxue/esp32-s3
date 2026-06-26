@@ -1,0 +1,7 @@
+# Phase 3 — signed OTA without hardware Secure Boot (O12 dev; no eFuse burn).
+# Apply: scripts/secure_boot/apply_profile.ps1 -Profile signed_ota
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="../keys/dev/secure_boot_signing_key.pem"

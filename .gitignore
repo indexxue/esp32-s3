@@ -29,6 +29,11 @@ project/cmake_out.txt
 project/cmake_reconf.txt
 project/cmake_repro.txt
 project/release_log.txt
+project/.signing_profile
+
+# Secure Boot signing keys (see keys/README.md)
+keys/dev/
+keys/prod/
 
 # Python cache
 __pycache__/

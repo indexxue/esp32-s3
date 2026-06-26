@@ -13,6 +13,14 @@
                 "/k",
                 "call D:\\desktopsrc\\TY\\ESP32-S3\\Espressif\\idf_cmd_init.bat && cd /d D:\\desktopsrc\\TY\\ESP32-S3"
             ]
+        },
+        "ESP-IDF PowerShell": {
+            "path": "powershell.exe",
+            "args": [
+                "-NoExit",
+                "-Command",
+                "function idf { & '${workspaceFolder}/idf.ps1' @args }; Set-Location '${workspaceFolder}'"
+            ]
         }
     },
     "terminal.integrated.defaultProfile.windows": "ESP-IDF 5.5"

@@ -21,6 +21,7 @@
 #include "boot_slot.h"
 #include "vote_menu_demo.h"
 #include "vote_led.h"
+#include "ota.h"
 
 #include "esp_ota_ops.h"
 
@@ -35,6 +36,13 @@
 
 #define WEB_CTRL_BOOT_TASK_STACK_WORDS (10240U)
 #define WEB_CTRL_BOOT_TASK_PRIORITY (3U)
+
+static void app_ota_confirm_running_image(void);
+
+static bool app_defer_ota_confirm_to_web(void)
+{
+    return device_profile_platform_wants(DEVICE_PLATFORM_MASK_WEB);
+}
 
 static void vote_wifi_led_handler(void *arg, esp_event_base_t base, int32_t id, void *event_data)
 {
@@ -66,6 +74,7 @@ static void web_ctrl_boot_task(void *arg)
         if (reg != ESP_OK) {
             LOG_WARN("web_pages_register failed: %s", esp_err_to_name(reg));
         }
+        app_ota_confirm_running_image();
         if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
             (void)esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, vote_wifi_led_handler, NULL, NULL);
             (void)esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, vote_wifi_led_handler,
@@ -73,6 +82,11 @@ static void web_ctrl_boot_task(void *arg)
         }
     }
     vTaskDelete(NULL);
+}
+#else
+static bool app_defer_ota_confirm_to_web(void)
+{
+    return false;
 }
 #endif
 
@@ -358,8 +372,20 @@ static status_t app_init_buzzer(void)
     return STATUS_OK;
 }
 
+static void app_ota_confirm_running_image(void)
+{
+    const status_t ota_st = ota_confirm_running_image();
+    if (ota_st != STATUS_OK) {
+        LOG_WARN("ota_confirm_running_image: %s", status_to_str(ota_st));
+    }
+}
+
 static status_t app_init(void)
 {
+#if CONFIG_OTA_ROLLBACK_TEST
+    abort();
+#endif
+
     status_t err = app_init_platform();
     const device_product_profile_t *product = device_profile_product();
 
@@ -395,6 +421,10 @@ static status_t app_init(void)
                 vote_led_on_fault();
             }
         }
+    }
+
+    if (!app_defer_ota_confirm_to_web()) {
+        app_ota_confirm_running_image();
     }
 
     LOG_INFO("%s ready (platform_mask=0x%02lX)", product->name,

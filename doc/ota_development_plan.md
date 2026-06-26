@@ -1,8 +1,8 @@
 # ESP32-S3 OTA 开发计划与决策记录
 
-**版本**：1.9  
+**版本**：2.2  
 **依据**：[`flash_partition/partitions_16m_n16r8.md`](../flash_partition/partitions_16m_n16r8.md)、[`doc/partition_switch_development_plan.md`](partition_switch_development_plan.md)、[`common/ota/`](../common/ota/)  
-**状态**：阶段 1 **O1–O6 实机验收通过**（2026-06-26）；阶段 2 **W5–W7 已完成，O7 实机验收通过**（2026-06-26，STA + 本机 HTTP manifest 拉包 **1.0.6→1.0.7**，`apply=1`）；O8–O10、W9 待办。
+**状态**：阶段 1 **O1–O6 实机验收通过**（2026-06-26）；阶段 2 **W5–W9 已完成、O7 实机验收通过**（2026-06-26），**阶段 2 交付收尾**。**O8–O10 实机验收延后**（待办）。**阶段 3 W10–W11 已实现**（`project` signed_ota / secure_boot profile）；**O11–O13 实机待办**（见 [`doc/secure_boot_production.md`](secure_boot_production.md)）。
 
 ---
 
@@ -28,11 +28,34 @@ OTA **`apply`** 同样经 IDF OTA API 切槽，**不经过** `boot_slot_request_
 | D1 | OTA 首要使用场景 | **E：分阶段组合** | 2026-06-25 | **阶段 1**：SoftAP 本地上传。**阶段 2**：STA + HTTP(S) 云端拉包。 |
 | D2 | OTA v1 覆盖工程 | **A：仅 `project/`** | 2026-06-25 | v1 在量产工程打通全链路；`ballot_guard/` 待 v1.1 复用 `ota`。 |
 | D3 | Bootloader rollback | **A：v1 即启用** | 2026-06-25 | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`；**平台自检全部通过后**调用 `esp_ota_mark_app_valid_cancel_rollback()`（见「Rollback 保护窗口」）。 |
-| D4 | 镜像签名校验 / Secure Boot | **D：分阶段** | 2026-06-25 | 阶段 1：仅 `esp_ota_end` 合法性检查。阶段 2：至少 SHA256 + `manifest.json` 字段校验。 |
+| D4 | 镜像签名校验 / Secure Boot | **D：分三阶段** | 2026-06-25 / **2026-06-26 细化** | **阶段 1**：仅 `esp_ota_end` 格式检查。**阶段 2**：SHA256 + manifest 字段（完整性，非身份）。**阶段 3**：Secure Boot v2 + 发布链签名（身份 + 启动强制），见「阶段 3」与「SHA256 vs 镜像签名」。 |
 | D5 | 阶段 1 OTA 触发入口 | **E：Web 页 + HTTP API** | 2026-06-25 | `/ota` 维护页 + 独立 REST（见 D8）；v1 不含串口 OTA 命令。 |
 | D6 | 版本号与 anti-rollback | **D：硬拒绝降级 + 统一版本源** | 2026-06-25 | 新包版本须**严格大于**当前（semver 三段比较）；`PROJECT_VER` → `esp_app_desc.version` + `NVS_APP_VERSION_STRING`（[`common/CMakeLists.txt`](../common/CMakeLists.txt)）。**未**启用 eFuse `CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK`（阶段 2 再评估）。 |
 | D7 | 升级失败与断电行为 | **B：旧槽保底 + abort 清理** | 2026-06-25 | 见「边界场景」；断连 `esp_ota_abort`；写完未 `apply` 仍旧槽；崩溃 rollback（D3）。 |
 | D8 | HTTP API 形态 | **A：独立 `/api/ota/*`** | 2026-06-25 | 不走 `/api/cmd`；与 `/api/wifi/*` 同风格，支持大文件与长会话。 |
+
+---
+
+## SHA256 vs 镜像签名（D4 细化）
+
+| 维度 | SHA256（阶段 2 ✅） | 镜像签名 + Secure Boot（阶段 3 计划） |
+|------|---------------------|--------------------------------------|
+| **防什么** | 传输损坏、manifest 与 bin 不一致 | **未授权固件**写入 Flash 后**无法启动** |
+| **谁生成** | `idf release` 对 `.bin` 算哈希 | 发布机用 **私钥**对镜像签名（`espsecure.py` / IDF 签名流程） |
+| **设备谁验** | OTA 层 `ota_upload_end` 比对期望值 | **Bootloader** + `esp_ota_end` 验签（启用 SB 后 IDF 自动） |
+| **能否证明发布方** | 否（攻击者可同时替换 manifest + bin） | 是（仅持有私钥者可产出可启动镜像） |
+| **产线影响** | 无 | **eFuse 一次性烧录**密钥摘要；开发/量产密钥分离 |
+
+**建议（2026-06-26 评估）**
+
+| 场景 | 是否需要阶段 3 |
+|------|----------------|
+| 仅 **SoftAP 现场维护**、操作员可信、设备无公网 OTA | **可暂缓**；rollback + semver + AP 子网限制已覆盖主要误操作风险 |
+| **STA 云端拉包**成为主路径，或设备长期暴露在客户网络 | **建议启用**；SHA256 不能抵御「恶意服务器整包替换」 |
+| **`ballot_guard/`** 等安全敏感产品 | **建议启用**（可与 W9 一并规划） |
+| **首批量产烧录前** | **必须完成 Grill**（P3-*）；eFuse 开启后**不可回退**，且 OTA **不能**更新已签名的 2nd-stage bootloader |
+
+结论：**当前 v1/v2 不必阻塞发版**；**在首批量产 eFuse 烧录前**应完成阶段 3 决策与产线验证。若仅内网维护、无云端 OTA，可明确记录「接受风险、暂不启用 SB」并签字留档。
 
 ---
 
@@ -204,7 +227,7 @@ flowchart LR
 
 ---
 
-### 阶段 2 — STA + HTTP(S) 云端 OTA（O7 已通过）
+### 阶段 2 — STA + HTTP(S) 云端 OTA（交付收尾 ✅）
 
 #### 目标
 
@@ -230,15 +253,36 @@ flowchart LR
 | **W6** | `ota_manifest.c`；release 脚本写入 `sha256` | ✅ |
 | **W7** | `POST /api/ota/pull` + `/ota` 页云端区；Kconfig | ✅ |
 | **W7.1** | 联调修复：`fetch_headers` 误用、云端 UI 位置、拉包进度轮询 | ✅ 2026-06-26 |
-| **W8** | 测试矩阵 O7–O10 | O7 ✅；O8–O10 待实机 |
-| **W9** | `ballot_guard` 集成 + 文档 | 待办 |
+| **W8** | 测试矩阵 O7–O10 | O7 ✅；O8–O10 **延后待办**（见下） |
+| **W9** | `ballot_guard` 集成 + 文档 | ✅ 2026-06-26 |
 
 #### 阶段 2 验收要点
 
 - O7：STA 下从 manifest URL 拉取合法包 → apply → 对侧槽运行 — **✅ 2026-06-26**（本机 HTTP `8090`，1.0.6→1.0.7）
-- O8：SHA256 不匹配 → 拒绝，`ota_abort`，旧槽不变
-- O9：拉取中断 → 同 S1
-- O10：仍满足 D6 降级拒绝、D3 rollback（阶段 1 已验 O5，阶段 2 代码变更后建议复测）
+- O8：SHA256 不匹配 → 拒绝，`ota_abort`，旧槽不变 — **延后待办**
+- O9：拉取中断 → 同 S1 — **延后待办**
+- O10：仍满足 D6 降级拒绝、D3 rollback（阶段 1 已验 O5）— **延后待办**
+
+#### 阶段 2 验收 O8–O10（延后待办 · 参考步骤）
+
+> **2026-06-26 决策**：O8–O10 暂不进行实机验证；代码路径已实现，需要时可按下表补测。辅助脚本 [`scripts/ota_phase2_o8_corrupt_manifest.ps1`](../scripts/ota_phase2_o8_corrupt_manifest.ps1) 保留。
+
+| 编号 | 前置 | 操作 | 期望 | 辅助 |
+|------|------|------|------|------|
+| **O8** | 设备 STA 有 IPv4；`run_ver` 已知 | 托管**篡改 SHA256** 的 manifest，拉包 | 串口 `SHA256 mismatch`；`GET /api/ota/status` → `state=idle`；**不可 apply**；`run_ver` 不变 | `scripts/ota_phase2_o8_corrupt_manifest.ps1 -Version <ver>` → 本机 HTTP 8090 提供 `manifest_o8_bad.json` |
+| **O9** | 同 O7 | 拉包进行中**停止 HTTP 服务**或断网 | 同 O2：`state=idle`，旧槽运行 | 拉包开始后 `Ctrl+C` Python server 或拔网线 |
+| **O10** | Flash 内 bootloader 含 rollback | 同 O5：`CONFIG_OTA_ROLLBACK_TEST` crash 包 OTA apply | 回旧槽 | 阶段 2 代码未改 rollback 路径；复测确认无回归 |
+
+**O8 示例**（project，设备 1.0.6，托管 1.0.7 包）：
+
+```powershell
+.\scripts\ota_phase2_o8_corrupt_manifest.ps1 -Version 1.0.7 -Product project
+cd firmware\_o8_test\1.0.7
+python -m http.server 8090 --bind <PC_LAN_IP>
+# POST /api/ota/pull  manifest_url=http://<PC_IP>:8090/manifest_o8_bad.json
+```
+
+**ballot_guard O7/O8**：release 须含 `products.ballot_guard`；`/api/ota/pull` 可省略 `product`（默认 `ballot_guard`）。sdkconfig 见 [`ballot_guard/sdkconfig.defaults`](../ballot_guard/sdkconfig.defaults)。
 
 #### 本机 HTTP 联调（开发/验收 O7）
 
@@ -258,6 +302,49 @@ flowchart LR
 | `HTTP 404` + HTML「Access Error」 | PC 上 **8080 被其它服务占用**（如 ApplicationWebServer），Python 仅绑 `::` | 换端口（如 **8090**）+ `--bind <LAN_IP>` |
 | 页面无 manifest 输入框 | 云端 HTML 曾误嵌入 `<script>` 内 | 已修 W7.1 |
 | begin 拒绝 / 409 | manifest `version` ≤ `run_ver` | release 更高版本（如设备 1.0.6 → 托管 1.0.7） |
+
+---
+
+### 阶段 3 — Secure Boot v2 + 镜像签名（计划，量产前）
+
+#### 目标
+
+- 仅 **经发布私钥签名**的 app（及 bootloader）可在设备上启动；OTA 写入未签名/错签镜像时在 `esp_ota_end` 或启动阶段失败。
+- 与 D3 rollback、D6 semver、阶段 2 SHA256 **叠加**：SHA256 仍建议在 pull 路径保留（下载完整性）；SB 负责**身份与启动信任根**。
+- **首批量产**通过 USB `--flash-bundle` 烧录已签名 bootloader + partition + otadata + app；此后 OTA 仅更新 **已签名 app**。
+
+#### 待 Grill 决策（P3-*）
+
+| # | 议题 | 倾向 / 待决 | 备注 |
+|---|------|-------------|------|
+| P3-1 | 签名算法 | **暂定 RSA-3072**（`sdkconfig.defaults.*` + `secure-generate-signing-key -s rsa3072`） | 2026-06-26 开发默认；量产 Grill 可改 |
+| P3-2 | 密钥管理 | **暂定**：`keys/dev` 联调、`keys/prod` 离线；私钥不进 Git | 见 [`keys/README.md`](../keys/README.md) |
+| P3-3 | 启用时机 | **建议**：W9 完成后、**首批量产前**（O8–O10 可并行或前置补测） | eFuse 不可逆 |
+| P3-4 | anti-rollback | 与 P2-4 **一并评估** | SB 常与 `CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK` 组合；须与 D6 semver 策略对齐 |
+| P3-5 | SoftAP 上传 | **建议**：SB 启用后 upload 路径**同样**须上传已签名 `.bin`（`esp_ota_end` 验签） | 无需单独「上传验签 API」；IDF 行为 |
+| P3-6 | manifest 扩展 | **已实现**：`ota.signing_key_id` / `signing_profile`（schema 2 扩展字段） | 设备侧仍以 IDF 验签为准 |
+
+#### WBS
+
+| 任务 | 内容 | 状态 |
+|------|------|------|
+| **W10** | sdkconfig：`CONFIG_SECURE_BOOT`、签名 app/bootloader；`project/bootloader` 与 release 签名步骤 | ✅ 2026-06-26（可选 profile：`signed_ota` / `secure_boot`） |
+| **W10.1** | `release_ext.py`：release 后自动签名产物；manifest 可选记录 `signing_key_id` | ✅ 2026-06-26（`--signing-profile`、`ota.signing_key_id`） |
+| **W10.2** | 产线文档：eFuse 烧录顺序、`--flash-bundle` 首烧、**禁止**对已 SB 设备 USB 刷未签名包 | ✅ [`doc/secure_boot_production.md`](secure_boot_production.md) |
+| **W11** | 密钥与 CI：开发/量产密钥分离；`idf release` 集成 `espsecure.py sign_data`（或 IDF 内置 signed app 构建） | ✅ 开发密钥脚本 + IDF 构建时签名；量产 CI 待 Grill |
+| **W12** | 测试矩阵 O11–O13；与 O5 rollback、O8 SHA256 交叉复测 | 待实机 |
+
+#### 阶段 3 验收要点
+
+- **O11**：已 SB 设备 OTA 合法签名包 → apply → 正常运行 + mark_valid
+- **O12**：OTA 未签名包或篡改签名 → `esp_ota_end` 失败 / 启动失败，旧槽可用
+- **O13**：错误 semver 降级仍被 D6 拒绝（SB 不替代 semver）
+
+#### 实现注意（ESP-IDF）
+
+- 启用 SB 后 **2nd-stage bootloader 变更须 USB 重刷**，OTA app 分区不受影响（与 O5 说明一致，扩展至签名 bootloader）。
+- 签名在 **构建/release** 侧完成，**不在** `web_ctrl` 或 `ota_pull` 内嵌私钥。
+- 参考：[ESP-IDF Secure Boot v2](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/security/secure-boot-v2.html)、[Signed Applications](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/security/secure-boot-v2.html#signed-applications)。
 
 ---
 
@@ -301,9 +388,17 @@ flowchart LR
 | 编号 | 操作 | 期望 | 状态 |
 |------|------|------|------|
 | O7 | STA + manifest URL 拉包（HTTP 本机或 HTTPS 云端） | 同 O1；manifest SHA256 + 版本校验 | ✅ 2026-06-26（1.0.6→1.0.7，`apply=1`，`ota begin → app_b`） |
-| O8 | 篡改 bin 或 SHA256 | end 或校验阶段失败，旧槽运行 | 待测 |
-| O9 | HTTP(S) 下载中断 | 同 O2 | 待测 |
-| O10 | 阶段 2 变更后 | 复测 O5；rollback 仍生效 | 待测（阶段 1 O5 已通过） |
+| O8 | 篡改 bin 或 SHA256 | end 或校验阶段失败，旧槽运行 | 延后待办 |
+| O9 | HTTP(S) 下载中断 | 同 O2 | 延后待办 |
+| O10 | 阶段 2 变更后 | 复测 O5；rollback 仍生效 | 延后待办（阶段 1 O5 已通过） |
+
+### 阶段 3（计划）
+
+| 编号 | 操作 | 期望 | 状态 |
+|------|------|------|------|
+| O11 | 已 SB 设备 OTA 合法签名包 | apply 后新槽启动；mark_valid 正常 | 待办 |
+| O12 | OTA 未签名或错签包 | 拒绝或无法启动；rollback/旧槽保底 | 待办 |
+| O13 | SB 启用后上传低版本 | 仍 HTTP 409（D6 独立于 SB） | 待办 |
 
 ---
 
@@ -317,13 +412,21 @@ flowchart LR
 - **范围**：仅 `project/`（D2）
 - **发布**：`idf.py release` → [`firmware/`](../firmware/README.md)
 
-### 阶段 2 — STA + HTTP(S) 云端 OTA（O7 ✅）
+### 阶段 2 — STA + HTTP(S) 云端 OTA（交付收尾 ✅）
 
 - **传输**：`POST /api/ota/pull` + `/ota` 云端拉包区；`ota_pull.c`（HTTP/HTTPS 流式）
-- **校验**：manifest version + SHA256（D4）；仍走 `ota_upload_*` + rollback（D3）
-- **安全**：pull 须 STA IPv4（P2-3）；SoftAP upload 子网限制不变
-- **范围**：`project/` 已打通；`ballot_guard/` 待 W9
+- **校验**：manifest version + SHA256（D4 阶段 2）；仍走 `ota_upload_*` + rollback（D3）
+- **安全**：pull 须 STA IPv4（P2-3）；SoftAP upload 子网限制不变；**无镜像签名**
+- **范围**：`project/`、`ballot_guard/` 已打通（W9）；release manifest 按 `products.<工程名>`
 - **发布**：`idf release` → 托管 `firmware/<ver>/manifest.json`（含 `sha256`）
+- **实机验收**：O7 ✅；O8–O10 延后待办（可选补测，见测试矩阵）
+
+### 阶段 3 — Secure Boot + 镜像签名（计划）
+
+- **信任根**：eFuse 中的 Secure Boot 公钥摘要 + 发布私钥签名链
+- **校验**：`esp_ota_end` / 启动验签（D4 阶段 3）；可与阶段 2 SHA256 **并存**
+- **产线**：首批 `--flash-bundle` 烧签名 bootloader；eFuse 一次性配置（P3-3）
+- **范围**：量产 `project/`（及需 SB 的衍生工程）；Grill P3-* 后再动 sdkconfig
 
 ---
 
@@ -353,6 +456,17 @@ PowerShell 包装：[`idf.ps1`](../idf.ps1)、[`scripts/release.ps1`](../scripts
 - [x] P2-1 下载实现　[x] P2-2 manifest 校验点　[x] P2-3 STA 安全（暂定）  
 - [ ] P2-4 eFuse anti-rollback　[x] P2-5 断点续传范围  
 
+**阶段 2 延后待办（实机验收，可选）**
+
+- [ ] **O8** SHA256 篡改拒绝（[`ota_phase2_o8_corrupt_manifest.ps1`](../scripts/ota_phase2_o8_corrupt_manifest.ps1)）
+- [ ] **O9** HTTP(S) 下载中断 → abort，旧槽不变
+- [ ] **O10** 阶段 2 后 rollback 回归（复测 O5）
+
+**阶段 3 待 Grill（量产前必过）**
+
+- [ ] P3-1 签名算法　[ ] P3-2 密钥管理　[ ] P3-3 启用时机  
+- [ ] P3-4 anti-rollback 与 SB 组合　[ ] P3-5 SoftAP 上传策略　[ ] P3-6 manifest 扩展  
+
 ---
 
 ## 变更记录
@@ -369,3 +483,5 @@ PowerShell 包装：[`idf.ps1`](../idf.ps1)、[`scripts/release.ps1`](../scripts
 | 2026-06-26 | 1.7 | 阶段 1 收尾：O5 + 1.0.4→1.0.5 实机验收；sdkconfig 量产基线（rollback ON，ANTI_ROLLBACK / OTA_ROLLBACK_TEST OFF）；W4.1 apply 防连点；代码路径改 `common/ota` |
 | 2026-06-26 | 1.8 | 阶段 2 W5–W7：SHA256、`ota_manifest`/`ota_pull`、`POST /api/ota/pull`、release manifest sha256 |
 | 2026-06-26 | 1.9 | 阶段 2 O7 实机通过（本机 HTTP 8090，1.0.6→1.0.7）；W7.1 联调修复与「本机 HTTP 联调」章节；O8–O10/W9 仍待办 |
+| 2026-06-26 | 2.1 | W9 ballot_guard OTA（sdkconfig、rollback、ota_confirm、WEB_CTRL_OTA_DEFAULT_PRODUCT）；O8 辅助脚本与 O8–O10 实机步骤 |
+| 2026-06-26 | 2.3 | 阶段 3 W10–W11：`signed_ota`/`secure_boot` profile、密钥脚本、release `--signing-profile`、[`doc/secure_boot_production.md`](secure_boot_production.md) |
