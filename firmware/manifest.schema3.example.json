@@ -1,0 +1,69 @@
+{
+  "schema": 3,
+  "version": "1.0.3",
+  "target": "esp32s3",
+  "git_commit": "abc1234",
+  "signing_summary": {
+    "all_signed": false,
+    "any_signed": true
+  },
+  "naming": {
+    "pattern": "{sign_tag}_{product}_{version}_{build_date}.{ext}",
+    "sign_tag": "sign",
+    "example": "sign_project_1.0.3_20260626.bin"
+  },
+  "products": {
+    "project": {
+      "signed": true,
+      "build_date": "20260626",
+      "built_at_utc": "2026-06-26T12:00:00Z",
+      "signing": {
+        "profile": "signed_ota",
+        "algorithm": "rsa3072",
+        "signing_key_id": "dev"
+      },
+      "artifacts": [
+        {
+          "file": "sign_project_1.0.3_20260626.bin",
+          "size": 1048576,
+          "role": "app",
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        },
+        {
+          "file": "sign_project_1.0.3_20260626.hex",
+          "size": 2097152,
+          "role": "app",
+          "format": "intel_hex",
+          "flash_offset": "0x10000"
+        }
+      ],
+      "ota": {
+        "image": "sign_project_1.0.3_20260626.bin",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "signing_key_id": "dev",
+        "signing_profile": "signed_ota",
+        "note": "Upload this file at http://<device>/ota then Apply & Reboot"
+      }
+    },
+    "ble_demo": {
+      "signed": false,
+      "build_date": "20260626",
+      "built_at_utc": "2026-06-26T12:05:00Z",
+      "artifacts": [
+        {
+          "file": "unsigned_ble_demo_1.0.3_20260626.bin",
+          "size": 524288,
+          "role": "app",
+          "sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+        },
+        {
+          "file": "unsigned_ble_demo_1.0.3_20260626.hex",
+          "size": 1048576,
+          "role": "app",
+          "format": "intel_hex",
+          "flash_offset": "0x10000"
+        }
+      ]
+    }
+  }
+}

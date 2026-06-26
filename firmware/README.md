@@ -53,19 +53,20 @@ idf -Project project release 1.0.2  # 若已有 v1.0.3，实际 release 为 1.0.
 ## 命名规范（强制）
 
 ```text
-{product}_{version}_{build_date}.{ext}
+{sign_tag}_{product}_{version}_{build_date}.{ext}
 ```
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
+| `sign_tag` | `sign`（已签名）或 `unsigned`（未签名） | `sign` / `unsigned` |
 | `product` | CMake `project(...)` 名 | `project` / `ble_demo` |
 | `version` | 三段 semver | `1.0.3` |
 | `build_date` | 编译日期 UTC，`YYYYMMDD` | `20260625` |
 | `ext` | `bin` / `hex` 等 | `bin` |
 
-**示例：** `project_1.0.3_20260625.bin`、`project_1.0.3_20260625.hex`、`ble_demo_1.0.3_20260625.bin`
+**示例：** `sign_project_1.0.3_20260625.bin`、`unsigned_ble_demo_1.0.3_20260625.hex`
 
-可选 `--flash-bundle` / `--debug` 产物在日期后加 role：`{product}_{version}_{build_date}_{role}.{ext}`
+可选 `--flash-bundle` / `--debug` 产物在日期后加 role：`{sign_tag}_{product}_{version}_{build_date}_{role}.{ext}`
 
 
 
@@ -101,9 +102,9 @@ idf -Project project release 1.0.2  # 若已有 v1.0.3，实际 release 为 1.0.
 
 |------|------|
 
-| `manifest.json` | 版本、各工程 artifacts 清单（schema 2，`products` 字段） |
+| `manifest.json` | 版本、各工程 artifacts 清单（**schema 3**，`products` + `signing_summary`） |
 
-| `README.txt` | 给人看的简短说明 |
+| `README.txt` | 给人看的简短说明（含签名汇总与各 product 标注） |
 
 
 
@@ -159,10 +160,10 @@ idf -Project project release 1.0.3
 
 ```text
 firmware/1.0.3/
-  project_1.0.3_20260625.bin      ← 现场 /ota 上传（仅 project）
-  project_1.0.3_20260625.hex
-  ble_demo_1.0.3_20260625.bin
-  ble_demo_1.0.3_20260625.hex
+  sign_project_1.0.3_20260625.bin      ← 现场 /ota 上传（仅 project，已签名示例）
+  sign_project_1.0.3_20260625.hex
+  unsigned_ble_demo_1.0.3_20260625.bin
+  unsigned_ble_demo_1.0.3_20260625.hex
   manifest.json
   README.txt
 ```
@@ -177,10 +178,29 @@ firmware/1.0.3/
 
 
 
-上传 **`project_{version}_{build_date}.bin`**（见 `manifest.json` → `products.project.ota.image`）。版本须高于设备 `run_ver`。  
+上传 **`{sign_tag}_project_{version}_{build_date}.bin`**（见 `manifest.json` → `products.project.ota.image`）。版本须高于设备 `run_ver`。  
 **阶段 2 云端拉包**：将 `manifest.json` 托管到 HTTPS 可访问路径，设备 STA 联网后 `POST /api/ota/pull` 或 `/ota` 页填写 manifest URL。manifest 中 app 镜像须含 **`sha256`**（`idf release` 自动生成）。详见 [`doc/ota_development_plan.md`](../doc/ota_development_plan.md)。
 
-**阶段 3 签名包**：`idf release <ver> --signing-profile signed_ota --signing-key-id dev`；manifest 含 `ota.signing_key_id`。设备须先 `apply_profile.ps1 -Profile signed_ota` 后烧录。见 [`doc/secure_boot_production.md`](../doc/secure_boot_production.md)。
+**阶段 3 签名包**：`idf release <ver> --signing-profile signed_ota --signing-key-id dev`；manifest 含 `products.project.signed`、`signing` 与 `ota.signing_key_id`。设备须先 `apply_profile.ps1 -Profile signed_ota` 后烧录。见 [`doc/secure_boot_production.md`](../doc/secure_boot_production.md)。
+
+
+
+## `manifest.json`（schema 3）
+
+`idf release` 写入 **schema 3**。参考示例：[`manifest.schema3.example.json`](manifest.schema3.example.json)。
+
+| 字段 | 必填 | 说明 |
+|------|:----:|------|
+| `schema` | ✅ | 固定 `3` |
+| `version` | ✅ | 与目录名一致的三段 semver |
+| `signing_summary` | ✅ | `all_signed` / `any_signed`：整包签名汇总 |
+| `products.<name>.signed` | ✅ | `true` = `signed_ota` 或 `secure_boot`；`false` = 未签名 |
+| `products.<name>.signing` | | 仅 `signed: true` 时存在（`profile`、`algorithm`、`signing_key_id`） |
+| `products.project.ota` | | 仅 `project`；含 `image`、`sha256`；签名包另有 `signing_key_id`、`signing_profile` |
+
+`signing_summary` 由 release 脚本根据各 product 的 `signed` 自动计算；`README.txt` 从中派生人可读摘要。
+
+未签名 product **不写** `signing` 对象；OTA 段**不写** `ota.signed`（读 `products.project.signed`）。
 
 
 

@@ -53,7 +53,7 @@ idf signing-profile secure_boot
 idf -Project project release 1.2.3 --flash-bundle --signing-profile secure_boot --signing-key-id prod
 ```
 
-产物见 `firmware/1.2.3/manifest.json` → `products.project.signing`、`ota.signing_key_id`。
+产物见 `firmware/1.2.3/manifest.json` → `products.project.signed`、`signing`、`ota.signing_key_id`。
 
 ### 3. 烧录顺序（与 IDF 文档一致）
 

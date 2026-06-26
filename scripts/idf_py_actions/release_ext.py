@@ -35,6 +35,8 @@ _CMAKE_PROJECT_RE = re.compile(r'project\s*\(\s*(\w+)\s*\)')
 # ESP-IDF 工程目录名（与 CMake project(...) 一致），release-all 默认顺序。
 ALL_RELEASE_PRODUCTS = ('project', 'ble_demo', 'factory', 'ballot_guard')
 
+MANIFEST_SCHEMA = 3
+
 
 def _normalize_version(raw: str) -> str:
     m = _VERSION_RE.match((raw or '').strip())
@@ -193,22 +195,32 @@ def _build_date_tag(when: datetime) -> str:
     return when.strftime('%Y%m%d')
 
 
+def _release_sign_tag(signed: bool) -> str:
+    return 'sign' if signed else 'unsigned'
+
+
 def _release_basename(
     product: str,
     version: str,
     build_date: str,
     role: str,
     ext: str,
+    signed: bool,
 ) -> str:
-    """{product}_{version}_{build_date}[_{role}].{ext} — app omits role segment."""
+    """{sign_tag}_{product}_{version}_{build_date}[_{role}].{ext} — app omits role segment."""
+    stem = '%s_%s_%s_%s' % (_release_sign_tag(signed), product, version, build_date)
     if role == 'app':
-        return '%s_%s_%s.%s' % (product, version, build_date, ext)
-    return '%s_%s_%s_%s.%s' % (product, version, build_date, role, ext)
+        return '%s.%s' % (stem, ext)
+    return '%s_%s.%s' % (stem, role, ext)
 
 
-def _product_file_prefixes(product: str, version: str) -> List[str]:
-    """Match current and legacy release filenames for cleanup."""
-    return ['%s_%s_' % (product, version), '%s_v%s_' % (product, version)]
+def _product_file_prefixes(product: str, version: str, signed: bool) -> List[str]:
+    """Prefixes for the current sign variant only (plus legacy when unsigned)."""
+    tag = _release_sign_tag(signed)
+    prefixes = ['%s_%s_%s_' % (tag, product, version)]
+    if not signed:
+        prefixes.extend(['%s_%s_' % (product, version), '%s_v%s_' % (product, version)])
+    return prefixes
 
 
 def _artifact_plan(product: str) -> List[Tuple[str, str, str]]:
@@ -281,6 +293,7 @@ def _write_app_hex(
     product: str,
     version: str,
     build_date: str,
+    signed: bool,
 ) -> Dict[str, Any]:
     bin_src = os.path.join(build_dir, '%s.bin' % product)
     if not os.path.isfile(bin_src):
@@ -290,7 +303,7 @@ def _write_app_hex(
     with open(bin_src, 'rb') as f:
         payload = f.read()
 
-    out_name = _release_basename(product, version, build_date, 'app', 'hex')
+    out_name = _release_basename(product, version, build_date, 'app', 'hex', signed)
     dst = os.path.join(release_dir, out_name)
 
     with open(dst, 'w', encoding='utf-8', newline='\n') as f:
@@ -360,6 +373,7 @@ def _collect_release_files(
     build_date: str,
     flash_bundle: bool,
     debug: bool,
+    signed: bool,
 ) -> Tuple[List[Dict[str, Any]], str]:
     enabled_roles = {'app'}
     if flash_bundle:
@@ -373,7 +387,7 @@ def _collect_release_files(
     for rel_path, role, ext in _artifact_plan(product):
         if role not in enabled_roles:
             continue
-        out_name = _release_basename(product, version, build_date, role, ext)
+        out_name = _release_basename(product, version, build_date, role, ext, signed)
         if role == 'flash_app':
             entry = _copy_first_existing(
                 build_dir,
@@ -395,10 +409,49 @@ def _collect_release_files(
     if not ota_image:
         raise FatalError('App image missing after release copy')
 
-    hex_entry = _write_app_hex(build_dir, release_dir, product, version, build_date)
+    hex_entry = _write_app_hex(build_dir, release_dir, product, version, build_date, signed)
     artifacts.append(hex_entry)
 
     return artifacts, ota_image
+
+
+def _product_variants(entry: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    if not entry:
+        return {}
+    raw = entry.get('variants')
+    if isinstance(raw, dict):
+        return dict(raw)
+    tag = _release_sign_tag(_infer_product_signed(entry))
+    return {tag: {k: v for k, v in entry.items() if k != 'variants'}}
+
+
+def _product_variant_list(info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    variants = _product_variants(info)
+    if variants:
+        return list(variants.values())
+    return [info] if info else []
+
+
+def _merge_product_variant(
+    manifest: Dict[str, Any],
+    product: str,
+    tag: str,
+    new_entry: Dict[str, Any],
+) -> None:
+    products = manifest.setdefault('products', {})
+    variants = _product_variants(products.get(product, {}))
+    variants[tag] = new_entry
+    signed_flags = [bool(v.get('signed')) for v in variants.values()]
+    merged: Dict[str, Any] = {
+        'variants': variants,
+        'signed': any(signed_flags),
+    }
+    for prefer in ('sign', 'unsigned'):
+        ota = variants.get(prefer, {}).get('ota')
+        if ota:
+            merged['ota'] = ota
+            break
+    products[product] = merged
 
 
 def _remove_product_artifacts(
@@ -406,26 +459,44 @@ def _remove_product_artifacts(
     manifest: Dict[str, Any],
     product: str,
     version: str,
+    signed: bool,
 ) -> None:
-    """Remove prior release files for one product (used with --force)."""
+    """Remove prior release files for one product variant (same sign_tag only)."""
+    tag = _release_sign_tag(signed)
     products = manifest.get('products', {})
     entry = products.get(product)
     if entry:
-        for art in entry.get('artifacts', []):
-            name = art.get('file')
-            if not name:
-                continue
-            path = os.path.join(release_dir, name)
-            if os.path.isfile(path):
-                os.remove(path)
-        flash = entry.get('flash') or {}
-        for name in flash.values():
-            path = os.path.join(release_dir, name)
-            if os.path.isfile(path):
-                os.remove(path)
-        products.pop(product, None)
+        variant = _product_variants(entry).get(tag)
+        if variant:
+            for art in variant.get('artifacts', []):
+                name = art.get('file')
+                if not name:
+                    continue
+                path = os.path.join(release_dir, name)
+                if os.path.isfile(path):
+                    os.remove(path)
+            flash = variant.get('flash') or {}
+            for name in flash.values():
+                path = os.path.join(release_dir, name)
+                if os.path.isfile(path):
+                    os.remove(path)
+        variants = _product_variants(entry)
+        variants.pop(tag, None)
+        if variants:
+            signed_flags = [bool(v.get('signed')) for v in variants.values()]
+            products[product] = {
+                'variants': variants,
+                'signed': any(signed_flags),
+            }
+            for prefer in ('sign', 'unsigned'):
+                ota = variants.get(prefer, {}).get('ota')
+                if ota:
+                    products[product]['ota'] = ota
+                    break
+        else:
+            products.pop(product, None)
 
-    for prefix in _product_file_prefixes(product, version):
+    for prefix in _product_file_prefixes(product, version, signed):
         if not os.path.isdir(release_dir):
             continue
         for name in os.listdir(release_dir):
@@ -435,14 +506,49 @@ def _remove_product_artifacts(
                     os.remove(path)
 
 
+def _infer_product_signed(entry: Dict[str, Any]) -> bool:
+    if 'signed' in entry:
+        return bool(entry['signed'])
+    return bool(entry.get('signing'))
+
+
+def _backfill_product_signed(manifest: Dict[str, Any]) -> None:
+    for entry in manifest.get('products', {}).values():
+        for variant in _product_variant_list(entry):
+            if 'signed' not in variant:
+                variant['signed'] = _infer_product_signed(variant)
+        if 'signed' not in entry:
+            entry['signed'] = any(v.get('signed') for v in _product_variant_list(entry))
+
+
+def _apply_signing_summary(manifest: Dict[str, Any]) -> None:
+    flags = [
+        _infer_product_signed(variant)
+        for info in manifest.get('products', {}).values()
+        for variant in _product_variant_list(info)
+    ]
+    manifest['signing_summary'] = {
+        'all_signed': bool(flags) and all(flags),
+        'any_signed': any(flags),
+    }
+
+
+def _signing_summary_label(summary: Dict[str, Any]) -> str:
+    if summary.get('all_signed'):
+        return 'all products signed'
+    if summary.get('any_signed'):
+        return 'partial (some products signed)'
+    return 'none (all unsigned)'
+
+
 def _load_manifest(manifest_path: str, version: str) -> Dict[str, Any]:
     if not os.path.isfile(manifest_path):
-        return {'schema': 2, 'version': version, 'products': {}}
+        return {'schema': MANIFEST_SCHEMA, 'version': version, 'products': {}}
 
     with open(manifest_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    if data.get('schema') == 2 and 'products' in data:
+    if data.get('schema') in (2, MANIFEST_SCHEMA) and 'products' in data:
         if data.get('version') != version:
             raise FatalError(
                 'Manifest version mismatch in %s: %s vs %s'
@@ -458,7 +564,7 @@ def _load_manifest(manifest_path: str, version: str) -> Dict[str, Any]:
             )
         product = data['product']
         return {
-            'schema': 2,
+            'schema': MANIFEST_SCHEMA,
             'version': version,
             'target': data.get('target'),
             'git_commit': data.get('git_commit'),
@@ -485,7 +591,9 @@ def _product_release_entry(
     signing_meta: Optional[Dict[str, str]] = None,
     signing_key_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    signed = signing_meta is not None
     entry: Dict[str, Any] = {
+        'signed': signed,
         'build_date': build_date,
         'built_at_utc': built_at,
         'artifacts': artifacts,
@@ -510,19 +618,42 @@ def _product_release_entry(
         entry['ota'] = ota_entry
     if flash_bundle:
         entry['flash'] = {
-            'bootloader': _release_basename(product, ver, build_date, 'bootloader', 'bin'),
-            'partition': _release_basename(product, ver, build_date, 'partition', 'bin'),
-            'otadata': _release_basename(product, ver, build_date, 'otadata', 'bin'),
-            'full_script': _release_basename(product, ver, build_date, 'flash_full', 'txt'),
-            'app_only_script': _release_basename(product, ver, build_date, 'flash_app', 'txt'),
+            'bootloader': _release_basename(product, ver, build_date, 'bootloader', 'bin', signed),
+            'partition': _release_basename(product, ver, build_date, 'partition', 'bin', signed),
+            'otadata': _release_basename(product, ver, build_date, 'otadata', 'bin', signed),
+            'full_script': _release_basename(product, ver, build_date, 'flash_full', 'txt', signed),
+            'app_only_script': _release_basename(product, ver, build_date, 'flash_app', 'txt', signed),
         }
     return entry
 
 
 def _write_readme(release_dir: str, ver: str, manifest: Dict[str, Any]) -> None:
-    lines = ['Release %s (esp32s3)\n' % ver]
+    lines = ['Release %s (esp32s3)' % ver]
+    summary = manifest.get('signing_summary', {})
+    lines.append('Signing: %s\n' % _signing_summary_label(summary))
     for product, info in sorted(manifest.get('products', {}).items()):
-        lines.append('[%s] built %s UTC' % (product, info.get('built_at_utc', '?')))
+        variants = _product_variants(info)
+        if variants:
+            for tag, variant in sorted(variants.items()):
+                tag_label = '[signed]' if variant.get('signed') else '[unsigned]'
+                lines.append(
+                    '[%s/%s] built %s UTC %s'
+                    % (product, tag, variant.get('built_at_utc', '?'), tag_label)
+                )
+                for art in variant.get('artifacts', []):
+                    if art.get('role') == 'app':
+                        lines.append('  %s' % art.get('file'))
+                ota = variant.get('ota')
+                if ota:
+                    lines.append(
+                        '  OTA: upload %s via http://<device>/ota' % ota.get('image')
+                    )
+                lines.append('')
+            continue
+        tag_label = '[signed]' if info.get('signed') else '[unsigned]'
+        lines.append(
+            '[%s] built %s UTC %s' % (product, info.get('built_at_utc', '?'), tag_label)
+        )
         for art in info.get('artifacts', []):
             if art.get('role') == 'app':
                 lines.append('  %s' % art.get('file'))
@@ -597,32 +728,41 @@ def _release_one_product(
                 % (product, ver, ', '.join(sorted(existing_products)))
             )
 
-        _remove_product_artifacts(release_dir, manifest, product, ver)
+        signing_meta = detect_signing_meta(project_dir)
+        signed = signing_meta is not None
+        if signing_meta and not signing_key_id:
+            signing_key_id = 'dev'
+
+        _remove_product_artifacts(release_dir, manifest, product, ver, signed)
 
         built_at_dt = datetime.now(timezone.utc)
         build_date = _build_date_tag(built_at_dt)
         built_at = built_at_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
         artifacts, ota_image = _collect_release_files(
-            build_dir, release_dir, product, ver, build_date, flash_bundle, debug
+            build_dir, release_dir, product, ver, build_date, flash_bundle, debug, signed,
         )
 
-        signing_meta = detect_signing_meta(project_dir)
-        if signing_meta and not signing_key_id:
-            signing_key_id = 'dev'
-
-        manifest['schema'] = 2
+        manifest['schema'] = MANIFEST_SCHEMA
         manifest['version'] = ver
         manifest['target'] = get_target(project_dir)
         manifest['git_commit'] = _git_head_short(repo_root)
         manifest['naming'] = {
-            'pattern': '{product}_{version}_{build_date}.{ext}',
-            'example': _release_basename(product, ver, build_date, 'app', 'bin'),
+            'pattern': '{sign_tag}_{product}_{version}_{build_date}.{ext}',
+            'sign_tag': _release_sign_tag(signed),
+            'example': _release_basename(product, ver, build_date, 'app', 'bin', signed),
         }
-        manifest.setdefault('products', {})[product] = _product_release_entry(
-            product, ver, build_date, built_at, artifacts, ota_image, flash_bundle,
-            signing_meta, signing_key_id,
+        _merge_product_variant(
+            manifest,
+            product,
+            _release_sign_tag(signed),
+            _product_release_entry(
+                product, ver, build_date, built_at, artifacts, ota_image, flash_bundle,
+                signing_meta, signing_key_id,
+            ),
         )
+        _backfill_product_signed(manifest)
+        _apply_signing_summary(manifest)
 
         with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, indent=2)

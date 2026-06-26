@@ -94,7 +94,7 @@ idf -Project project release-all 1.0.4          # 全部工程同一版本
 idf -Project project release 1.0.4 --flash-bundle   # 产线首烧：bootloader + 分区表 + otadata
 ```
 
-产物目录：`firmware/<版本>/`（`manifest.json`、`project_<ver>_<date>.bin` 等）。详见 [`firmware/README.md`](firmware/README.md)。
+产物目录：`firmware/<版本>/`（`manifest.json`、`sign_project_<ver>_<date>.bin` 或 `unsigned_*` 等）。详见 [`firmware/README.md`](firmware/README.md)。
 
 ## OTA 镜像签名（阶段 3）
 
@@ -122,10 +122,35 @@ idf signing-key-gen
 idf signing-profile signed_ota --build
 idf -p COM13 flash monitor
 idf -Project project release 1.0.10 --signing-profile signed_ota --signing-key-id dev
-# 设备 http://192.168.4.1/ota 上传 firmware/1.0.10/project_*.bin → Apply
+# 设备 http://192.168.4.1/ota 上传 firmware/1.0.10/sign_project_*.bin → Apply（signed_ota 设备须用 sign_*）
 ```
 
 验收与量产首烧：[`doc/secure_boot_production.md`](doc/secure_boot_production.md)；总体规划：[`doc/ota_development_plan.md`](doc/ota_development_plan.md)。
+
+## 签名与 OTA 选包
+
+release 文件名前缀标明签名状态：`unsigned_*` = 未签名，`sign_*` = 已签名。设备**能否接受**某种 OTA 包，取决于**当前烧录固件用的 profile**（不是看 `manifest.json` 里的 `signed` 字段）。
+
+| 设备当前 profile | OTA 未签名包 | OTA 已签名包 | USB 刷未签名包 |
+|------------------|:------------:|:------------:|:--------------:|
+| **none**（默认） | ✅ | ✅ | ✅ |
+| **signed_ota** | ❌ | ✅ | ✅（应急维护） |
+| **secure_boot** | ❌ | ✅ | ❌ |
+
+**口诀：**
+
+- 烧了**未签名**固件（`signing-profile none`）→ OTA 两种包一般都能传；日常用 `unsigned_*.bin`。
+- 烧了**带签名**固件（`signed_ota` / `secure_boot`）→ OTA **只能**传 `sign_*.bin`，且密钥须与设备一致。
+- 无论哪种 profile，OTA 版本须**高于**设备当前 `run_ver`。
+
+**`firmware/<ver>/` 示例：**
+
+| 文件 | 适用设备 |
+|------|----------|
+| `unsigned_project_1.0.10_*.bin` | `none` 日常开发 |
+| `sign_project_1.0.10_*.bin` | `signed_ota` / `secure_boot` |
+
+manifest 中 `products.project.variants.unsigned` / `.sign` 分别记录两种包；顶层 `ota.image` 默认指向已签名包。详见 [`firmware/README.md`](firmware/README.md)。
 
 ## 双 OTA 槽位烧录
 
@@ -147,9 +172,9 @@ idf -Project project release 1.0.10 --signing-profile signed_ota --signing-key-i
 
 | 项目 | 说明 |
 |------|------|
-| 选文件 | `firmware/<ver>/manifest.json` → `products.project.ota.image` |
+| 选文件 | `firmware/<ver>/manifest.json` → `products.project.ota.image`（或 `variants` 下对应包） |
 | 版本 | 须**严格高于**设备 `run_ver` |
-| 签名 | 设备 **signed_ota** 时须 **signed** `.bin`（见上表） |
+| 签名 | 见上节「签名与 OTA 选包」 |
 | 云端拉包 | STA 联网后 `/ota` 填 manifest URL，或 `POST /api/ota/pull`（SHA256 校验） |
 
 ## 环境验证（ESP-IDF 5.5.4）
@@ -158,7 +183,6 @@ idf -Project project release 1.0.10 --signing-profile signed_ota --signing-key-i
 
 | 命令 | 验证方式 | 结果 |
 |------|----------|------|
-| `verify_env.ps1` | 完整执行 | 通过 |
 | `idf --help` | 列出子命令（含 `release`、`signing-profile` 等扩展） | 通过 |
 | `idf build` | 启动 ninja 编译（未跑完全部目标） | 通过 |
 | `idf -Project factory build` | 路由到 `factory/` 并启动编译 | 通过 |

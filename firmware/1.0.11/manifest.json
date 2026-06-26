@@ -1,0 +1,86 @@
+{
+  "schema": 3,
+  "version": "1.0.11",
+  "products": {
+    "project": {
+      "variants": {
+        "unsigned": {
+          "signed": false,
+          "build_date": "20260626",
+          "built_at_utc": "2026-06-26T10:24:47Z",
+          "artifacts": [
+            {
+              "file": "unsigned_project_1.0.11_20260626.bin",
+              "size": 1339584,
+              "sha256": "4ad4d0ae0d2edb6145c918e66921f9f80f0be17bc1fd52d28d3a96414422f28b",
+              "role": "app"
+            },
+            {
+              "file": "unsigned_project_1.0.11_20260626.hex",
+              "size": 3684204,
+              "role": "app",
+              "format": "intel_hex",
+              "flash_offset": "0x30000"
+            }
+          ],
+          "ota": {
+            "image": "unsigned_project_1.0.11_20260626.bin",
+            "note": "Upload this file at http://<device>/ota then Apply & Reboot",
+            "sha256": "4ad4d0ae0d2edb6145c918e66921f9f80f0be17bc1fd52d28d3a96414422f28b"
+          }
+        },
+        "sign": {
+          "signed": true,
+          "build_date": "20260626",
+          "built_at_utc": "2026-06-26T10:26:50Z",
+          "artifacts": [
+            {
+              "file": "sign_project_1.0.11_20260626.bin",
+              "size": 1380352,
+              "sha256": "8492c9e31cf8b8ec0ad66050316035d605ce7c47d241e8b7f0a3cd57853b3b32",
+              "role": "app"
+            },
+            {
+              "file": "sign_project_1.0.11_20260626.hex",
+              "size": 3796332,
+              "role": "app",
+              "format": "intel_hex",
+              "flash_offset": "0x30000"
+            }
+          ],
+          "signing": {
+            "profile": "signed_ota",
+            "algorithm": "rsa3072",
+            "signing_key_id": "dev"
+          },
+          "ota": {
+            "image": "sign_project_1.0.11_20260626.bin",
+            "note": "Upload this file at http://<device>/ota then Apply & Reboot",
+            "sha256": "8492c9e31cf8b8ec0ad66050316035d605ce7c47d241e8b7f0a3cd57853b3b32",
+            "signing_key_id": "dev",
+            "signing_profile": "signed_ota"
+          }
+        }
+      },
+      "signed": true,
+      "ota": {
+        "image": "sign_project_1.0.11_20260626.bin",
+        "note": "Upload this file at http://<device>/ota then Apply & Reboot",
+        "sha256": "8492c9e31cf8b8ec0ad66050316035d605ce7c47d241e8b7f0a3cd57853b3b32",
+        "signing_key_id": "dev",
+        "signing_profile": "signed_ota"
+      }
+    }
+  },
+  "target": "esp32s3",
+  "git_commit": "d6a5db0c",
+  "naming": {
+    "pattern": "{sign_tag}_{product}_{version}_{build_date}.{ext}",
+    "sign_tag": "sign",
+    "example": "sign_project_1.0.11_20260626.bin"
+  },
+  "signing_summary": {
+    "all_signed": false,
+    "any_signed": true
+  }
+}
