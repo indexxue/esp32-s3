@@ -1,8 +1,8 @@
 # ESP32-S3 OTA 开发计划与决策记录
 
-**版本**：1.6  
-**依据**：[`flash_partition/partitions_16m_n16r8.md`](../flash_partition/partitions_16m_n16r8.md)、[`doc/partition_switch_development_plan.md`](partition_switch_development_plan.md)、[`ota/`](../ota/)  
-**状态**：阶段 1（SoftAP 本地 OTA）已在 `project/` **实机验证通过**（2026-06-25）；阶段 2（STA + HTTPS 云端拉包）**未开始**。
+**版本**：1.7  
+**依据**：[`flash_partition/partitions_16m_n16r8.md`](../flash_partition/partitions_16m_n16r8.md)、[`doc/partition_switch_development_plan.md`](partition_switch_development_plan.md)、[`common/ota/`](../common/ota/)  
+**状态**：阶段 1（SoftAP 本地 OTA）**全部 WBS 与测试矩阵 O1–O6 实机验收通过**（2026-06-26，`run_ver` 1.0.4→1.0.5）；阶段 2（STA + HTTPS 云端拉包）**未开始**。
 
 ---
 
@@ -16,7 +16,7 @@
 | **App_A / 槽 A** | `app_a` / `ota_0` | 量产主应用默认槽（见分区表） |
 | **App_B / 槽 B** | `app_b` / `ota_1` | 对侧槽 / 厂测备用槽 |
 
-串口 **`boot_a` / `boot_b` / `boot_q`** 走 [`ota/src/boot_slot.c`](../ota/src/boot_slot.c)（`esp_ota_set_boot_partition`）。  
+串口 **`boot_a` / `boot_b` / `boot_q`** 走 [`common/ota/src/boot_slot.c`](../common/ota/src/boot_slot.c)（`esp_ota_set_boot_partition`）。
 OTA **`apply`** 同样经 IDF OTA API 切槽，**不经过** `boot_slot_request_*`，但语义一致。
 
 ---
@@ -52,11 +52,11 @@ OTA **`apply`** 同样经 IDF OTA API 切槽，**不经过** `boot_slot_request_
 
 新固件 `apply` 重启后处于 **`ESP_OTA_IMG_PENDING_VERIFY`**，在调用 `esp_ota_mark_app_valid_cancel_rollback()` 之前，Bootloader 可因启动失败自动回滚。
 
-| 项目 | 阶段 1 现状 | 目标（W1.1） |
-|------|-------------|--------------|
-| **调用点** | `app_init()` 全阶段 OK 后，或 `web_ctrl_start` 成功后（W1.1） | 同上（已实现） |
-| **保护范围** | 覆盖 BoardInit / 按键 / 灯效失败；Web 启动失败时不 mark_valid | 阶段 2 前可再评估业务任务（LCD/SD）是否纳入 |
-| **O5 测试** | 须使用 **在 mark_valid 之前崩溃** 的专用测试固件（如 `app_main` 最早路径 `abort()`） | 文档化测试包构建方式 |
+| 项目 | 阶段 1 现状 |
+|------|-------------|
+| **调用点** | `app_init()` 全阶段 OK 后，或 `web_ctrl_start` 成功后（[`project/main/start.c`](../project/main/start.c)） |
+| **保护范围** | 覆盖 BoardInit / 按键 / 灯效失败；Web 启动失败时不 mark_valid |
+| **O5 测试** | `CONFIG_OTA_ROLLBACK_TEST` 专用包 + **Flash 内 bootloader 已带 rollback**（须 USB 刷过）；**2026-06-26 实机通过** |
 
 **原则**：「启动成功」= 文档 D3 与 W1 所指的自检通过，**不等于**仅 BoardInit 返回 OK。
 
@@ -76,7 +76,7 @@ OTA **`apply`** 同样经 IDF OTA API 切槽，**不经过** `boot_slot_request_
 
 ### 会话与并发
 
-- **全局单会话**：内存状态机 `idle` / `writing` / `ready`（[`ota/inc/ota.h`](../ota/inc/ota.h)）。
+- **全局单会话**：内存状态机 `idle` / `writing` / `ready`（[`common/ota/inc/ota.h`](../common/ota/inc/ota.h)）。
 - **抢占策略**：新 `upload` 会先 `abort` 旧会话再 `begin`（S5）；**非**「进行中返回 503 拒绝第二路」。
 - 互斥：`ota` 内部 mutex；HTTP 层与 `web_ctrl_ota.c` 串行处理单连接上传。
 
@@ -84,7 +84,7 @@ OTA **`apply`** 同样经 IDF OTA API 切槽，**不经过** `boot_slot_request_
 
 | 状态 | 含义 |
 |------|------|
-| **409** | 版本不高于当前（D6） |
+| **409** | 版本不高于当前（upload / D6）；或 apply 时会话非 `ready`（如连点 apply） |
 | **403** | SoftAP 下客户端不在 AP 子网 |
 | **411** | 缺少 `Content-Length` |
 | **413** | 超过 `CONFIG_WEB_CTRL_OTA_UPLOAD_MAX`（默认 8 MiB） |
@@ -98,17 +98,18 @@ OTA **`apply`** 同样经 IDF OTA API 切槽，**不经过** `boot_slot_request_
 ## 代码布局（阶段 1 已完成）
 
 ```
-ota/
-  CMakeLists.txt     # IDF 组件注册
-  inc/ota.h          # 会话 API + ota_status_t
-  inc/boot_slot.h    # 串口切槽（与 OTA apply 并行）
-  src/ota.c          # begin/write/end/abort/apply/confirm
-  src/boot_slot.c
+common/
+  Kconfig            # CONFIG_OTA_ROLLBACK_TEST（O5 专用，量产默认关）
+  ota/inc/ota.h      # 会话 API + ota_status_t
+  ota/inc/boot_slot.h
+  ota/src/ota.c      # begin/write/end/abort/apply/confirm
+  ota/src/boot_slot.c
 components/web_ctrl/
   src/web_ctrl_ota.c # HTTP 适配层（Kconfig WEB_CTRL_OTA）
 project/
-  sdkconfig.defaults # CONFIG_WEB_CTRL_OTA, CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
-  main/start.c       # ota_confirm_running_image()（W1.1：app_init / web_boot 成功后）
+  sdkconfig.defaults # rollback ON；ANTI_ROLLBACK / OTA_ROLLBACK_TEST 默认 OFF
+  bootloader/sdkconfig.defaults
+  main/start.c       # ota_confirm_running_image()（app_init / web_boot 成功后）
 ```
 
 **版本同源链**：`PROJECT_VER`（[`project/CMakeLists.txt`](../project/CMakeLists.txt) 或 `idf.py release -DPROJECT_VER`）→ `esp_app_desc.version` → compile def `NVS_APP_VERSION_STRING` → 运行时 NVS `appver` 同步（[`common/src/nvs.c`](../common/src/nvs.c)）。详见 [`firmware/README.md`](../firmware/README.md)。
@@ -157,7 +158,7 @@ flowchart LR
 
 #### W2：`ota` 核心
 
-- [x] [`ota/inc/ota.h`](../ota/inc/ota.h)、[`ota/src/ota.c`](../ota/src/ota.c)
+- [x] [`common/ota/inc/ota.h`](../common/ota/inc/ota.h)、[`common/ota/src/ota.c`](../common/ota/src/ota.c)
 - [x] `esp_ota_get_next_update_partition()` 选对侧槽
 - [x] `ota_upload_begin`：首包解析 `esp_app_desc`、semver 比较（D6）
 - [x] `ota_upload_write` / `ota_upload_end` / `ota_upload_abort`（D7）
@@ -174,13 +175,15 @@ flowchart LR
 #### W4：测试与文档
 
 - [x] 测试矩阵 O1–O4、O6 — **2026-06-25 实机通过**（`run_ver` 递增至 1.0.2）
-- [x] O5 rollback — **有条件通过**（须 crash 固件在 mark_valid 前失败；见「Rollback 保护窗口」）
+- [x] O5 rollback — **2026-06-26 实机通过**（W1.1 后 crash 包 OTA apply → 回旧槽；见「O5 构建与前提」）
+- [x] 正常 OTA 升级 **1.0.4→1.0.5** — **2026-06-26 实机通过**（`CONFIG_OTA_ROLLBACK_TEST` 关闭的 release 包）
 - [x] [`README.md`](../README.md) OTA 维护说明
 
 #### W4.1：文档与 UI 同步（已完成）
 
 - [x] `/ota` 页文案：改为推荐 **`idf.py release`** 产物名（`project_x.y.z_YYYYMMDD.bin`），弱化「手改 CMakeLists」
 - [x] 指向 `manifest.json` → `products.project.ota.image` 作为现场选文件依据
+- [x] apply：上传后 **status=`ready` 检查** + **防连点**；非 ready 时 HTTP 409 + `state=` 明细
 
 ---
 
@@ -231,20 +234,27 @@ flowchart LR
 | O2 | 同 O1 | 上传中途断连 | 仍 A 槽；state `idle`；不可 apply | ✅ |
 | O3 | 同 O1 | 上传完成不 apply 后断电 | 仍 A 槽 | ✅ |
 | O4 | 同 O1 | 上传低版本 | begin 拒绝，HTTP 409 | ✅ |
-| O5 | 对侧槽待启动镜像 | apply **crash-test 固件**（mark_valid **前**崩溃） | rollback 回旧槽 | ⚠️ 见 Rollback 窗口 |
+| O5 | 对侧槽待启动镜像 | apply **crash-test 固件**（mark_valid **前**崩溃） | rollback 回旧槽 | ✅ 2026-06-26 |
 | O6 | 两槽均有镜像 | `boot_q` / `GET /api/ota/status` | 正确 `run` / `target` / `run_ver` | ✅ |
 
 **O5 测试包要求**：在 `ota_confirm_running_image()` 调用点**之前**触发复位或 `abort()`；不可用「业务任务运行时崩溃」代替，否则当前实现已 mark_valid。
 
-**O5 构建**（仅测试，勿量产）：
+**量产 / 发布 sdkconfig 基线**（[`project/sdkconfig.defaults`](../project/sdkconfig.defaults)）：
 
-```powershell
-# menuconfig → Component config → OTA → OTA rollback test
-# 或一次性编译：
-idf -Project project build -DCONFIG_OTA_ROLLBACK_TEST=y
-```
+| 配置 | 量产默认 |
+|------|----------|
+| `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | **y** |
+| `CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK` | **关闭**（D6；勿在 menuconfig 误开） |
+| `CONFIG_OTA_ROLLBACK_TEST` | **关闭** |
 
-启用 `CONFIG_OTA_ROLLBACK_TEST` 后，`app_init()` 最早路径会 `abort()`，Bootloader 应 rollback 至旧槽。
+**O5 构建**（仅专项测试，测完须关回并重新 release 正常包）：
+
+1. 确认 Flash 内 **bootloader 已含 rollback**（改 rollback 相关项后至少一次 `idf -Project project flash`，OTA **不会**更新 bootloader）。
+2. menuconfig → **Component config → OTA** → 勾选 **Crash in app_init before ota_confirm…**，保存 `sdkconfig`。
+3. `idf -Project project build`（或临时 release）；**勿 USB 烧 crash 包**，仅 SoftAP OTA 上传 → apply。
+4. 测毕：`# CONFIG_OTA_ROLLBACK_TEST is not set`，`build` / `release` 正常固件。
+
+启用 `CONFIG_OTA_ROLLBACK_TEST` 后，`app_init()` 入口 `abort()`（mark_valid 之前），Bootloader 应在下一次启动回旧槽。
 
 ### 阶段 2（规划）
 
@@ -253,7 +263,7 @@ idf -Project project build -DCONFIG_OTA_ROLLBACK_TEST=y
 | O7 | STA + manifest URL 拉包 | 同 O1 |
 | O8 | 篡改 bin 或 SHA256 | end 或校验阶段失败，旧槽运行 |
 | O9 | HTTPS 下载中断 | 同 O2 |
-| O10 | W1.1 完成后复测 O5 | rollback 在「平台自检失败」时生效 |
+| O10 | 阶段 2 变更后 | 复测 O5；rollback 在「平台自检失败」时仍生效（阶段 1 已验 O5） |
 
 ---
 
@@ -313,3 +323,4 @@ PowerShell 包装：[`idf.ps1`](../idf.ps1)、[`scripts/release.ps1`](../scripts
 | 2026-06-25 | 1.3 | 新增 `idf.py release` 与 `firmware/` 发布目录 |
 | 2026-06-26 | 1.4 | 文档与实现对齐：术语表、路径修正、并发/HTTP 码、rollback 窗口与 O5 说明、架构 seam、阶段 2 WBS/P2 待决、W1.1/W4.1 待办 |
 | 2026-06-26 | 1.6 | W1.1 rollback 窗口：`ota_confirm` 后移至 app_init / web_boot；`CONFIG_OTA_ROLLBACK_TEST`；W4.1 `/ota` 页文案 |
+| 2026-06-26 | 1.7 | 阶段 1 收尾：O5 + 1.0.4→1.0.5 实机验收；sdkconfig 量产基线（rollback ON，ANTI_ROLLBACK / OTA_ROLLBACK_TEST OFF）；W4.1 apply 防连点；代码路径改 `common/ota` |

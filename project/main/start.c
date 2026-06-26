@@ -8,6 +8,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <stdlib.h>
+
 #include "type.h"
 
 #include "log.h"
@@ -33,6 +35,13 @@
 #define WEB_CTRL_BOOT_TASK_STACK_WORDS (10240U)
 #define WEB_CTRL_BOOT_TASK_PRIORITY (3U)
 
+static void app_ota_confirm_running_image(void);
+
+static bool app_defer_ota_confirm_to_web(void)
+{
+    return device_profile_platform_wants(DEVICE_PLATFORM_MASK_WEB);
+}
+
 static void web_ctrl_boot_task(void *arg)
 {
     web_ctrl_config_t wcfg;
@@ -47,6 +56,8 @@ static void web_ctrl_boot_task(void *arg)
     const esp_err_t werr = web_ctrl_start(&wcfg);
     if (werr != ESP_OK) {
         LOG_WARN("web_ctrl_start failed: %s", esp_err_to_name(werr));
+    } else {
+        app_ota_confirm_running_image();
     }
     vTaskDelete(NULL);
 }
@@ -160,6 +171,21 @@ static void button_scan_task(void *arg)
 
 /* ---------- 分阶段初始化 ---------- */
 
+static void app_ota_confirm_running_image(void)
+{
+    const status_t ota_st = ota_confirm_running_image();
+    if (ota_st != STATUS_OK) {
+        LOG_WARN("ota_confirm_running_image: %s", status_to_str(ota_st));
+    }
+}
+
+#if !CONFIG_WEB_CTRL_AUTO_START
+static bool app_defer_ota_confirm_to_web(void)
+{
+    return false;
+}
+#endif
+
 static status_t app_init_platform(void)
 {
     if (log_init(NULL) != STATUS_OK) {
@@ -172,13 +198,6 @@ static status_t app_init_platform(void)
     if (BoardInit() != STATUS_OK) {
         LOG_ERROR("BoardInit failed");
         return STATUS_FAIL;
-    }
-
-    {
-        const status_t ota_st = ota_confirm_running_image();
-        if (ota_st != STATUS_OK) {
-            LOG_WARN("ota_confirm_running_image: %s", status_to_str(ota_st));
-        }
     }
 
 #if CONFIG_WEB_CTRL_AUTO_START
@@ -231,6 +250,10 @@ static status_t app_init_led_ui(void)
 
 static status_t app_init(void)
 {
+#if CONFIG_OTA_ROLLBACK_TEST
+    abort();
+#endif
+
     status_t err = app_init_platform();
     if (err != STATUS_OK) {
         return err;
@@ -248,6 +271,10 @@ static status_t app_init(void)
         if (err != STATUS_OK) {
             return err;
         }
+    }
+
+    if (!app_defer_ota_confirm_to_web()) {
+        app_ota_confirm_running_image();
     }
 
     return STATUS_OK;

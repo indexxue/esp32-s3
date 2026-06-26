@@ -43,9 +43,11 @@ static const char s_ota_page_html[] =
     "#log{white-space:pre-wrap;background:#f5f5f5;padding:10px;font-size:.85rem;max-height:220px;overflow:auto}"
     "</style></head><body>"
     "<h1>固件 OTA</h1>"
-    "<p class=hint>上传 <code>project.bin</code> 到<strong>对侧槽</strong>，完成后点「确认重启」。"
-    "新固件版本须<strong>高于</strong>当前运行版本（改 <code>project/CMakeLists.txt</code> 中 "
-    "<code>PROJECT_VER</code> 后重新编译）。</p>"
+    "<p class=hint>上传 <strong>release</strong> 应用镜像（推荐 "
+    "<code>project_x.y.z_YYYYMMDD.bin</code>）到<strong>对侧槽</strong>，完成后点「确认重启」。"
+    "选文件见 <code>firmware/&lt;ver&gt;/manifest.json</code> → "
+    "<code>products.project.ota.image</code>。新固件版本须<strong>高于</strong>当前运行版本"
+    "（<code>idf -Project project release &lt;ver&gt;</code>）。</p>"
     "<p id=info>加载中…</p><p id=hint></p>"
     "<input type=file id=f accept=.bin,application/octet-stream><br>"
     "<button id=up disabled>上传</button>"
@@ -57,7 +59,7 @@ static const char s_ota_page_html[] =
     "log=document.getElementById('log'),fill=document.getElementById('fill'),"
     "up=document.getElementById('up'),ab=document.getElementById('ab'),ap=document.getElementById('ap'),"
     "fi=document.getElementById('f');"
-    "let runVer='',uploadBusy=false,pickedVer='';"
+    "let runVer='',uploadBusy=false,applyBusy=false,pickedVer='';"
     "function L(m){log.textContent+=m+'\\n';log.scrollTop=log.scrollHeight;}"
     "function verParts(v){const p=String(v||'').trim().split('.').map(x=>parseInt(x,10)||0);"
     "while(p.length<3)p.push(0);return p;}"
@@ -73,7 +75,7 @@ static const char s_ota_page_html[] =
     "function syncButtons(st){"
     "const w=(st==='writing'),rd=(st==='ready'),id=(st==='idle');"
     "up.disabled=uploadBusy||!fi.files.length||w;"
-    "ab.disabled=uploadBusy||id;ap.disabled=uploadBusy||!rd;}"
+    "ab.disabled=uploadBusy||applyBusy||id;ap.disabled=uploadBusy||applyBusy||!rd;}"
     "async function refresh(){try{"
     "const r=await fetch('/api/ota/status');const j=await r.json();"
     "if(!j.ok){info.textContent='状态读取失败';info.className='err';return;}"
@@ -107,7 +109,7 @@ static const char s_ota_page_html[] =
     "fill.style.width=Math.round(100*e.loaded/e.total)+'%';}};"
     "xhr.onload=()=>{"
     "L('HTTP '+xhr.status+' '+xhr.responseText);"
-    "if(xhr.status===409){L('提示: 请增大 PROJECT_VER 后重新编译 project.bin');}"
+    "if(xhr.status===409){L('提示: 请使用更高版本的 release 包（idf -Project project release &lt;ver&gt;）');}"
     "uploadBusy=false;refresh();resolve();};"
     "xhr.onerror=()=>{L('网络错误（连接中断或超时，大文件请耐心等待）');"
     "uploadBusy=false;refresh();resolve();};"
@@ -116,9 +118,13 @@ static const char s_ota_page_html[] =
     "ab.onclick=async()=>{if(uploadBusy)return;"
     "try{const r=await fetch('/api/ota/abort',{method:'POST'});L(await r.text());refresh();}"
     "catch(e){L(String(e));}};"
-    "ap.onclick=async()=>{if(uploadBusy)return;L('确认重启…');"
-    "try{const r=await fetch('/api/ota/apply',{method:'POST'});L(await r.text());}"
-    "catch(e){L(String(e));}};"
+    "ap.onclick=async()=>{if(uploadBusy||applyBusy)return;"
+    "try{const sr=await fetch('/api/ota/status');const sj=await sr.json();"
+    "if(!sj.ok||sj.state!=='ready'){L('无法 apply：当前状态 '+(sj.state||'?')+'，请重新上传');refresh();return;}}"
+    "catch(e){L('状态读取失败: '+e);return;}"
+    "applyBusy=true;syncButtons('ready');L('确认重启…');"
+    "try{const r=await fetch('/api/ota/apply',{method:'POST'});L(await r.text());refresh();}"
+    "catch(e){L(String(e));applyBusy=false;refresh();}};"
     "</script></body></html>";
 
 static bool ota_http_write_allowed(httpd_req_t *req)
@@ -223,6 +229,15 @@ static esp_err_t ota_apply_post_handler(httpd_req_t *req)
     }
 
     err = ota_apply();
+    if (err == ESP_ERR_INVALID_STATE) {
+        ota_status_t st;
+        char         detail[64];
+
+        if (ota_get_status(&st) == ESP_OK) {
+            (void)snprintf(detail, sizeof(detail), "session not ready (state=%s)", ota_state_str(st.state));
+            return ota_send_json_err(req, "409 Conflict", "apply", detail);
+        }
+    }
     return ota_send_json_err(req, "500 Internal Server Error", "apply", esp_err_to_name(err));
 }
 

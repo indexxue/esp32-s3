@@ -1,0 +1,13 @@
+menu "OTA"
+
+    config OTA_ROLLBACK_TEST
+        bool "Crash in app_init before ota_confirm (O5 rollback test only)"
+        default n
+        help
+            When enabled, app_init() calls abort() before ota_confirm_running_image().
+            Build a test image, OTA-apply it to the inactive slot, reboot, and verify
+            the bootloader rolls back to the previous slot.
+
+            Do not enable in production firmware.
+
+endmenu
