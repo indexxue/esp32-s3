@@ -1,6 +1,6 @@
 /**
  * @file battery.c
- * @brief ESP32-S3：使能 BOARD_BATTERY_PIN_ENABLE，ADC 采样 GPIO1（ADC1_CH0），分压比 2。
+ * @brief ESP32-S3：可选 BOARD_BATTERY_PIN_ENABLE，ADC 采样 BOARD_BATTERY_PIN_ADC。
  *        `battery_voltage_read_mv` 对真实 ADC 做 2 分钟节流，间隔内返回上次成功采样缓存。
  */
 
@@ -16,8 +16,9 @@
 #include <string.h>
 
 #define BATTERY_ADC_UNIT ADC_UNIT_1_E
-/** GPIO1 -> ADC1_CH0，与 `bsp_driver` 枚举一致 */
-#define BATTERY_ADC_CHANNEL ADC_CHANNEL_0_E
+#ifndef BOARD_BATTERY_ADC_CHANNEL
+#define BOARD_BATTERY_ADC_CHANNEL ADC_CHANNEL_0_E
+#endif
 
 #define BATTERY_SAMPLE_CNT (10U)
 #define BATTERY_RC_STABLE_MS (30U)
@@ -52,6 +53,10 @@ static struct {
 
 static void enable_pin_init(void)
 {
+    if (BOARD_BATTERY_PIN_ENABLE < 0) {
+        return;
+    }
+
     GpioPinConfig_t g = {0};
 
     g.pin        = (s32_t)BOARD_BATTERY_PIN_ENABLE;
@@ -98,7 +103,7 @@ void battery_init(void)
         return;
     }
 
-    adcCh.channel  = BATTERY_ADC_CHANNEL;
+    adcCh.channel  = BOARD_BATTERY_ADC_CHANNEL;
     adcCh.atten    = ADC_ATTEN_DB_12_E;
     adcCh.bitWidth = ADC_BITWIDTH_DEFAULT_E;
     if (AdcConfigureChannel(&adcCh) != TRUE) {
@@ -122,15 +127,19 @@ static uint32_t battery_voltage_sample_hw(battery_voltage_t *voltage)
     uint16_t count = 0U;
 
 #if !BATTERY_ENABLE_HELD_HIGH
-    (void)GpioWritePin((s32_t)BOARD_BATTERY_PIN_ENABLE, 1U);
-    vTaskDelay(pdMS_TO_TICKS(BATTERY_RC_STABLE_MS));
+    if (BOARD_BATTERY_PIN_ENABLE >= 0) {
+        (void)GpioWritePin((s32_t)BOARD_BATTERY_PIN_ENABLE, 1U);
+        vTaskDelay(pdMS_TO_TICKS(BATTERY_RC_STABLE_MS));
+    }
 #endif
 
     for (uint16_t i = 0; i < BATTERY_SAMPLE_CNT; i++) {
         s32_t vadc = 0;
-        if (AdcReadVoltageMv(BATTERY_ADC_CHANNEL, &vadc) != TRUE) {
+        if (AdcReadVoltageMv(BOARD_BATTERY_ADC_CHANNEL, &vadc) != TRUE) {
 #if !BATTERY_ENABLE_HELD_HIGH
-            (void)GpioWritePin((s32_t)BOARD_BATTERY_PIN_ENABLE, 0U);
+            if (BOARD_BATTERY_PIN_ENABLE >= 0) {
+                (void)GpioWritePin((s32_t)BOARD_BATTERY_PIN_ENABLE, 0U);
+            }
 #endif
             return 0U;
         }
@@ -150,7 +159,9 @@ static uint32_t battery_voltage_sample_hw(battery_voltage_t *voltage)
     }
 
 #if !BATTERY_ENABLE_HELD_HIGH
-    (void)GpioWritePin((s32_t)BOARD_BATTERY_PIN_ENABLE, 0U);
+    if (BOARD_BATTERY_PIN_ENABLE >= 0) {
+        (void)GpioWritePin((s32_t)BOARD_BATTERY_PIN_ENABLE, 0U);
+    }
 #endif
 
     if (count < 3U) {

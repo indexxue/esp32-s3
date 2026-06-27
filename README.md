@@ -8,6 +8,7 @@ ESP32-S3（N16R8）固件 monorepo。本地 ESP-IDF 工具链（`Espressif/`）�
 | `factory` | `factory/` | 工厂/维护镜像（槽位 B） |
 | `ble_demo` | `ble_demo/` | BLE GATT 示例 |
 | `ballot_guard` | `ballot_guard/` | 选票监管应用（SoftAP/STA OTA，见 [`ballot_guard/README.txt`](ballot_guard/README.txt)） |
+| `voice_hub` | `voice_hub/` | 交互式语音设备（ES8311/OV2640/ST7789，见 [`voice_hub/README.txt`](voice_hub/README.txt)） |
 
 共享代码：`common/`、`bsp_driver/`、`cbb/`（**Git 子模块**）、`components/`（如 `web_ctrl`）。
 
@@ -20,7 +21,7 @@ ESP32-S3（N16R8）固件 monorepo。本地 ESP-IDF 工具链（`Espressif/`）�
 | **cmd**（推荐，Cursor 默认「ESP-IDF 5.5」） | `idf build`、`idf -Project project release 1.0.10` |
 | **PowerShell** | 终端选 **「ESP-IDF PowerShell」** 后直接 `idf ...`；否则 **`.\idf.cmd ...`**（不要裸打 `idf`） |
 
-**`-Project <名>`**（可选）：选择工程目录，默认 `project`。可选值：`project`、`ble_demo`、`factory`、`ballot_guard`。例：`idf -Project factory build` 等价于在 `factory/` 下执行 `idf.py build`。
+**`-Project <名>`**（可选）：选择工程目录，默认 `project`。可选值：`project`、`ble_demo`、`factory`、`ballot_guard`、`voice_hub`。例：`idf -Project factory build` 等价于在 `factory/` 下执行 `idf.py build`。
 
 ### 一次性环境脚本
 
@@ -75,7 +76,7 @@ release 编译异常（`Ninja ()`）时：`idf -Project project fullclean` 后�
 |------|------|-------------------|
 | `idf build` | 仅编译，不打包 | 当前 commit 的 git semver tag，否则最近祖先 tag |
 | `idf -Project project release <ver>` | 按版本编译**单个**工程并归档到 `firmware/<ver>/` | 命令行 `<ver>`；低于仓库最高 tag 时抬升到 tag |
-| `idf -Project project release-all <ver>` | 对 `project`、`ble_demo`、`factory`、`ballot_guard` 依次 release 到同一 `firmware/<ver>/` | 同上 |
+| `idf -Project project release-all <ver>` | 对 `project`、`ble_demo`、`factory`、`ballot_guard`、`voice_hub` 依次 release 到同一 `firmware/<ver>/` | 同上 |
 
 **release 常用选项：**
 

@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
-    [ValidateSet("project", "ble_demo", "factory", "ballot_guard")]
+    [ValidateSet("project", "ble_demo", "factory", "ballot_guard", "voice_hub")]
     [string]$Project = "project",
     [switch]$AllProjects,
     [switch]$FlashBundle,

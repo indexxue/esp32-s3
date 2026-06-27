@@ -12,10 +12,12 @@ project/sdkconfig
 factory/sdkconfig
 ballot_guard/sdkconfig
 ble_demo/sdkconfig
+voice_hub/sdkconfig
 project/sdkconfig.old
 factory/sdkconfig.old
 ballot_guard/sdkconfig.old
 ble_demo/sdkconfig.old
+voice_hub/sdkconfig.old
 
 # Component manager (if used)
 project/dependencies.lock

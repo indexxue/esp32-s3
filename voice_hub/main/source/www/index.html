@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>voice_hub</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem; background: #111; color: #eee; }
+    h1 { font-size: 1.25rem; }
+    button { margin: 0.25rem 0.5rem 0.25rem 0; padding: 0.5rem 1rem; }
+    pre { background: #222; padding: 0.75rem; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>voice_hub</h1>
+  <p>局域网交互面板（M1 Web 骨架；M3/M5 预览与对讲待 bring-up）。</p>
+  <button type="button" id="btnStatus">刷新状态</button>
+  <button type="button" id="btnCapture">拍照</button>
+  <button type="button" id="btnIntercom">对讲切换</button>
+  <pre id="out">—</pre>
+  <script>
+    const out = document.getElementById('out');
+    async function refresh() {
+      const r = await fetch('/api/voice_hub/status');
+      out.textContent = JSON.stringify(await r.json(), null, 2);
+    }
+    document.getElementById('btnStatus').onclick = refresh;
+    document.getElementById('btnCapture').onclick = async () => {
+      const r = await fetch('/api/voice_hub/capture', { method: 'POST' });
+      out.textContent = JSON.stringify(await r.json(), null, 2);
+    };
+    let intercomOn = false;
+    document.getElementById('btnIntercom').onclick = async () => {
+      intercomOn = !intercomOn;
+      const r = await fetch('/api/voice_hub/intercom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start: intercomOn })
+      });
+      out.textContent = JSON.stringify(await r.json(), null, 2);
+    };
+    refresh();
+  </script>
+</body>
+</html>

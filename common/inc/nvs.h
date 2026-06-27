@@ -34,10 +34,12 @@ extern "C" {
 
 #define NVS_PROJECT_ID_MAIN NVS_PROJECT_ID_MAKE(0x01U)
 #define NVS_PROJECT_ID_BALLOT_GUARD NVS_PROJECT_ID_MAKE(0x02U)
+#define NVS_PROJECT_ID_VOICE_HUB NVS_PROJECT_ID_MAKE(0x03U)
 
 #define NVS_PROJECT_ID_TABLE(X)                                                                                      \
     X(MAIN, NVS_PROJECT_ID_MAIN, "main")                                                                             \
-    X(BALLOT_GUARD, NVS_PROJECT_ID_BALLOT_GUARD, "ballot_guard")
+    X(BALLOT_GUARD, NVS_PROJECT_ID_BALLOT_GUARD, "ballot_guard")                                                     \
+    X(VOICE_HUB, NVS_PROJECT_ID_VOICE_HUB, "voice_hub")
 
 #define NVS_DEVICE_ID_IS_PROJECT(id) (((uint32_t)(id) & 0xFFFFFF00U) == NVS_PROJECT_ID_CAT_PROJECT)
 
@@ -45,6 +47,7 @@ extern "C" {
 #define NVS_HARDWARE_ID_CAT 0x53530200U
 #define NVS_HARDWARE_ID_MAKE(index) (NVS_HARDWARE_ID_CAT | ((uint32_t)(index) & 0xFFU))
 #define NVS_HARDWARE_ID_TY_S3_REV_A NVS_HARDWARE_ID_MAKE(0x01U)
+#define NVS_HARDWARE_ID_VOICE_HUB_REV_A NVS_HARDWARE_ID_MAKE(0x02U)
 
 #ifndef NVS_DEFAULT_HARDWARE_ID
 #define NVS_DEFAULT_HARDWARE_ID NVS_HARDWARE_ID_TY_S3_REV_A
