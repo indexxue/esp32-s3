@@ -1,6 +1,6 @@
 /**
  * @file start.c
- * @brief voice_hub 平台壳层：log、NVS、板级、单键、Web/OTA。
+ * @brief voice_hub 平台壳层：log、NVS、板级、单键、Web/OTA；业务任务在 app_run 拉起。
  */
 
 #include "start.h"
@@ -10,7 +10,6 @@
 
 #include "voice_hub_config.h"
 #include "voice_hub_ui.h"
-#include "voice_hub_audio.h"
 #include "voice_hub_camera.h"
 #include "voice_hub_storage.h"
 #include "web_pages.h"
@@ -64,15 +63,10 @@ static void web_ctrl_boot_task(void *arg)
     }
     vTaskDelete(NULL);
 }
-#else
-static bool app_defer_ota_confirm_to_web(void)
-{
-    return false;
-}
 #endif
 
 #define BUTTON_SCAN_PERIOD_MS (1000 / FLEX_BTN_SCAN_FREQ_HZ)
-#define BTN_SCAN_TASK_STACK_WORDS (4096U)
+#define BTN_SCAN_TASK_STACK_WORDS (3072U)
 #define BTN_SCAN_TASK_PRIORITY (5U)
 
 #define VOICE_HUB_MODULES_TASK_STACK_WORDS (8192U)
@@ -191,11 +185,6 @@ static void voice_hub_modules_task(void *arg)
     }
 #endif
 
-#if VOICE_HUB_ENABLE_AUDIO
-    (void)voice_hub_audio_init();
-    (void)voice_hub_audio_play_prompt("boot");
-#endif
-
 #if VOICE_HUB_ENABLE_CAMERA
     if (voice_hub_camera_init() == STATUS_OK) {
         (void)voice_hub_camera_preview_start();
@@ -219,6 +208,21 @@ status_t voice_hub_start_modules_task(void)
     }
     return STATUS_OK;
 }
+
+static void app_ota_confirm_running_image(void)
+{
+    const status_t ota_st = ota_confirm_running_image();
+    if (ota_st != STATUS_OK) {
+        LOG_WARN("ota_confirm_running_image: %s", status_to_str(ota_st));
+    }
+}
+
+#if !CONFIG_WEB_CTRL_AUTO_START
+static bool app_defer_ota_confirm_to_web(void)
+{
+    return false;
+}
+#endif
 
 static status_t app_init_platform(void)
 {
@@ -255,7 +259,7 @@ static status_t app_init_button_io(void)
         return STATUS_FAIL;
     }
 
-    LOG_INFO("voice_hub: 1 button, scan %d Hz; 单击=拍照(若启用), 长按=切换 OTA 槽", FLEX_BTN_SCAN_FREQ_HZ);
+    LOG_INFO("voice_hub: 1 button GPIO0, scan %d Hz; 单击=拍照(若启用), 长按=切换 OTA 槽", FLEX_BTN_SCAN_FREQ_HZ);
     return STATUS_OK;
 }
 
@@ -278,14 +282,6 @@ static status_t app_init_led_ui(void)
     return STATUS_OK;
 }
 
-static void app_ota_confirm_running_image(void)
-{
-    const status_t ota_st = ota_confirm_running_image();
-    if (ota_st != STATUS_OK) {
-        LOG_WARN("ota_confirm_running_image: %s", status_to_str(ota_st));
-    }
-}
-
 static status_t app_init(void)
 {
     status_t err = app_init_platform();
@@ -305,13 +301,8 @@ static status_t app_init(void)
     if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
         err = app_init_led_ui();
         if (err != STATUS_OK) {
-            LOG_WARN("WS2812 led_scene init skipped");
+            return err;
         }
-    }
-
-    err = voice_hub_start_modules_task();
-    if (err != STATUS_OK) {
-        LOG_WARN("voice_hub modules task failed to start");
     }
 
     if (!app_defer_ota_confirm_to_web()) {
@@ -324,6 +315,10 @@ static status_t app_init(void)
 
 static void app_run(void)
 {
+    if (voice_hub_start_modules_task() != STATUS_OK) {
+        LOG_ERROR("voice_hub_start_modules_task failed");
+    }
+
     app_idle_default();
 }
 

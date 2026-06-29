@@ -23,7 +23,7 @@ static const device_button_spec_t s_buttons_ballot_guard[] = {
 
 /** voice_hub 单键：GPIO37 功能键（与 board.h voice_hub 段 BOARD_VOICE_HUB_PIN_BUTTON 一致）。 */
 static const device_button_spec_t s_buttons_voice_hub[] = {
-    {37, BTN_ID_CONFIRM, "功能", 0, (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET)},
+    {0, BTN_ID_CONFIRM, "功能", 0, (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET)},
 };
 
 static const device_product_profile_t s_product_profiles[] = {

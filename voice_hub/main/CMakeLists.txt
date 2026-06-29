@@ -3,7 +3,6 @@ idf_component_register(
         "main.c"
         "start.c"
         "source/voice_hub_ui.c"
-        "source/voice_hub_audio.c"
         "source/voice_hub_camera.c"
         "source/voice_hub_storage.c"
         "source/web_pages.c"

@@ -13,8 +13,8 @@
 #if defined(BOARD_PROFILE_VOICE_HUB)
 
 /* -------------------------------------------------------------------------- */
-/* voice_hub_rev_a — 240×135 ST7789 / OV2640 / ES8311+NS4150B / 1-bit SDMMC   */
-/* 仅一条 I2C（GPIO4/5）：ES8311 + OV2640 SCCB；无其它 I2C 外设。              */
+/* voice_hub_rev_a — 240×135 ST7789 / OV2640 / 1-bit SDMMC                           */
+/* 仅一条 I2C（GPIO4/5）：OV2640 SCCB；无其它 I2C 外设。                          */
 /* -------------------------------------------------------------------------- */
 
 #define BOARD_GPIO_IO5 (-1)
@@ -33,9 +33,7 @@
 #define BOARD_I2C_BUS1_SCAN_ON_BOOT (1)
 #endif
 
-/** ES8311（I2C 控制）与 OV2640 SCCB 共用 I2C1。 */
-#define BOARD_I2C_ES8311_PORT BOARD_I2C_BUS1_HW_PORT
-#define BOARD_I2C_ES8311_ADDR (0x18U)
+/** OV2640 SCCB 使用 I2C1。 */
 #define BOARD_I2C_OV2640_SCCB_PORT BOARD_I2C_BUS1_HW_PORT
 #define BOARD_I2C_OV2640_SCCB_ADDR (0x30U)
 
@@ -85,17 +83,6 @@
 #define BOARD_OV2640_PIN_RESET (-1)
 #define BOARD_OV2640_XCLK_HZ (20000000U)
 
-/** ES8311 模拟输出 → NS4150B；GPIO46 功放使能；无 ESP I2S DOUT，录音走 DIN=47。 */
-#define BOARD_ES8311_I2S_PORT (0)
-#define BOARD_ES8311_I2S_HAS_TX (0)
-#define BOARD_ES8311_PIN_MCLK (1)
-#define BOARD_ES8311_PIN_BCLK (35)
-#define BOARD_ES8311_PIN_WS (36)
-#define BOARD_ES8311_PIN_DIN (47)
-#define BOARD_ES8311_PIN_PA_EN (46)
-#define BOARD_ES8311_PA_EN_ACTIVE_LEVEL (1)
-#define BOARD_ES8311_SAMPLE_RATE_HZ (16000U)
-
 #define BOARD_SDCARD_PIN_CMD (21)
 #define BOARD_SDCARD_PIN_CLK (14)
 #define BOARD_SDCARD_PIN_D0 (2)
@@ -108,7 +95,8 @@
 #define BOARD_SDCARD_HOST_FLAGS_EXTRA (0U)
 #define BOARD_SDCARD_MOUNT_POINT "/sdcard"
 
-#define BOARD_VOICE_HUB_PIN_BUTTON (37)
+/** N16R8 Octal PSRAM 占用 GPIO35–37，按键须避开；与 project 一致用 GPIO0。 */
+#define BOARD_VOICE_HUB_PIN_BUTTON (0)
 #define BOARD_VOICE_HUB_WS2812_PIN (48)
 #define BOARD_VOICE_HUB_WS2812_COUNT (1U)
 

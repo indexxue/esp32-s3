@@ -3,7 +3,6 @@
 #include "voice_hub_config.h"
 
 #include "board.h"
-#include "device_profile.h"
 #include "log.h"
 #include "sdcard.h"
 
@@ -13,11 +12,13 @@ status_t voice_hub_storage_init(void)
     LOG_INFO("voice_hub SD disabled (VOICE_HUB_ENABLE_SDCARD=0)");
     return STATUS_OK;
 #else
-    if (!BoardPeriphReady(DEVICE_BOARD_MASK_SDCARD)) {
-        if (sdcard_get_card() == NULL) {
-            LOG_WARN("SD card not mounted at %s (check 1-bit pins)", BOARD_SDCARD_MOUNT_POINT);
-            return STATUS_FAIL;
-        }
+    if (sdcard_get_card() != NULL) {
+        LOG_INFO("SD storage ready at %s", BOARD_SDCARD_MOUNT_POINT);
+        return STATUS_OK;
+    }
+    if (sdcard_mount(BOARD_SDCARD_MOUNT_POINT) != STATUS_OK) {
+        LOG_WARN("SD card mount failed at %s (check 1-bit pins / card)", BOARD_SDCARD_MOUNT_POINT);
+        return STATUS_FAIL;
     }
     LOG_INFO("SD storage ready at %s", BOARD_SDCARD_MOUNT_POINT);
     return STATUS_OK;
@@ -42,7 +43,7 @@ status_t voice_hub_storage_write_jpeg_snapshot(const uint8_t *data, uint32_t len
 #else
     (void)data;
     (void)len;
-    /* TODO(M4): 写入 /sdcard/capture/YYYYMMDD_HHMMSS.jpg */
+    /* TODO(M3): 写入 /sdcard/capture/YYYYMMDD_HHMMSS.jpg */
     LOG_WARN("voice_hub_storage_write_jpeg_snapshot: not implemented");
     return STATUS_FAIL;
 #endif

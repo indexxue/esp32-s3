@@ -19,7 +19,6 @@ set(EXTRA_COMPONENT_DIRS
     "../components"
 )
 
-include(nvs_project_id)
 nvs_project_use_device_id(VOICE_HUB)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

@@ -1,7 +1,6 @@
 #include "web_pages.h"
 
 #include "voice_hub_config.h"
-#include "voice_hub_audio.h"
 #include "voice_hub_camera.h"
 
 #include <stdio.h>
@@ -29,34 +28,9 @@ static esp_err_t web_api_status_get(httpd_req_t *req)
 
     (void)snprintf(body,
                    sizeof(body),
-                   "{\"product\":\"voice_hub\",\"audio\":%s,\"camera\":%s,\"intercom\":%s}",
-                   voice_hub_audio_is_ready() ? "true" : "false",
-                   voice_hub_camera_is_ready() ? "true" : "false",
-#if VOICE_HUB_ENABLE_INTERCOM
-                   "false");
-#else
-                   "false");
-#endif
+                   "{\"product\":\"voice_hub\",\"camera\":%s}",
+                   voice_hub_camera_is_ready() ? "true" : "false");
     return web_send_json(req, body);
-}
-
-static esp_err_t web_api_intercom_post(httpd_req_t *req)
-{
-    char body[64];
-
-    if (httpd_req_recv(req, body, sizeof(body) - 1U) <= 0) {
-        return ESP_FAIL;
-    }
-    body[sizeof(body) - 1U] = '\0';
-
-#if VOICE_HUB_ENABLE_INTERCOM
-    if (strstr(body, "\"start\":true") != NULL) {
-        (void)voice_hub_audio_intercom_start();
-    } else {
-        (void)voice_hub_audio_intercom_stop();
-    }
-#endif
-    return web_send_json(req, "{\"ok\":true}");
 }
 
 static esp_err_t web_api_capture_post(httpd_req_t *req)
@@ -77,11 +51,6 @@ esp_err_t web_pages_register(httpd_handle_t server)
         .method  = HTTP_GET,
         .handler = web_api_status_get,
     };
-    httpd_uri_t intercom = {
-        .uri     = "/api/voice_hub/intercom",
-        .method  = HTTP_POST,
-        .handler = web_api_intercom_post,
-    };
     httpd_uri_t capture = {
         .uri     = "/api/voice_hub/capture",
         .method  = HTTP_POST,
@@ -93,7 +62,6 @@ esp_err_t web_pages_register(httpd_handle_t server)
     }
 
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &intercom));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &capture));
     return ESP_OK;
 }

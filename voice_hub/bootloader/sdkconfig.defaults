@@ -1,1 +1,2 @@
+# Bootloader-only defaults. Slot selection uses otadata + CONFIG_BOOTLOADER_APP_* from ESP-IDF.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
