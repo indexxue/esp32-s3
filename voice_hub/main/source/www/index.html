@@ -5,30 +5,766 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>voice_hub</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 1rem; background: #111; color: #eee; }
-    h1 { font-size: 1.25rem; }
-    button { margin: 0.25rem 0.5rem 0.25rem 0; padding: 0.5rem 1rem; }
-    pre { background: #222; padding: 0.75rem; overflow: auto; }
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --surface2: #243044;
+      --border: #2d3a4d;
+      --text: #e8eef7;
+      --muted: #8b9cb3;
+      --accent: #3d8bfd;
+      --accent-dim: #2a6fd6;
+      --danger: #e85d6c;
+      --danger-bg: #3a1f26;
+      --ok: #3dd68c;
+      --radius: 12px;
+      --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(160deg, #0a0e14 0%, #121a24 50%, #0f1419 100%);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
+    .top { margin-bottom: 24px; }
+    .top h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.02em; }
+    .top p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .card-h {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 14px 16px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+    }
+    .card-h h2 { font-size: 1rem; font-weight: 600; margin: 0; }
+    .card-b { padding: 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 9px 16px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      font: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-dim); }
+    .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+    .btn-ghost:hover:not(:disabled) { background: var(--surface2); }
+    .btn-danger { background: var(--danger-bg); color: var(--danger); border-color: #5c2a32; }
+    .btn-danger:hover:not(:disabled) { background: #4a252c; }
+    .status { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 11px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .chip strong { color: var(--text); font-weight: 600; margin-left: 4px; }
+    .chip.ok { border-color: #2a5c45; color: #9ae6c3; }
+    .chip.warn { border-color: #5c4a2a; color: #e6d39a; }
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+    .inp {
+      width: 100%;
+      padding: 11px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0d1218;
+      color: var(--text);
+      font: inherit;
+    }
+    .inp:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(61, 139, 253, 0.2);
+    }
+    .ap-list {
+      max-height: 240px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 12px 0;
+      background: #0d1218;
+    }
+    .ap-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .ap-item:last-child { border-bottom: 0; }
+    .ap-item:hover { background: var(--surface2); }
+    .ap-name {
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 55%;
+    }
+    .ap-meta { font-size: 0.75rem; color: var(--muted); text-align: right; }
+    .sig {
+      display: inline-block;
+      width: 36px;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+      vertical-align: middle;
+      margin-right: 6px;
+      overflow: hidden;
+    }
+    .sig i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 10px; }
+    .log {
+      white-space: pre-wrap;
+      background: #0d1218;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.8rem;
+      max-height: 200px;
+      overflow: auto;
+      margin-top: 12px;
+      color: #c5d4e8;
+    }
+    .log[hidden] { display: none; }
+    .danger-zone { margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--border); }
+    .danger-zone .dz-title { font-size: 0.85rem; font-weight: 600; color: var(--danger); margin: 0 0 8px; }
+    .danger-zone .dz-desc { font-size: 0.8rem; color: var(--muted); margin: 0 0 12px; }
+    .modal-wrap {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 50;
+    }
+    .modal-wrap.on { display: flex; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      max-width: 400px;
+      width: 100%;
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+    .modal h3 { margin: 0 0 10px; font-size: 1.05rem; }
+    .modal p { margin: 0 0 18px; color: var(--muted); font-size: 0.9rem; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+    .scan-h { font-size: 0.8rem; color: var(--muted); min-height: 1.2em; }
+    .cam-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .cam-wrap {
+      display: inline-block;
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 4px;
+      line-height: 0;
+      max-width: 100%;
+    }
+    #camView {
+      display: block;
+      width: min(100%, 240px);
+      height: auto;
+      image-rendering: pixelated;
+      background: #000;
+      border-radius: 4px;
+    }
+    .cam-meta { font-size: 0.8rem; color: var(--muted); text-align: center; }
+    .hidden { display: none !important; }
   </style>
 </head>
 <body>
-  <h1>voice_hub</h1>
-  <p>局域网交互面板（M1 Web；M2 摄像头待 bring-up）。</p>
-  <button type="button" id="btnStatus">刷新状态</button>
-  <button type="button" id="btnCapture">拍照</button>
-  <pre id="out">—</pre>
+  <div class="wrap">
+    <header class="top">
+      <h1>voice_hub</h1>
+      <p>Wi‑Fi 配网、摄像头预览与设备控制。SoftAP 模式下连接设备热点后访问 <code>http://192.168.4.1/</code>。</p>
+    </header>
+
+    <section class="card" id="card-wifi">
+      <div class="card-h">
+        <h2>Wi‑Fi 配网</h2>
+        <div class="row">
+          <button type="button" class="btn btn-ghost busy" id="btn-refresh" onclick="prepareWifiProvisioning(); refreshStatus()">刷新状态</button>
+          <button type="button" class="btn btn-primary busy" id="btn-scan" onclick="doScan()">扫描附近网络</button>
+        </div>
+      </div>
+      <div class="card-b">
+        <div class="status" id="st"><span class="chip">状态加载中…</span></div>
+        <p class="scan-h" id="s"></p>
+        <div class="ap-list hidden" id="u"></div>
+        <div class="field">
+          <label for="ssid">网络名称 (SSID)</label>
+          <input class="inp" id="ssid" autocomplete="off" placeholder="选择上方列表或手动输入" />
+        </div>
+        <div class="field">
+          <label for="pw">密码</label>
+          <input class="inp" id="pw" type="password" autocomplete="off" placeholder="开放网络可留空" />
+        </div>
+        <div class="row">
+          <button type="button" class="btn btn-primary busy" id="btn-save" onclick="doSave()">保存并重启设备</button>
+        </div>
+        <p class="hint">配网信息写入 NVS 后自动重启。保存/扫描 Wi‑Fi 时会自动暂停网页预览与后台轮询，避免 HTTP 被长连接占满导致保存卡死。LCD 右上角会显示当前 IP。</p>
+        <pre class="log" id="wo" hidden></pre>
+        <div class="danger-zone">
+          <p class="dz-title">断开并清除已保存的路由器</p>
+          <p class="dz-desc">将断开当前 STA、清除已保存的 Wi‑Fi 账号并重启。用于换路由器或恢复出厂网络设置。</p>
+          <button type="button" class="btn btn-danger busy" id="btn-disconnect" onclick="openDisconnectModal()">清除已存 Wi‑Fi 并重启…</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="card-camera">
+      <div class="card-h">
+        <h2>摄像头预览</h2>
+        <div class="row">
+          <button type="button" class="btn btn-ghost busy" id="btn-vh-refresh" onclick="refreshVoiceHub()">刷新设备</button>
+          <button type="button" class="btn btn-ghost busy" id="btn-cam-stream" onclick="toggleCameraStream()">开启网页预览</button>
+          <button type="button" class="btn btn-ghost busy" id="btn-cam-rotate" onclick="rotateCameraView()">旋转预览</button>
+          <button type="button" class="btn btn-primary busy" id="btn-capture" onclick="doCapture()">拍照</button>
+        </div>
+      </div>
+      <div class="card-b">
+        <div class="status" id="vh-st"><span class="chip">检查摄像头…</span></div>
+        <div class="cam-panel">
+          <p class="cam-meta" id="camHint">—</p>
+          <div class="cam-wrap hidden" id="camWrap">
+            <img id="camView" alt="camera preview" width="240" height="240" />
+          </div>
+        </div>
+        <p class="hint">网页预览为串行 JPEG 刷新（约 4–5 fps）。「旋转预览」每次顺时针转 90°，LCD 与网页同步。默认关闭网页预览。</p>
+        <pre class="log" id="vho" hidden></pre>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-wrap" id="modal-disconnect" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h3>确认清除 Wi‑Fi？</h3>
+      <p>将断开 STA、删除已保存的路由器账号并立即重启。此页面会暂时无法访问。</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeDisconnectModal()">取消</button>
+        <button type="button" class="btn btn-danger busy" id="modal-confirm-dc" onclick="confirmStaDisconnect()">确认清除并重启</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    const out = document.getElementById('out');
-    async function refresh() {
-      const r = await fetch('/api/voice_hub/status');
-      out.textContent = JSON.stringify(await r.json(), null, 2);
+    let camStreamOn = false;
+    let camPollTimer = null;
+    let camLoadBusy = false;
+    let camBlobUrl = null;
+    let camFailCount = 0;
+    let camRotateDeg = 0;
+    let statusTimer = null;
+    let vhTimer = null;
+    var CAM_POLL_MS = 200;
+
+    function esc(t) {
+      return String(t === undefined || t === null ? "" : t)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;");
     }
-    document.getElementById('btnStatus').onclick = refresh;
-    document.getElementById('btnCapture').onclick = async () => {
-      const r = await fetch('/api/voice_hub/capture', { method: 'POST' });
-      out.textContent = JSON.stringify(await r.json(), null, 2);
+
+    function setBusy(b) {
+      document.querySelectorAll(".busy").forEach(function (el) {
+        el.disabled = b;
+      });
+    }
+
+    function showLog(id, txt, show) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      if (!txt) {
+        el.hidden = true;
+        el.textContent = "";
+        return;
+      }
+      el.hidden = !show;
+      el.textContent = txt;
+    }
+
+    function rssiPct(r) {
+      if (typeof r !== "number") return 15;
+      return Math.max(8, Math.min(100, 2 * (r + 100)));
+    }
+
+    function pauseBackgroundPoll() {
+      if (statusTimer) {
+        clearInterval(statusTimer);
+        statusTimer = null;
+      }
+      if (vhTimer) {
+        clearInterval(vhTimer);
+        vhTimer = null;
+      }
+    }
+
+    function resumeBackgroundPoll() {
+      if (!statusTimer) {
+        statusTimer = setInterval(refreshStatus, 2500);
+      }
+      if (!vhTimer) {
+        vhTimer = setInterval(refreshVoiceHub, 5000);
+      }
+    }
+
+    function delayMs(ms) {
+      return new Promise(function (resolve) {
+        setTimeout(resolve, ms);
+      });
+    }
+
+    async function fetchWithTimeout(url, options, ms) {
+      var ctrl = new AbortController();
+      var tid = setTimeout(function () {
+        ctrl.abort();
+      }, ms);
+      var opts = options ? Object.assign({}, options) : {};
+      opts.signal = ctrl.signal;
+      try {
+        return await fetch(url, opts);
+      } finally {
+        clearTimeout(tid);
+      }
+    }
+
+    async function refreshStatus() {
+      var st = document.getElementById("st");
+      try {
+        var r = await fetch("/api/wifi/status");
+        var j = await r.json();
+        if (!j.ok) {
+          st.innerHTML = "<span class='chip warn'><strong>错误</strong>无法读取状态</span>";
+          return;
+        }
+        var ip = j.ip || "—";
+        var ok = j.sta_has_ip === true || j.softap === true;
+        var mode = j.mode || "—";
+        var chips =
+          "<span class='chip'><strong>模式</strong>" + esc(mode) + "</span>" +
+          "<span class='chip'><strong>IP</strong>" + esc(ip) + "</span>" +
+          "<span class='chip " + (ok ? "ok" : "warn") + "'><strong>网络</strong>" + (ok ? "已连接" : "未就绪") + "</span>";
+        var b = j.battery;
+        if (b && b.valid) {
+          chips += "<span class='chip'><strong>电量</strong>" + esc(String(b.percent)) + "%（" + esc(String(b.mv)) + " mV）</span>";
+          if (b.charging) chips += "<span class='chip ok'><strong>状态</strong>充电中</span>";
+        }
+        st.innerHTML = chips;
+      } catch (e) {
+        st.innerHTML = "<span class='chip warn'><strong>异常</strong>" + esc(String(e)) + "</span>";
+      }
+    }
+
+    function camRotateSuffix() {
+      return camRotateDeg ? " · 旋转 " + camRotateDeg + "°" : "";
+    }
+
+    function updateCamRotateBtn() {
+      var btn = document.getElementById("btn-cam-rotate");
+      if (!btn) {
+        return;
+      }
+      btn.textContent = camRotateDeg ? ("旋转 " + camRotateDeg + "°") : "旋转预览";
+    }
+
+    async function loadCameraView() {
+      try {
+        var r = await fetch("/api/voice_hub/camera_view");
+        var j = await r.json();
+        if (j.ok) {
+          camRotateDeg = typeof j.rotate === "number" ? j.rotate : 0;
+          updateCamRotateBtn();
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
+    async function rotateCameraView() {
+      setBusy(true);
+      try {
+        var r = await fetch("/api/voice_hub/camera_rotate", { method: "POST" });
+        var j = await r.json();
+        if (!j.ok) {
+          showLog("vho", "旋转失败", true);
+          return;
+        }
+        camRotateDeg = typeof j.rotate === "number" ? j.rotate : 0;
+        updateCamRotateBtn();
+        var camHint = document.getElementById("camHint");
+        if (camHint) {
+          if (camStreamOn) {
+            camHint.textContent = "JPEG 预览中（约 4–5 fps）" + camRotateSuffix();
+          } else {
+            camHint.textContent = "摄像头就绪" + camRotateSuffix();
+          }
+        }
+      } catch (e) {
+        showLog("vho", String(e), true);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function prepareWifiProvisioning() {
+      stopCameraStream();
+      pauseBackgroundPoll();
+    }
+
+    function stopCameraStream() {
+      var camView = document.getElementById("camView");
+      camStreamOn = false;
+      camLoadBusy = false;
+      camFailCount = 0;
+      if (camPollTimer) {
+        clearTimeout(camPollTimer);
+        camPollTimer = null;
+      }
+      if (camView) {
+        camView.onload = null;
+        camView.onerror = null;
+        if (camBlobUrl) {
+          URL.revokeObjectURL(camBlobUrl);
+          camBlobUrl = null;
+        }
+        camView.removeAttribute("src");
+      }
+      var btn = document.getElementById("btn-cam-stream");
+      if (btn) btn.textContent = "开启网页预览";
+    }
+
+    function scheduleCameraPoll(delayMs) {
+      if (!camStreamOn || camLoadBusy) {
+        return;
+      }
+      if (camPollTimer) {
+        clearTimeout(camPollTimer);
+      }
+      camPollTimer = setTimeout(function () {
+        camPollTimer = null;
+        tickCameraFrame();
+      }, delayMs != null ? delayMs : CAM_POLL_MS);
+    }
+
+    async function tickCameraFrame() {
+      var camView = document.getElementById("camView");
+      var camHint = document.getElementById("camHint");
+      if (!camStreamOn || !camView || camLoadBusy) {
+        return;
+      }
+      camLoadBusy = true;
+      try {
+        var r = await fetch("/api/voice_hub/camera.jpg?t=" + Date.now());
+        if (!camStreamOn) {
+          return;
+        }
+        if (!r.ok) {
+          throw new Error("HTTP " + r.status);
+        }
+        var blob = await r.blob();
+        if (!camStreamOn || !blob || blob.size === 0) {
+          return;
+        }
+        var url = URL.createObjectURL(blob);
+        if (camBlobUrl) {
+          URL.revokeObjectURL(camBlobUrl);
+        }
+        camBlobUrl = url;
+        camView.src = url;
+        camFailCount = 0;
+        if (camHint) {
+          camHint.textContent = "JPEG 预览中（约 4–5 fps）" + camRotateSuffix();
+        }
+      } catch (e) {
+        camFailCount += 1;
+        if (camHint && camStreamOn) {
+          camHint.textContent = camFailCount >= 3
+            ? "预览暂时不可用（摄像头忙或配网中），稍后重试…"
+            : "正在等待摄像头帧…";
+        }
+      } finally {
+        camLoadBusy = false;
+        if (camStreamOn) {
+          var backoff = camFailCount > 0 ? Math.min(CAM_POLL_MS * (1 + camFailCount), 1500) : CAM_POLL_MS;
+          scheduleCameraPoll(backoff);
+        }
+      }
+    }
+
+    async function toggleCameraStream() {
+      var camView = document.getElementById("camView");
+      var camWrap = document.getElementById("camWrap");
+      var btn = document.getElementById("btn-cam-stream");
+      if (camStreamOn) {
+        stopCameraStream();
+        camWrap.classList.add("hidden");
+        document.getElementById("camHint").textContent = "网页预览已关闭";
+        return;
+      }
+      try {
+        await fetch("/api/voice_hub/camera_resume", { method: "POST" });
+      } catch (e) {
+        /* ignore */
+      }
+      camStreamOn = true;
+      camWrap.classList.remove("hidden");
+      btn.textContent = "关闭网页预览";
+      document.getElementById("camHint").textContent = "正在连接摄像头…";
+      scheduleCameraPoll(0);
+    }
+
+    async function doScan() {
+      prepareWifiProvisioning();
+      await delayMs(100);
+      var s = document.getElementById("s");
+      var list = document.getElementById("u");
+      showLog("wo", "", false);
+      setBusy(true);
+      s.textContent = "正在扫描…";
+      list.innerHTML = "";
+      list.classList.remove("hidden");
+      try {
+        await fetch("/api/wifi/scan", { method: "POST" });
+        for (var i = 0; i < 40; i++) {
+          var r = await fetch("/api/wifi/scan_result");
+          var j = await r.json();
+          if (j.pending) {
+            await new Promise(function (x) { setTimeout(x, 250); });
+            continue;
+          }
+          s.textContent = j.aps && j.aps.length
+            ? "找到 " + j.aps.length + " 个网络，点击一行填入 SSID"
+            : "未发现网络";
+          (j.aps || []).forEach(function (a) {
+            var row = document.createElement("div");
+            row.className = "ap-item";
+            row.setAttribute("role", "button");
+            var nm = document.createElement("span");
+            nm.className = "ap-name";
+            nm.textContent = String(a.ssid);
+            var meta = document.createElement("span");
+            meta.className = "ap-meta";
+            var sig = document.createElement("span");
+            sig.className = "sig";
+            var sigi = document.createElement("i");
+            sigi.style.width = rssiPct(a.rssi) + "%";
+            sig.appendChild(sigi);
+            meta.appendChild(sig);
+            meta.appendChild(document.createTextNode(" ch" + a.ch + " " + a.rssi + " dBm"));
+            row.appendChild(nm);
+            row.appendChild(meta);
+            row.onclick = function () {
+              document.getElementById("ssid").value = a.ssid;
+              row.style.outline = "2px solid var(--accent)";
+              setTimeout(function () { row.style.outline = ""; }, 400);
+            };
+            list.appendChild(row);
+          });
+          break;
+        }
+      } catch (e) {
+        showLog("wo", String(e), true);
+        s.textContent = "";
+      } finally {
+        setBusy(false);
+        resumeBackgroundPoll();
+      }
+    }
+
+    async function doSave() {
+      var ssid = document.getElementById("ssid").value.trim();
+      if (!ssid) {
+        showLog("wo", "请先填写 SSID", true);
+        return;
+      }
+      prepareWifiProvisioning();
+      await delayMs(150);
+      showLog("wo", "正在保存到 NVS…", true);
+      setBusy(true);
+      var rebooting = false;
+      try {
+        var body = JSON.stringify({
+          ssid: ssid,
+          password: document.getElementById("pw").value
+        });
+        var r = await fetchWithTimeout("/api/wifi/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: body
+        }, 20000);
+        var text = await r.text();
+        try {
+          var j = JSON.parse(text);
+          if (j.ok && j.reboot) {
+            rebooting = true;
+            showLog("wo", "已保存 SSID「" + ssid + "」，设备约 0.5 秒后重启…", true);
+            return;
+          }
+          if (j.error) {
+            showLog("wo", "保存失败: " + j.error + " (HTTP " + r.status + ")", true);
+            return;
+          }
+        } catch (parseErr) {
+          /* fall through */
+        }
+        showLog("wo", r.status + " " + text, true);
+      } catch (e) {
+        var msg = String(e);
+        if (e && e.name === "AbortError") {
+          msg = "请求超时：请确认已关闭网页预览并重试";
+        }
+        showLog("wo", msg, true);
+      } finally {
+        setBusy(false);
+        if (!rebooting) {
+          resumeBackgroundPoll();
+        }
+      }
+    }
+
+    function openDisconnectModal() {
+      document.getElementById("modal-disconnect").classList.add("on");
+    }
+
+    function closeDisconnectModal() {
+      document.getElementById("modal-disconnect").classList.remove("on");
+    }
+
+    async function confirmStaDisconnect() {
+      closeDisconnectModal();
+      prepareWifiProvisioning();
+      await delayMs(150);
+      showLog("wo", "正在断开并重启…", true);
+      setBusy(true);
+      try {
+        var r = await fetchWithTimeout("/api/wifi/sta_disconnect", { method: "POST" }, 20000);
+        showLog("wo", await r.text(), true);
+      } catch (e) {
+        var msg = String(e);
+        if (e && e.name === "AbortError") {
+          msg = "请求超时：请确认已关闭网页预览并重试";
+        }
+        showLog("wo", msg, true);
+      } finally {
+        setBusy(false);
+        resumeBackgroundPoll();
+      }
+    }
+
+    function setCameraUi(ready) {
+      var camWrap = document.getElementById("camWrap");
+      var camHint = document.getElementById("camHint");
+      if (ready) {
+        camHint.textContent = camStreamOn
+          ? ("JPEG 预览中（约 4–5 fps）" + camRotateSuffix())
+          : ("摄像头就绪；可点「开启网页预览」或只看 LCD" + camRotateSuffix());
+        camWrap.classList.toggle("hidden", !camStreamOn);
+      } else {
+        stopCameraStream();
+        camHint.textContent = "摄像头未就绪";
+        camWrap.classList.add("hidden");
+      }
+    }
+
+    async function refreshVoiceHub() {
+      var st = document.getElementById("vh-st");
+      try {
+        var r = await fetch("/api/voice_hub/status");
+        var j = await r.json();
+        var ready = j.camera === true;
+        st.innerHTML = ready
+          ? "<span class='chip ok'><strong>摄像头</strong>就绪</span><span class='chip'><strong>产品</strong>" + esc(j.product || "voice_hub") + "</span>"
+          : "<span class='chip warn'><strong>摄像头</strong>未就绪</span>";
+        setCameraUi(ready);
+        if (ready) {
+          await loadCameraView();
+        }
+      } catch (e) {
+        st.innerHTML = "<span class='chip warn'><strong>异常</strong>" + esc(String(e)) + "</span>";
+        setCameraUi(false);
+      }
+    }
+
+    async function doCapture() {
+      showLog("vho", "拍照中…", true);
+      setBusy(true);
+      try {
+        var r = await fetch("/api/voice_hub/capture", { method: "POST" });
+        showLog("vho", r.status + " " + (await r.text()), true);
+      } catch (e) {
+        showLog("vho", String(e), true);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    document.getElementById("camView").onerror = function () {
+      if (camStreamOn) {
+        document.getElementById("camHint").textContent = "预览解码失败";
+      }
     };
-    refresh();
+
+    document.getElementById("modal-disconnect").addEventListener("click", function (ev) {
+      if (ev.target.id === "modal-disconnect") closeDisconnectModal();
+    });
+
+    document.getElementById("card-wifi").addEventListener("focusin", function (ev) {
+      if (ev.target && (ev.target.id === "ssid" || ev.target.id === "pw")) {
+        prepareWifiProvisioning();
+      }
+    });
+
+    refreshStatus();
+    refreshVoiceHub();
+    resumeBackgroundPoll();
   </script>
 </body>
 </html>

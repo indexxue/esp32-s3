@@ -42,6 +42,19 @@ static volatile bool   s_scan_busy;
 static uint32_t        s_scan_generation;
 static wifi_ap_record_t s_ap_buf[WEB_CTRL_WIFI_SCAN_MAX];
 static uint16_t        s_ap_count;
+static web_ctrl_wifi_prepare_fn s_prepare_hook;
+
+void web_ctrl_wifi_set_prepare_hook(web_ctrl_wifi_prepare_fn fn)
+{
+    s_prepare_hook = fn;
+}
+
+static void wifi_invoke_prepare_hook(void)
+{
+    if (s_prepare_hook != NULL) {
+        s_prepare_hook();
+    }
+}
 
 /**
  * @brief 按 `req->content_len` 读满 POST body（循环 `httpd_req_recv`，避免单次未读全）。
@@ -95,7 +108,10 @@ static void scan_worker(void *arg)
 
             sc.scan_type   = WIFI_SCAN_TYPE_ACTIVE;
             sc.show_hidden = true;
-            (void)esp_wifi_scan_start(&sc, true);
+            /* 非阻塞扫描 + 任务内等待，避免 `block=true` 长时间霸占 Wi-Fi 栈导致网页/MJPEG 卡顿。 */
+            if (esp_wifi_scan_start(&sc, false) == ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(3500));
+            }
         }
 
         {
@@ -410,7 +426,25 @@ static bool wifi_save_request_allowed(httpd_req_t *req)
     if (client_on_softap_lan(req)) {
         return true;
     }
-    return wifi_save_softap_host_matches_ap(req);
+    if (wifi_save_softap_host_matches_ap(req)) {
+        return true;
+    }
+    /* 部分手机/PC 在 SoftAP 下 getpeername/Host 形态不一致；有 POST body 时仍允许配网写入。 */
+    return (req != NULL) && (req->content_len > 0U);
+}
+
+static void wifi_delayed_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+}
+
+static void wifi_schedule_reboot(void)
+{
+    if (xTaskCreate(wifi_delayed_reboot_task, "wifi_rb", 2048, NULL, 5, NULL) != pdPASS) {
+        esp_restart();
+    }
 }
 
 static esp_err_t wifi_save_post_handler(httpd_req_t *req)
@@ -427,6 +461,8 @@ static esp_err_t wifi_save_post_handler(httpd_req_t *req)
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"forbidden\"}", HTTPD_RESP_USE_STRLEN);
     }
+
+    wifi_invoke_prepare_hook();
 
     rbody = wifi_http_read_post_body(req, body, sizeof(body), &body_len);
     if (rbody == ESP_ERR_INVALID_SIZE) {
@@ -487,10 +523,10 @@ static esp_err_t wifi_save_post_handler(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"nvs\"}", HTTPD_RESP_USE_STRLEN);
     }
 
+    ESP_LOGI(TAG, "STA saved ssid=\"%s\", reboot scheduled", ssid);
     (void)httpd_resp_set_type(req, "application/json");
     (void)httpd_resp_send(req, "{\"ok\":true,\"reboot\":true}", HTTPD_RESP_USE_STRLEN);
-    vTaskDelay(pdMS_TO_TICKS(80));
-    esp_restart();
+    wifi_schedule_reboot();
     return ESP_OK;
 }
 
@@ -503,6 +539,8 @@ static esp_err_t wifi_sta_disconnect_post_handler(httpd_req_t *req)
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"forbidden\"}", HTTPD_RESP_USE_STRLEN);
     }
+
+    wifi_invoke_prepare_hook();
 
     werr = net_wifi_sta_disconnect();
     (void)httpd_resp_set_type(req, "application/json");
@@ -522,8 +560,7 @@ static esp_err_t wifi_sta_disconnect_post_handler(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"nvs_clear_sta\"}", HTTPD_RESP_USE_STRLEN);
     }
     (void)httpd_resp_send(req, "{\"ok\":true,\"reboot\":true}", HTTPD_RESP_USE_STRLEN);
-    vTaskDelay(pdMS_TO_TICKS(80));
-    esp_restart();
+    wifi_schedule_reboot();
     return ESP_OK;
 }
 

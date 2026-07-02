@@ -85,3 +85,7 @@ bool net_wifi_softap_peer_ipv4_on_ap_subnet(uint32_t addr_nbo);
  * @note 仅 STA 模式有效；`WIFI_EVENT_STA_START` 会清除陈旧 GOT_IP 位。
  */
 esp_err_t net_wifi_wait_sta_got_ip(uint32_t timeout_ms);
+
+/** STA 取得/失去 IPv4 时回调（在 esp_event 任务上下文；宜短、勿阻塞）。 */
+typedef void (*net_wifi_ipv4_event_fn)(void);
+void net_wifi_set_ipv4_event_handler(net_wifi_ipv4_event_fn fn);

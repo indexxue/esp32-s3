@@ -10,6 +10,7 @@
 
 #include "voice_hub_config.h"
 #include "voice_hub_ui.h"
+#include "net_wifi.h"
 #include "voice_hub_camera.h"
 #include "voice_hub_storage.h"
 #include "web_pages.h"
@@ -182,6 +183,9 @@ static void voice_hub_modules_task(void *arg)
 #if VOICE_HUB_ENABLE_LCD
     if (st7789_is_initialized(lcd)) {
         (void)voice_hub_ui_init(lcd);
+#if VOICE_HUB_ENABLE_WIFI_WEB
+        net_wifi_set_ipv4_event_handler(voice_hub_ui_on_ipv4_changed);
+#endif
 #if VOICE_HUB_ENABLE_SDCARD
         {
             const char *sd_line = voice_hub_storage_boot_status_line();
@@ -214,7 +218,13 @@ static void voice_hub_modules_task(void *arg)
 #endif
 
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(200));
+#if VOICE_HUB_ENABLE_LCD
+        if (st7789_is_initialized(lcd)) {
+            voice_hub_ui_refresh_ip();
+            voice_hub_ui_redraw_ip_if_dirty(lcd);
+        }
+#endif
+        vTaskDelay(pdMS_TO_TICKS(VOICE_HUB_UI_IP_REFRESH_MS));
     }
 }
 

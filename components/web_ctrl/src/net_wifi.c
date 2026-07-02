@@ -36,6 +36,7 @@ static esp_netif_t *s_ap_netif;
 static esp_netif_t *s_sta_netif;
 static esp_event_handler_instance_t s_wifi_handler_inst;
 static esp_event_handler_instance_t s_ip_handler_inst;
+static net_wifi_ipv4_event_fn       s_ipv4_event_fn;
 static bool s_netif_stack_inited;
 static bool s_wifi_driver_inited;
 static bool s_wifi_iface_started;
@@ -43,6 +44,18 @@ static net_wifi_mode_t s_running_mode = NET_WIFI_MODE_OFF;
 
 /** `IP_EVENT_STA_GOT_IP` 同步位。 */
 static const EventBits_t k_sta_got_ip_bit = (EventBits_t)(1U << 0);
+
+void net_wifi_set_ipv4_event_handler(net_wifi_ipv4_event_fn fn)
+{
+    s_ipv4_event_fn = fn;
+}
+
+static void net_wifi_notify_ipv4_event(void)
+{
+    if (s_ipv4_event_fn != NULL) {
+        s_ipv4_event_fn();
+    }
+}
 static EventGroupHandle_t s_sta_ip_event_group;
 
 static void destroy_ap_netif(void)
@@ -89,6 +102,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         if (s_sta_ip_event_group != NULL) {
             (void)xEventGroupClearBits(s_sta_ip_event_group, k_sta_got_ip_bit);
         }
+        net_wifi_notify_ipv4_event();
     } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
         ESP_LOGI(TAG, "STA connected to AP");
     } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -96,6 +110,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
             (void)xEventGroupClearBits(s_sta_ip_event_group, k_sta_got_ip_bit);
         }
         ESP_LOGW(TAG, "STA disconnected");
+        net_wifi_notify_ipv4_event();
     }
 }
 
@@ -114,6 +129,7 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t eve
         if (s_sta_ip_event_group != NULL) {
             (void)xEventGroupSetBits(s_sta_ip_event_group, k_sta_got_ip_bit);
         }
+        net_wifi_notify_ipv4_event();
     }
 }
 

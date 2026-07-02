@@ -11,3 +11,7 @@
  * @brief 向已启动的 `httpd` 注册 Wi‑Fi 配网 URI；可重复调用（仅首次生效）。
  */
 esp_err_t web_ctrl_wifi_api_register(httpd_handle_t server);
+
+/** 保存/断开 STA 写 NVS 前调用（应用可注册：停 MJPEG、释放摄像头 Web 资源等）。 */
+typedef void (*web_ctrl_wifi_prepare_fn)(void);
+void web_ctrl_wifi_set_prepare_hook(web_ctrl_wifi_prepare_fn fn);

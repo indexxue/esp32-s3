@@ -251,6 +251,9 @@ esp_err_t web_server_start(uint16_t port, web_root_handler_fn root_get_handler)
     config.server_port = (port == 0U) ? 80U : port;
     /* 默认 8 槽：`web_server` 3 个 + `web_ctrl_wifi_api` 7 个会溢出，须加大。 */
     config.max_uri_handlers = 32U;
+    /* httpd 允许 max_open_sockets 最大 7（另 3 个 socket 为内部占用）；勿超过否则 httpd_start 失败并连带停 Wi-Fi。 */
+    config.max_open_sockets = 7U;
+    config.lru_purge_enable = true;
     /* 默认栈 4096：`wifi_scan_result_get_handler` 等单帧 JSON 约 4KB，会栈溢出破坏 httpd 会话表。 */
     config.stack_size = 12288U;
 #if CONFIG_WEB_CTRL_OTA
