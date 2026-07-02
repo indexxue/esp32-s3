@@ -6,7 +6,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#include "voice_hub_config.h"
+#include "voice_hub_ui.h"
 #include "board.h"
 #include "lcd.h"
 #include "net_wifi.h"

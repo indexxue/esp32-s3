@@ -8,7 +8,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "voice_hub_config.h"
 #include "voice_hub_ui.h"
 #include "net_wifi.h"
 #include "voice_hub_camera.h"

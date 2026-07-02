@@ -462,8 +462,6 @@ static esp_err_t wifi_save_post_handler(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"forbidden\"}", HTTPD_RESP_USE_STRLEN);
     }
 
-    wifi_invoke_prepare_hook();
-
     rbody = wifi_http_read_post_body(req, body, sizeof(body), &body_len);
     if (rbody == ESP_ERR_INVALID_SIZE) {
         (void)httpd_resp_set_status(req, "411 Length Required");
@@ -523,6 +521,8 @@ static esp_err_t wifi_save_post_handler(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"nvs\"}", HTTPD_RESP_USE_STRLEN);
     }
 
+    wifi_invoke_prepare_hook();
+
     ESP_LOGI(TAG, "STA saved ssid=\"%s\", reboot scheduled", ssid);
     (void)httpd_resp_set_type(req, "application/json");
     (void)httpd_resp_send(req, "{\"ok\":true,\"reboot\":true}", HTTPD_RESP_USE_STRLEN);
@@ -539,8 +539,6 @@ static esp_err_t wifi_sta_disconnect_post_handler(httpd_req_t *req)
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"forbidden\"}", HTTPD_RESP_USE_STRLEN);
     }
-
-    wifi_invoke_prepare_hook();
 
     werr = net_wifi_sta_disconnect();
     (void)httpd_resp_set_type(req, "application/json");
@@ -559,6 +557,9 @@ static esp_err_t wifi_sta_disconnect_post_handler(httpd_req_t *req)
         (void)httpd_resp_set_status(req, "500 Internal Server Error");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"nvs_clear_sta\"}", HTTPD_RESP_USE_STRLEN);
     }
+
+    wifi_invoke_prepare_hook();
+
     (void)httpd_resp_send(req, "{\"ok\":true,\"reboot\":true}", HTTPD_RESP_USE_STRLEN);
     wifi_schedule_reboot();
     return ESP_OK;

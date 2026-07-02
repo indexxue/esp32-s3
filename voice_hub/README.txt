@@ -18,7 +18,7 @@ voice_hub — ESP32-S3 交互式设备（局域网 Web + 辅摄像头）
   - N16R8：GPIO35/36/37 为 Octal PSRAM，按键用 GPIO0（勿占用 35–37）
   - WS2812 RGB 数据线 GPIO48（1 颗）
   - 电池 ADC GPIO3（ADC1_CH2），无采样使能脚
-Bring-up 顺序：voice_hub/main/voice_hub_config.h 中 VOICE_HUB_ENABLE_*（M1→M3）。
+Bring-up 顺序：common/inc/board.h 中 BOARD_PROFILE_VOICE_HUB 段 VOICE_HUB_ENABLE_*（M1→M3）。
 
 OTA：
   idf -Project voice_hub release 1.0.0

@@ -181,25 +181,7 @@ static const char s_ota_page_html[] =
 
 static bool ota_http_write_allowed(httpd_req_t *req)
 {
-    const int fd = httpd_req_to_sockfd(req);
-    struct sockaddr_storage peer;
-    socklen_t               slen = (socklen_t)sizeof(peer);
-
-    if (!net_wifi_is_softap_mode()) {
-        return true;
-    }
-    if (fd < 0) {
-        return false;
-    }
-    if (getpeername(fd, (struct sockaddr *)&peer, &slen) != 0) {
-        return false;
-    }
-    if (peer.ss_family == AF_INET) {
-        const struct sockaddr_in *in4 = (const struct sockaddr_in *)&peer;
-
-        return net_wifi_softap_peer_ipv4_on_ap_subnet(in4->sin_addr.s_addr);
-    }
-    return false;
+    return net_wifi_http_sensitive_peer_allowed(httpd_req_to_sockfd(req));
 }
 
 static esp_err_t ota_send_json_err(httpd_req_t *req, const char *http_status, const char *err_key, const char *detail)

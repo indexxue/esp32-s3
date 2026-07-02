@@ -103,6 +103,20 @@
 #define BOARD_VOICE_HUB_WS2812_PIN (48)
 #define BOARD_VOICE_HUB_WS2812_COUNT (1U)
 
+/** M1→M3 bring-up：填好本段引脚后按需置 1。 */
+#ifndef VOICE_HUB_ENABLE_LCD
+#define VOICE_HUB_ENABLE_LCD 1
+#endif
+#ifndef VOICE_HUB_ENABLE_WIFI_WEB
+#define VOICE_HUB_ENABLE_WIFI_WEB 1
+#endif
+#ifndef VOICE_HUB_ENABLE_CAMERA
+#define VOICE_HUB_ENABLE_CAMERA 1
+#endif
+#ifndef VOICE_HUB_ENABLE_SDCARD
+#define VOICE_HUB_ENABLE_SDCARD 0
+#endif
+
 /** 电池分压 ADC：GPIO3（ADC1_CH2）；无独立采样使能脚。 */
 #define BOARD_BATTERY_PIN_ENABLE (-1)
 #define BOARD_BATTERY_PIN_ADC (3)

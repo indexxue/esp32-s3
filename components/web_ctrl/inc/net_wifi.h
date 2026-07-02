@@ -81,6 +81,12 @@ bool net_wifi_is_softap_mode(void);
 bool net_wifi_softap_peer_ipv4_on_ap_subnet(uint32_t addr_nbo);
 
 /**
+ * @brief OTA / 摄像头等敏感 HTTP 是否允许当前对端访问。
+ * @note 仅 SoftAP 模式下且客户端位于 AP 子网（或 IPv6 链路本地）时返回 true；STA 模式一律拒绝。
+ */
+bool net_wifi_http_sensitive_peer_allowed(int sock_fd);
+
+/**
  * @brief 阻塞等待 STA 拿到 DHCP IPv4。
  * @note 仅 STA 模式有效；`WIFI_EVENT_STA_START` 会清除陈旧 GOT_IP 位。
  */

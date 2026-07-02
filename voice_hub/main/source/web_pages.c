@@ -1,6 +1,6 @@
 #include "web_pages.h"
 
-#include "voice_hub_config.h"
+#include "board.h"
 #include "voice_hub_camera.h"
 
 #include <stdio.h>
@@ -10,10 +10,14 @@
 #include "freertos/task.h"
 
 #include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "net_wifi.h"
 #include "web_ctrl_wifi_api.h"
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
+
+static const char *TAG = "web_pages";
 
 #define VOICE_HUB_WEB_JPEG_BUF_CAP (49152U)
 #define VOICE_HUB_WEB_MJPEG_BOUNDARY "frame"
@@ -45,6 +49,32 @@ static esp_err_t web_send_json(httpd_req_t *req, const char *json)
     return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
 }
 
+static esp_err_t web_sensitive_forbidden(httpd_req_t *req)
+{
+    (void)httpd_resp_set_status(req, "403 Forbidden");
+    (void)httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":false,\"error\":\"forbidden\"}", HTTPD_RESP_USE_STRLEN);
+}
+
+static bool web_sensitive_allowed(httpd_req_t *req)
+{
+    return net_wifi_http_sensitive_peer_allowed(httpd_req_to_sockfd(req));
+}
+
+static esp_err_t web_pages_register_uri(httpd_handle_t server, const httpd_uri_t *uri)
+{
+    esp_err_t err;
+
+    if ((server == NULL) || (uri == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = httpd_register_uri_handler(server, uri);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register %s failed: %s", uri->uri, esp_err_to_name(err));
+    }
+    return err;
+}
+
 esp_err_t web_pages_root_get_handler(httpd_req_t *req)
 {
     const size_t len = (size_t)(index_html_end - index_html_start);
@@ -73,6 +103,9 @@ static esp_err_t web_api_status_get(httpd_req_t *req)
 static esp_err_t web_api_capture_post(httpd_req_t *req)
 {
 #if VOICE_HUB_ENABLE_CAMERA
+    if (!web_sensitive_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
     status_t st = voice_hub_camera_capture_jpeg_to_sd();
     if (st == STATUS_OK) {
         return web_send_json(req, "{\"ok\":true}");
@@ -114,6 +147,9 @@ static esp_err_t web_api_camera_jpeg_get(httpd_req_t *req)
     uint8_t *jpeg_buf;
     uint32_t jpeg_len = 0U;
 
+    if (!web_sensitive_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
     if (web_camera_check_ready(req) != ESP_OK) {
         return ESP_FAIL;
     }
@@ -143,6 +179,9 @@ static esp_err_t web_api_camera_mjpg_get(httpd_req_t *req)
     char     part_hdr[128];
     esp_err_t err;
 
+    if (!web_sensitive_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
     if (web_camera_check_ready(req) != ESP_OK) {
         return ESP_FAIL;
     }
@@ -190,6 +229,9 @@ static esp_err_t web_api_camera_mjpg_get(httpd_req_t *req)
 
 static esp_err_t web_api_camera_resume_post(httpd_req_t *req)
 {
+    if (!web_sensitive_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
     (void)req;
     web_pages_web_camera_resume();
     return web_send_json(req, "{\"ok\":true}");
@@ -200,6 +242,9 @@ static esp_err_t web_api_camera_view_get(httpd_req_t *req)
     voice_hub_camera_view_t view;
     char                    body[160];
 
+    if (!web_sensitive_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
     voice_hub_camera_view_get(&view);
     (void)snprintf(body,
                    sizeof(body),
@@ -215,6 +260,9 @@ static esp_err_t web_api_camera_rotate_post(httpd_req_t *req)
     voice_hub_camera_view_t view;
     char                    body[160];
 
+    if (!web_sensitive_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
     (void)req;
 
     if (voice_hub_camera_view_rotate_cw() != STATUS_OK) {
@@ -245,6 +293,7 @@ esp_err_t web_pages_register(httpd_handle_t server)
         .method  = HTTP_POST,
         .handler = web_api_capture_post,
     };
+    esp_err_t err;
 
     if (server == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -258,11 +307,20 @@ esp_err_t web_pages_register(httpd_handle_t server)
             .method  = HTTP_GET,
             .handler = web_favicon_get_handler,
         };
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &favicon));
+        err = web_pages_register_uri(server, &favicon);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
 
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &capture));
+    err = web_pages_register_uri(server, &status);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = web_pages_register_uri(server, &capture);
+    if (err != ESP_OK) {
+        return err;
+    }
 
 #if VOICE_HUB_ENABLE_CAMERA && VOICE_HUB_ENABLE_WIFI_WEB
     {
@@ -292,11 +350,26 @@ esp_err_t web_pages_register(httpd_handle_t server)
             .handler = web_api_camera_rotate_post,
         };
 
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &camera_jpeg));
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &camera_mjpg));
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &camera_resume));
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &camera_view));
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &camera_rotate));
+        err = web_pages_register_uri(server, &camera_jpeg);
+        if (err != ESP_OK) {
+            return err;
+        }
+        err = web_pages_register_uri(server, &camera_mjpg);
+        if (err != ESP_OK) {
+            return err;
+        }
+        err = web_pages_register_uri(server, &camera_resume);
+        if (err != ESP_OK) {
+            return err;
+        }
+        err = web_pages_register_uri(server, &camera_view);
+        if (err != ESP_OK) {
+            return err;
+        }
+        err = web_pages_register_uri(server, &camera_rotate);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
 #endif
 

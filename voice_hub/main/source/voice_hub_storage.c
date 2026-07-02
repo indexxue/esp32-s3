@@ -1,6 +1,6 @@
 #include "voice_hub_storage.h"
 
-#include "voice_hub_config.h"
+#include "board.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -8,7 +8,6 @@
 #include "esp_heap_caps.h"
 #include "sdmmc_cmd.h"
 
-#include "board.h"
 #include "log.h"
 #include "sdcard.h"
 

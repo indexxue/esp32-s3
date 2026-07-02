@@ -10,11 +10,10 @@
 #include "esp_jpeg_enc.h"
 #include "esp_heap_caps.h"
 
-#include "voice_hub_config.h"
+#include "board.h"
 #include "voice_hub_storage.h"
 #include "voice_hub_ui.h"
 
-#include "board.h"
 #include "dma.h"
 #include "i2c.h"
 #include "driver/i2c_master.h"
@@ -37,10 +36,11 @@ static volatile uint16_t s_preview_frame_h;
 #if VOICE_HUB_ENABLE_CAMERA
 
 static uint8_t *s_snapshot_buf;
+static uint8_t *s_snapshot_copy;
 static uint32_t s_snapshot_bytes;
 static uint16_t s_snapshot_w;
 static uint16_t s_snapshot_h;
-static portMUX_TYPE s_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_snapshot_mtx;
 static SemaphoreHandle_t s_jpeg_mutex;
 static jpeg_enc_handle_t s_jpeg_enc;
 static uint8_t *s_blit_strip;
@@ -165,6 +165,10 @@ static uint32_t voice_hub_camera_strip_bytes(uint16_t row_pixels)
     uint32_t row_b = (uint32_t)row_pixels * 2U;
     uint32_t strip_max = (uint32_t)VOICE_HUB_CAMERA_BLIT_STRIP_BYTES_MAX;
 
+    if (row_b == 0U) {
+        return 2U;
+    }
+
     strip_max = (strip_max / row_b) * row_b;
     if (strip_max == 0U) {
         strip_max = row_b;
@@ -280,9 +284,21 @@ static void voice_hub_camera_dst_to_src(uint16_t width,
     }
 }
 
+static status_t voice_hub_camera_snapshot_mtx_init(void)
+{
+    if (s_snapshot_mtx != NULL) {
+        return STATUS_OK;
+    }
+    s_snapshot_mtx = xSemaphoreCreateMutex();
+    if (s_snapshot_mtx == NULL) {
+        return STATUS_FAIL;
+    }
+    return STATUS_OK;
+}
+
 static status_t voice_hub_camera_snapshot_buf_ensure(uint32_t nbytes)
 {
-    if ((s_snapshot_buf != NULL) && (s_snapshot_bytes >= nbytes)) {
+    if ((s_snapshot_buf != NULL) && (s_snapshot_copy != NULL) && (s_snapshot_bytes >= nbytes)) {
         return STATUS_OK;
     }
 
@@ -291,10 +307,23 @@ static status_t voice_hub_camera_snapshot_buf_ensure(uint32_t nbytes)
         s_snapshot_buf   = NULL;
         s_snapshot_bytes = 0U;
     }
+    if (s_snapshot_copy != NULL) {
+        voice_hub_camera_buf_free(s_snapshot_copy);
+        s_snapshot_copy = NULL;
+    }
 
     s_snapshot_buf = (uint8_t *)voice_hub_camera_buf_alloc(nbytes);
     if (s_snapshot_buf == NULL) {
         LOG_ERROR("voice_hub camera snapshot alloc %u failed", (unsigned)nbytes);
+        return STATUS_FAIL;
+    }
+
+    s_snapshot_copy = (uint8_t *)voice_hub_camera_buf_alloc(nbytes);
+    if (s_snapshot_copy == NULL) {
+        voice_hub_camera_buf_free(s_snapshot_buf);
+        s_snapshot_buf   = NULL;
+        s_snapshot_bytes = 0U;
+        LOG_ERROR("voice_hub camera snapshot copy alloc %u failed", (unsigned)nbytes);
         return STATUS_FAIL;
     }
 
@@ -315,6 +344,12 @@ static void voice_hub_camera_build_snapshot(const uint8_t *rgb565, uint16_t widt
     row_bytes   = (uint32_t)width * 2U;
     frame_bytes = row_bytes * (uint32_t)height;
     if (voice_hub_camera_snapshot_buf_ensure(frame_bytes) != STATUS_OK) {
+        return;
+    }
+    if (voice_hub_camera_snapshot_mtx_init() != STATUS_OK) {
+        return;
+    }
+    if (xSemaphoreTake(s_snapshot_mtx, portMAX_DELAY) != pdTRUE) {
         return;
     }
 
@@ -355,10 +390,9 @@ static void voice_hub_camera_build_snapshot(const uint8_t *rgb565, uint16_t widt
         }
     }
 
-    portENTER_CRITICAL(&s_snapshot_mux);
     s_snapshot_w = width;
     s_snapshot_h = height;
-    portEXIT_CRITICAL(&s_snapshot_mux);
+    (void)xSemaphoreGive(s_snapshot_mtx);
 }
 
 static status_t voice_hub_camera_jpeg_enc_open(void)
@@ -586,10 +620,13 @@ status_t voice_hub_camera_preview_start(void)
         return STATUS_FAIL;
     }
 
-    if (voice_hub_camera_blit_strip_ensure(voice_hub_camera_strip_bytes(st7789_display_width(lcd))) != STATUS_OK) {
-        LOG_WARN("voice_hub camera blit strip init failed");
-        return STATUS_FAIL;
+#if VOICE_HUB_ENABLE_LCD
+    if ((lcd != NULL) && st7789_is_initialized(lcd)) {
+        if (voice_hub_camera_blit_strip_ensure(voice_hub_camera_strip_bytes(st7789_display_width(lcd))) != STATUS_OK) {
+            LOG_WARN("voice_hub camera blit strip init failed (LCD preview disabled)");
+        }
     }
+#endif
 
     if (ov2640_set_frame_callback(&s_ov2640, voice_hub_camera_on_frame, NULL) != OV2640_OK) {
         LOG_WARN("ov2640_set_frame_callback failed");
@@ -643,7 +680,6 @@ status_t voice_hub_camera_snapshot_jpeg(uint8_t *out, uint32_t out_cap, uint32_t
     }
     return STATUS_FAIL;
 #else
-    uint8_t  *frame_copy = NULL;
     uint32_t  frame_bytes;
     uint16_t  width;
     uint16_t  height;
@@ -659,41 +695,40 @@ status_t voice_hub_camera_snapshot_jpeg(uint8_t *out, uint32_t out_cap, uint32_t
 
     *out_len = 0U;
 
-    portENTER_CRITICAL(&s_snapshot_mux);
+    if (voice_hub_camera_snapshot_mtx_init() != STATUS_OK) {
+        return STATUS_FAIL;
+    }
+    if (xSemaphoreTake(s_snapshot_mtx, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return STATUS_FAIL;
+    }
+
     width       = s_snapshot_w;
     height      = s_snapshot_h;
     frame_bytes = (uint32_t)width * (uint32_t)height * 2U;
-    if ((s_snapshot_buf == NULL) || (frame_bytes == 0U) || (frame_bytes > s_snapshot_bytes)) {
-        portEXIT_CRITICAL(&s_snapshot_mux);
+    if ((s_snapshot_buf == NULL) || (s_snapshot_copy == NULL) || (frame_bytes == 0U) ||
+        (frame_bytes > s_snapshot_bytes)) {
+        (void)xSemaphoreGive(s_snapshot_mtx);
         return STATUS_FAIL;
     }
 
-    frame_copy = (uint8_t *)voice_hub_camera_buf_alloc(frame_bytes);
-    if (frame_copy == NULL) {
-        portEXIT_CRITICAL(&s_snapshot_mux);
-        return STATUS_FAIL;
-    }
-    (void)memcpy(frame_copy, s_snapshot_buf, (size_t)frame_bytes);
-    portEXIT_CRITICAL(&s_snapshot_mux);
+    (void)memcpy(s_snapshot_copy, s_snapshot_buf, (size_t)frame_bytes);
+    (void)xSemaphoreGive(s_snapshot_mtx);
 
     if (voice_hub_camera_jpeg_enc_open() != STATUS_OK) {
-        voice_hub_camera_buf_free(frame_copy);
         return STATUS_FAIL;
     }
 
     if (xSemaphoreTake(s_jpeg_mutex, pdMS_TO_TICKS(2000)) != pdTRUE) {
-        voice_hub_camera_buf_free(frame_copy);
         return STATUS_FAIL;
     }
 
     jerr = jpeg_enc_process(s_jpeg_enc,
-                            frame_copy,
+                            s_snapshot_copy,
                             (int)frame_bytes,
                             out,
                             (int)out_cap,
                             &jpeg_size);
     (void)xSemaphoreGive(s_jpeg_mutex);
-    voice_hub_camera_buf_free(frame_copy);
 
     if ((jerr != JPEG_ERR_OK) || (jpeg_size <= 0)) {
         LOG_WARN("voice_hub jpeg_enc_process failed %d", (int)jerr);

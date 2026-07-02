@@ -9,6 +9,11 @@
 
 #include <stdint.h>
 
+/** M3 bring-up：上电挂载成功后跑 FAT 读写烟测 + 吞吐日志。 */
+#ifndef VOICE_HUB_RUN_SDCARD_RW_TEST_ON_BOOT
+#define VOICE_HUB_RUN_SDCARD_RW_TEST_ON_BOOT 0
+#endif
+
 status_t voice_hub_storage_init(void);
 bool_t voice_hub_storage_is_mounted(void);
 /** FAT 短文件写读校验；成功后再打 DMA 吞吐日志。 */

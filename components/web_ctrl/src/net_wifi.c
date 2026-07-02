@@ -18,6 +18,7 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "lwip/ip4_addr.h"
+#include "lwip/sockets.h"
 #include "esp_wifi_default.h"
 
 static const char *TAG = "net_wifi";
@@ -532,6 +533,39 @@ bool net_wifi_format_ipv4_for_display(char *buf, size_t cap)
 bool net_wifi_is_softap_mode(void)
 {
     return s_wifi_iface_started && (s_running_mode == NET_WIFI_MODE_SOFTAP);
+}
+
+bool net_wifi_http_sensitive_peer_allowed(int sock_fd)
+{
+    struct sockaddr_storage peer;
+    socklen_t               slen;
+
+    if (!net_wifi_is_softap_mode()) {
+        return false;
+    }
+    if (sock_fd < 0) {
+        return false;
+    }
+    slen = (socklen_t)sizeof(peer);
+    if (getpeername(sock_fd, (struct sockaddr *)&peer, &slen) != 0) {
+        return false;
+    }
+    if (peer.ss_family == AF_INET) {
+        const struct sockaddr_in *in4 = (const struct sockaddr_in *)&peer;
+
+        return net_wifi_softap_peer_ipv4_on_ap_subnet(in4->sin_addr.s_addr);
+    }
+#if CONFIG_LWIP_IPV6
+    if (peer.ss_family == AF_INET6) {
+        const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)&peer;
+        const uint8_t             *b  = in6->sin6_addr.s6_addr;
+
+        if ((b[0] == 0xfeU) && ((b[1] & 0xc0U) == 0x80U)) {
+            return true;
+        }
+    }
+#endif
+    return false;
 }
 
 bool net_wifi_softap_peer_ipv4_on_ap_subnet(uint32_t addr_nbo)
