@@ -1,0 +1,47 @@
+{
+  "schema": 3,
+  "version": "1.0.12",
+  "products": {
+    "voice_hub": {
+      "variants": {
+        "sign": {
+          "signed": true,
+          "build_date": "20260702",
+          "built_at_utc": "2026-07-02T08:34:04Z",
+          "artifacts": [
+            {
+              "file": "sign_voice_hub_1.0.12_20260702.bin",
+              "size": 1298656,
+              "sha256": "28dc908c1f72a3e72dbe995274b424a70804cb54b024009230421292144472ba",
+              "role": "app"
+            },
+            {
+              "file": "sign_voice_hub_1.0.12_20260702.hex",
+              "size": 3571636,
+              "role": "app",
+              "format": "intel_hex",
+              "flash_offset": "0x30000"
+            }
+          ],
+          "signing": {
+            "profile": "signed_ota",
+            "algorithm": "rsa3072",
+            "signing_key_id": "dev"
+          }
+        }
+      },
+      "signed": true
+    }
+  },
+  "target": "esp32s3",
+  "git_commit": "dfc08e5e",
+  "naming": {
+    "pattern": "{sign_tag}_{product}_{version}_{build_date}.{ext}",
+    "sign_tag": "sign",
+    "example": "sign_voice_hub_1.0.12_20260702.bin"
+  },
+  "signing_summary": {
+    "all_signed": true,
+    "any_signed": true
+  }
+}
