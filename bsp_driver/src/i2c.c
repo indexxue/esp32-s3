@@ -273,6 +273,24 @@ bool_t I2cUnregisterDevice(s32_t port, u16_t deviceAddress7bit)
     return i2cSetLastErr(ESP_OK);
 }
 
+bool_t I2cGetMasterBusHandle(s32_t port, i2c_master_bus_handle_t *bus_handle)
+{
+    s32_t portIndex = i2cPortToIndex(port);
+
+    if (bus_handle == NULL) {
+        return i2cSetLastErr(ESP_ERR_INVALID_ARG);
+    }
+    if (portIndex < 0) {
+        return i2cSetLastErr(ESP_ERR_INVALID_ARG);
+    }
+    if (s_i2cPorts[portIndex].busInited == FALSE) {
+        return i2cSetLastErr(ESP_ERR_INVALID_STATE);
+    }
+
+    *bus_handle = s_i2cPorts[portIndex].busHandle;
+    return i2cSetLastErr(ESP_OK);
+}
+
 bool_t I2cProbe(s32_t port, u16_t deviceAddress7bit)
 {
     esp_err_t ret = ESP_OK;

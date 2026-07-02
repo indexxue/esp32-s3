@@ -21,6 +21,7 @@
 #define BOARD_GPIO_IO4_PWM (-1)
 
 #define BOARD_I2C_BUS1_HW_PORT (0)
+/** voice_hub_rev_a：SCL=GPIO4，SDA=GPIO5（OV2640 SCCB）。 */
 #define BOARD_I2C_BUS1_PIN_SCL (4)
 #define BOARD_I2C_BUS1_PIN_SDA (5)
 
@@ -29,8 +30,9 @@
 #define BOARD_I2C_MAX_DEVICES (8U)
 #define BOARD_I2C_GLITCH_IGNORE (7U)
 
+/** voice_hub：OV2640 需 XCLK 后 SCCB 才应答，扫描改在 camera 模块内（XCLK 前后各一次）。 */
 #ifndef BOARD_I2C_BUS1_SCAN_ON_BOOT
-#define BOARD_I2C_BUS1_SCAN_ON_BOOT (1)
+#define BOARD_I2C_BUS1_SCAN_ON_BOOT (0)
 #endif
 
 /** OV2640 SCCB 使用 I2C1。 */
@@ -90,7 +92,8 @@
 #define BOARD_SDCARD_PIN_D2 (-1)
 #define BOARD_SDCARD_PIN_D3 (-1)
 #define BOARD_SDCARD_BUS_WIDTH (1U)
-#define BOARD_SDCARD_MAX_FREQ_KHZ (20000U)
+/** 1-bit + GPIO 矩阵：先用 10MHz，稳定后可试 20000。IDF 默认 CMD=15，本板 CMD=21。 */
+#define BOARD_SDCARD_MAX_FREQ_KHZ (10000U)
 #define BOARD_SDCARD_SDMMC_DMA_PATH (0U)
 #define BOARD_SDCARD_HOST_FLAGS_EXTRA (0U)
 #define BOARD_SDCARD_MOUNT_POINT "/sdcard"

@@ -69,7 +69,7 @@ static void web_ctrl_boot_task(void *arg)
 #define BTN_SCAN_TASK_STACK_WORDS (3072U)
 #define BTN_SCAN_TASK_PRIORITY (5U)
 
-#define VOICE_HUB_MODULES_TASK_STACK_WORDS (8192U)
+#define VOICE_HUB_MODULES_TASK_STACK_WORDS (12288U)
 #define VOICE_HUB_MODULES_TASK_PRIORITY (4U)
 
 static void app_idle_default(void)
@@ -182,17 +182,35 @@ static void voice_hub_modules_task(void *arg)
 #if VOICE_HUB_ENABLE_LCD
     if (st7789_is_initialized(lcd)) {
         (void)voice_hub_ui_init(lcd);
+#if VOICE_HUB_ENABLE_SDCARD
+        {
+            const char *sd_line = voice_hub_storage_boot_status_line();
+            if (sd_line != NULL) {
+                voice_hub_ui_set_status_line(lcd, sd_line);
+            }
+        }
+#endif
     }
 #endif
 
 #if VOICE_HUB_ENABLE_CAMERA
     if (voice_hub_camera_init() == STATUS_OK) {
-        (void)voice_hub_camera_preview_start();
-    }
+        if (voice_hub_camera_preview_start() != STATUS_OK) {
+            LOG_WARN("voice_hub camera preview start failed");
+#if VOICE_HUB_ENABLE_LCD
+            if (st7789_is_initialized(lcd)) {
+                voice_hub_ui_set_status_line(lcd, "cam: preview fail");
+            }
 #endif
-
-#if VOICE_HUB_ENABLE_SDCARD
-    (void)voice_hub_storage_init();
+        }
+    } else {
+#if VOICE_HUB_ENABLE_LCD
+        if (st7789_is_initialized(lcd)) {
+            voice_hub_ui_set_status_line(lcd, "cam: init fail");
+        }
+#endif
+        LOG_WARN("voice_hub_camera_init failed");
+    }
 #endif
 
     for (;;) {
@@ -224,6 +242,21 @@ static bool app_defer_ota_confirm_to_web(void)
 }
 #endif
 
+#if VOICE_HUB_ENABLE_SDCARD
+static void app_init_sdcard_before_wifi(void)
+{
+    if (voice_hub_storage_init() != STATUS_OK) {
+        return;
+    }
+    if (!voice_hub_storage_is_mounted()) {
+        return;
+    }
+#if VOICE_HUB_RUN_SDCARD_RW_TEST_ON_BOOT
+    (void)voice_hub_storage_run_rw_test();
+#endif
+}
+#endif
+
 static status_t app_init_platform(void)
 {
     if (log_init(NULL) != STATUS_OK) {
@@ -236,6 +269,10 @@ static status_t app_init_platform(void)
         LOG_ERROR("BoardInit failed");
         return STATUS_FAIL;
     }
+
+#if VOICE_HUB_ENABLE_SDCARD
+    app_init_sdcard_before_wifi();
+#endif
 
 #if CONFIG_WEB_CTRL_AUTO_START
     if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_WEB)) {

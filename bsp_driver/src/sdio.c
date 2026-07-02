@@ -55,6 +55,9 @@ bool_t SdioFillSdmmcForBoard(sdmmc_host_t *host, sdmmc_slot_config_t *slot, cons
     if (cfg->max_freq_khz != 0U) {
         host->max_freq_khz = (int)cfg->max_freq_khz;
     }
+    if (cfg->bus_width == 1U) {
+        host->driver_strength = SDMMC_DRIVER_STRENGTH_A;
+    }
 
     *slot = (sdmmc_slot_config_t)SDMMC_SLOT_CONFIG_DEFAULT();
     slot->clk = (gpio_num_t)cfg->pin_clk;

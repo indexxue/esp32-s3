@@ -62,8 +62,7 @@ static const device_product_profile_t s_product_profiles[] = {
     {
         .product_id         = NVS_PROJECT_ID_VOICE_HUB,
         .name               = "voice_hub",
-        .board_mask         = DEVICE_BOARD_MASK_I2C | DEVICE_BOARD_MASK_LCD | DEVICE_BOARD_MASK_SDCARD |
-                              DEVICE_BOARD_MASK_BATTERY,
+        .board_mask         = DEVICE_BOARD_MASK_I2C | DEVICE_BOARD_MASK_LCD | DEVICE_BOARD_MASK_BATTERY,
         .platform_mask      = DEVICE_PLATFORM_MASK_BUTTON | DEVICE_PLATFORM_MASK_WEB |
                               DEVICE_PLATFORM_MASK_LED,
         .buttons            = s_buttons_voice_hub,

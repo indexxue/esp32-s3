@@ -3,6 +3,8 @@
 
 #include "type.h"
 
+#include "driver/i2c_master.h"
+
 /** ESP32-S3 上硬件 I2C 控制器数量为 2（I2C_NUM_0 / I2C_NUM_1）。 */
 #define BSP_I2C_HW_PORT_COUNT (2)
 
@@ -60,5 +62,8 @@ bool_t I2cReadReg8(s32_t port,
                    usize_t readLength);
 
 s32_t I2cGetLastError(void);
+
+/** 获取已初始化端口的 I2C master 总线句柄（供 esp_sccb / esp_cam_sensor 共享）。 */
+bool_t I2cGetMasterBusHandle(s32_t port, i2c_master_bus_handle_t *bus_handle);
 
 #endif

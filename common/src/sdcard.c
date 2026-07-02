@@ -1,11 +1,11 @@
 #include "sdcard.h"
 
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_vfs_fat.h"
 #include "soc/soc_caps.h"
 
 #include "board.h"
-#include "dma.h"
 #include "log.h"
 #include "sdio.h"
 
@@ -167,6 +167,22 @@ void sdcard_mount_smoke_and_benchmark_log(void)
 #endif
 }
 
+/** FAT VFS 路径经 libc 缓冲，不要求 MALLOC_CAP_DMA；优先 internal，不足再 PSRAM。 */
+static void *sdcard_bench_alloc(size_t size)
+{
+    void *p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+    if (p != NULL) {
+        return p;
+    }
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+
+static void sdcard_bench_free(void *ptr)
+{
+    heap_caps_free(ptr);
+}
+
 void sdcard_dma_throughput_benchmark_log(void)
 {
 #if !SOC_SDMMC_HOST_SUPPORTED
@@ -200,10 +216,9 @@ void sdcard_dma_throughput_benchmark_log(void)
         (unsigned int)(chunk / 1024U),
         (unsigned int)SDCARD_BENCH_FAT_LOOPS);
 
-    buf = DmaMalloc((usize_t)chunk);
-    if ((buf == NULL) || (DmaBufferIsBusCapable(buf, (usize_t)chunk) == FALSE)) {
-        LOG_WARN("SD DMA bench: DmaMalloc %u bytes failed", (unsigned int)chunk);
-        DmaFree(buf);
+    buf = sdcard_bench_alloc(chunk);
+    if (buf == NULL) {
+        LOG_WARN("SD DMA bench: alloc %u bytes failed (internal+PSRAM)", (unsigned int)chunk);
         return;
     }
     (void)memset(buf, 0x5AU, chunk);
@@ -215,7 +230,7 @@ void sdcard_dma_throughput_benchmark_log(void)
     fp = fopen(path, "w+b");
     if (fp == NULL) {
         LOG_WARN("SD DMA bench: fopen w+b failed");
-        DmaFree(buf);
+        sdcard_bench_free(buf);
         return;
     }
     (void)setvbuf(fp, NULL, _IOFBF, (size_t)8192U);
@@ -269,7 +284,7 @@ void sdcard_dma_throughput_benchmark_log(void)
         card->real_freq_khz,
         (unsigned int)(1U << (unsigned)card->log_bus_width));
 
-    DmaFree(buf);
+    sdcard_bench_free(buf);
 #undef SDCARD_BENCH_CHUNK_BYTES
 #undef SDCARD_BENCH_FAT_LOOPS
 #endif

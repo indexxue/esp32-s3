@@ -654,6 +654,14 @@ status_t BoardInit(void)
         s_board_ready_mask |= DEVICE_BOARD_MASK_RTC;
     }
 
+    if (device_profile_board_wants(DEVICE_BOARD_MASK_SDCARD)) {
+        if (sdcard_mount(BOARD_SDCARD_MOUNT_POINT) != STATUS_OK) {
+            LOG_WARN("SD card FAT mount skipped or failed (check card / wiring), path %s", BOARD_SDCARD_MOUNT_POINT);
+        } else {
+            s_board_ready_mask |= DEVICE_BOARD_MASK_SDCARD;
+        }
+    }
+
     if (device_profile_board_wants(DEVICE_BOARD_MASK_LCD)) {
         if (board_st7789_init() != STATUS_OK) {
             return STATUS_FAIL;
@@ -671,14 +679,6 @@ status_t BoardInit(void)
             return STATUS_FAIL;
         }
         s_board_ready_mask |= DEVICE_BOARD_MASK_IMU;
-    }
-
-    if (device_profile_board_wants(DEVICE_BOARD_MASK_SDCARD)) {
-        if (sdcard_mount(BOARD_SDCARD_MOUNT_POINT) != STATUS_OK) {
-            LOG_WARN("SD card FAT mount skipped or failed (check card / wiring), path %s", BOARD_SDCARD_MOUNT_POINT);
-        } else {
-            s_board_ready_mask |= DEVICE_BOARD_MASK_SDCARD;
-        }
     }
 
     if (device_profile_board_wants(DEVICE_BOARD_MASK_IR)) {
