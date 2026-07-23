@@ -18,6 +18,16 @@
 /** Web JPEG 质量 1–100。 */
 #define CAMERA_SENSOR_WEB_JPEG_QUALITY (65U)
 
+/** LCD 本地预览最小刷新间隔（ms）；传感器可达 25fps，降到约 10fps 减轻 SPI 与 JPEG 争用。 */
+#ifndef CAMERA_SENSOR_LCD_MIN_INTERVAL_MS
+#define CAMERA_SENSOR_LCD_MIN_INTERVAL_MS (100U)
+#endif
+
+/** snapshot 缓冲更新最小间隔（ms）；网页与 LCD 共用，约 12–15fps 足够。 */
+#ifndef CAMERA_SENSOR_SNAPSHOT_MIN_INTERVAL_MS
+#define CAMERA_SENSOR_SNAPSHOT_MIN_INTERVAL_MS (70U)
+#endif
+
 /**
  * LCD blit SPI 条带字节上限（须为整行 RGB565 的倍数）。
  * 全板 BOARD_ST7789_SPI_MAX_TX 常为 32KiB，与 WiFi 共用 MALLOC_CAP_DMA 时易耗尽导致重启。

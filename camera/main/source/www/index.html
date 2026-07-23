@@ -14,6 +14,8 @@
       --muted: #8b9cb3;
       --accent: #3d8bfd;
       --accent-dim: #2a6fd6;
+      --danger: #e85d6c;
+      --danger-bg: #3a1f26;
       --radius: 12px;
       --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
       --font: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -73,6 +75,8 @@
     .btn-primary:hover:not(:disabled) { background: var(--accent-dim); }
     .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
     .btn-ghost:hover:not(:disabled) { background: var(--surface2); }
+    .btn-danger { background: var(--danger-bg); color: var(--danger); border-color: #5c2a32; }
+    .btn-danger:hover:not(:disabled) { background: #4a252c; }
     .status { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
     .chip {
       display: inline-flex;
@@ -87,6 +91,67 @@
     .chip strong { color: var(--text); font-weight: 600; margin-left: 4px; }
     .chip.ok { border-color: #2a5c45; color: #9ae6c3; }
     .chip.warn { border-color: #5c4a2a; color: #e6d39a; }
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+    .inp {
+      width: 100%;
+      padding: 11px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0d1218;
+      color: var(--text);
+      font: inherit;
+    }
+    .inp:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(61, 139, 253, 0.2);
+    }
+    .ap-list {
+      max-height: 240px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 12px 0;
+      background: #0d1218;
+    }
+    .ap-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .ap-item:last-child { border-bottom: 0; }
+    .ap-item:hover { background: var(--surface2); }
+    .ap-name {
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 55%;
+    }
+    .ap-meta { font-size: 0.75rem; color: var(--muted); text-align: right; }
+    .sig {
+      display: inline-block;
+      width: 36px;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+      vertical-align: middle;
+      margin-right: 6px;
+      overflow: hidden;
+    }
+    .sig i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
     .hint { font-size: 0.8rem; color: var(--muted); margin-top: 10px; }
     .log {
       white-space: pre-wrap;
@@ -101,6 +166,33 @@
       color: #c5d4e8;
     }
     .log[hidden] { display: none; }
+    .danger-zone { margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--border); }
+    .danger-zone .dz-title { font-size: 0.85rem; font-weight: 600; color: var(--danger); margin: 0 0 8px; }
+    .danger-zone .dz-desc { font-size: 0.8rem; color: var(--muted); margin: 0 0 12px; }
+    .modal-wrap {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 50;
+    }
+    .modal-wrap.on { display: flex; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      max-width: 400px;
+      width: 100%;
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+    .modal h3 { margin: 0 0 10px; font-size: 1.05rem; }
+    .modal p { margin: 0 0 18px; color: var(--muted); font-size: 0.9rem; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+    .scan-h { font-size: 0.8rem; color: var(--muted); min-height: 1.2em; }
     .cam-panel {
       display: flex;
       flex-direction: column;
@@ -132,30 +224,74 @@
   <div class="wrap">
     <header class="top">
       <h1>camera</h1>
-      <p>网页预览摄像头画面并拍照保存到电脑。SoftAP 模式下连接设备热点后访问 <code>http://192.168.4.1/</code>。</p>
+      <p>Wi‑Fi 配网与摄像头预览。SoftAP 下连设备热点后访问 <code>http://192.168.4.1/</code>（<code>/provision</code> 会跳转到本页）。</p>
     </header>
+
+    <section class="card" id="card-wifi">
+      <div class="card-h">
+        <h2>Wi‑Fi 配网</h2>
+        <div class="row">
+          <button type="button" class="btn btn-ghost busy" id="btn-wifi-refresh" onclick="prepareWifiProvisioning(); refreshWifiStatus()">刷新状态</button>
+          <button type="button" class="btn btn-primary busy" id="btn-scan" onclick="doScan()">扫描附近网络</button>
+        </div>
+      </div>
+      <div class="card-b">
+        <div class="status" id="st"><span class="chip">状态加载中…</span></div>
+        <p class="scan-h" id="s"></p>
+        <div class="ap-list hidden" id="u"></div>
+        <div class="field">
+          <label for="ssid">网络名称 (SSID)</label>
+          <input class="inp" id="ssid" autocomplete="off" placeholder="选择上方列表或手动输入" />
+        </div>
+        <div class="field">
+          <label for="pw">密码</label>
+          <input class="inp" id="pw" type="password" autocomplete="off" placeholder="开放网络可留空" />
+        </div>
+        <div class="row">
+          <button type="button" class="btn btn-primary busy" id="btn-save" onclick="doSave()">保存并重启设备</button>
+        </div>
+        <p class="hint">配网写入 NVS 后自动重启。扫描/保存时会暂停网页预览，避免 HTTP 被长连接占满导致保存卡死。</p>
+        <pre class="log" id="wo" hidden></pre>
+        <div class="danger-zone">
+          <p class="dz-title">断开并清除已保存的路由器</p>
+          <p class="dz-desc">将断开当前 STA、清除已保存的 Wi‑Fi 账号并重启。用于换路由器或恢复出厂网络设置。</p>
+          <button type="button" class="btn btn-danger busy" id="btn-disconnect" onclick="openDisconnectModal()">清除已存 Wi‑Fi 并重启…</button>
+        </div>
+      </div>
+    </section>
 
     <section class="card" id="card-camera">
       <div class="card-h">
         <h2>摄像头</h2>
         <div class="row">
-          <button type="button" class="btn btn-ghost busy" id="btn-refresh" onclick="refreshAll()">刷新状态</button>
+          <button type="button" class="btn btn-ghost busy" id="btn-refresh" onclick="refreshCameraStatus()">刷新状态</button>
           <button type="button" class="btn btn-ghost busy" id="btn-cam-stream" onclick="toggleCameraStream()">关闭预览</button>
           <button type="button" class="btn btn-primary busy" id="btn-capture" onclick="doCapture()">拍照保存</button>
         </div>
       </div>
       <div class="card-b">
-        <div class="status" id="st"><span class="chip">状态加载中…</span></div>
+        <div class="status" id="cam-st"><span class="chip">状态加载中…</span></div>
         <div class="cam-panel">
           <p class="cam-meta" id="camHint">正在连接摄像头…</p>
           <div class="cam-wrap" id="camWrap">
             <img id="camView" alt="camera preview" width="240" height="240" />
           </div>
         </div>
-        <p class="hint">「拍照保存」会抓取当前帧 JPEG 并下载到电脑（浏览器默认下载目录），文件名带时间戳。网页预览为串行 JPEG 刷新（约 4–5 fps）。</p>
+        <p class="hint">「拍照保存」会抓取当前帧 JPEG 并下载到电脑。网页预览为串行 JPEG 刷新（约 4–5 fps）。</p>
         <pre class="log" id="out" hidden></pre>
       </div>
     </section>
+  </div>
+
+  <div class="modal-wrap" id="modal-disconnect" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h3>确认清除 Wi‑Fi？</h3>
+      <p>将断开 STA、删除已保存的路由器账号并立即重启。此页面会暂时无法访问。</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeDisconnectModal()">取消</button>
+        <button type="button" class="btn btn-danger busy" id="modal-confirm-dc" onclick="confirmStaDisconnect()">确认清除并重启</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -164,6 +300,7 @@
     let camLoadBusy = false;
     let camBlobUrl = null;
     let camFailCount = 0;
+    let statusTimer = null;
     var CAM_POLL_MS = 200;
 
     function esc(t) {
@@ -178,8 +315,8 @@
       });
     }
 
-    function showLog(txt, show) {
-      var el = document.getElementById("out");
+    function showLog(id, txt, show) {
+      var el = document.getElementById(id);
       if (!el) return;
       if (!txt) {
         el.hidden = true;
@@ -190,34 +327,88 @@
       el.textContent = txt;
     }
 
-    async function refreshStatus() {
+    function rssiPct(r) {
+      if (typeof r !== "number") return 15;
+      return Math.max(8, Math.min(100, 2 * (r + 100)));
+    }
+
+    function pauseBackgroundPoll() {
+      if (statusTimer) {
+        clearInterval(statusTimer);
+        statusTimer = null;
+      }
+    }
+
+    function resumeBackgroundPoll() {
+      if (!statusTimer) {
+        statusTimer = setInterval(function () {
+          refreshWifiStatus();
+          refreshCameraStatus();
+        }, 5000);
+      }
+    }
+
+    function delayMs(ms) {
+      return new Promise(function (resolve) {
+        setTimeout(resolve, ms);
+      });
+    }
+
+    async function fetchWithTimeout(url, options, ms) {
+      var ctrl = new AbortController();
+      var tid = setTimeout(function () {
+        ctrl.abort();
+      }, ms);
+      var opts = options ? Object.assign({}, options) : {};
+      opts.signal = ctrl.signal;
+      try {
+        return await fetch(url, opts);
+      } finally {
+        clearTimeout(tid);
+      }
+    }
+
+    function prepareWifiProvisioning() {
+      stopCameraStream();
+      pauseBackgroundPoll();
+      var hint = document.getElementById("camHint");
+      if (hint) hint.textContent = "预览已暂停（配网中）";
+    }
+
+    async function refreshWifiStatus() {
       var st = document.getElementById("st");
-      var chips = "";
       try {
         var r = await fetch("/api/wifi/status");
         var j = await r.json();
-        if (j.ok) {
-          var ok = j.sta_has_ip === true || j.softap === true;
-          chips +=
-            "<span class='chip'><strong>模式</strong>" + esc(j.mode || "—") + "</span>" +
-            "<span class='chip'><strong>IP</strong>" + esc(j.ip || "—") + "</span>" +
-            "<span class='chip " + (ok ? "ok" : "warn") + "'><strong>网络</strong>" + (ok ? "已连接" : "未就绪") + "</span>";
+        if (!j.ok) {
+          st.innerHTML = "<span class='chip warn'><strong>错误</strong>无法读取状态</span>";
+          return;
         }
+        var ok = j.sta_has_ip === true || j.softap === true;
+        st.innerHTML =
+          "<span class='chip'><strong>模式</strong>" + esc(j.mode || "—") + "</span>" +
+          "<span class='chip'><strong>IP</strong>" + esc(j.ip || "—") + "</span>" +
+          "<span class='chip " + (ok ? "ok" : "warn") + "'><strong>网络</strong>" + (ok ? "已连接" : "未就绪") + "</span>";
       } catch (e) {
-        chips += "<span class='chip warn'><strong>网络</strong>异常</span>";
+        st.innerHTML = "<span class='chip warn'><strong>异常</strong>" + esc(String(e)) + "</span>";
       }
+    }
+
+    async function refreshCameraStatus() {
+      var st = document.getElementById("cam-st");
       try {
         var r2 = await fetch("/api/camera/status");
         var j2 = await r2.json();
         var ready = j2.camera === true;
-        chips += "<span class='chip " + (ready ? "ok" : "warn") + "'><strong>摄像头</strong>" + (ready ? "就绪" : "未就绪") + "</span>";
+        var chips =
+          "<span class='chip " + (ready ? "ok" : "warn") + "'><strong>摄像头</strong>" + (ready ? "就绪" : "未就绪") + "</span>";
         if (ready && j2.width) {
           chips += "<span class='chip'><strong>分辨率</strong>" + esc(String(j2.width)) + "×" + esc(String(j2.height)) + "</span>";
         }
+        st.innerHTML = chips;
       } catch (e) {
-        chips += "<span class='chip warn'><strong>摄像头</strong>异常</span>";
+        st.innerHTML = "<span class='chip warn'><strong>摄像头</strong>异常</span>";
       }
-      st.innerHTML = chips || "<span class='chip warn'>无状态</span>";
     }
 
     function stopCameraStream() {
@@ -286,7 +477,7 @@
         camFailCount += 1;
         if (camHint && camStreamOn) {
           camHint.textContent = camFailCount >= 3
-            ? "预览暂时不可用（摄像头忙），稍后重试…"
+            ? "预览暂时不可用（摄像头忙或配网中），稍后重试…"
             : "正在等待摄像头帧…";
         }
       } finally {
@@ -321,6 +512,144 @@
       startCameraStream();
     }
 
+    async function doScan() {
+      prepareWifiProvisioning();
+      await delayMs(100);
+      var s = document.getElementById("s");
+      var list = document.getElementById("u");
+      showLog("wo", "", false);
+      setBusy(true);
+      s.textContent = "正在扫描…";
+      list.innerHTML = "";
+      list.classList.remove("hidden");
+      try {
+        await fetch("/api/wifi/scan", { method: "POST" });
+        for (var i = 0; i < 40; i++) {
+          var r = await fetch("/api/wifi/scan_result");
+          var j = await r.json();
+          if (j.pending) {
+            await new Promise(function (x) { setTimeout(x, 250); });
+            continue;
+          }
+          s.textContent = j.aps && j.aps.length
+            ? "找到 " + j.aps.length + " 个网络，点击一行填入 SSID"
+            : "未发现网络";
+          (j.aps || []).forEach(function (a) {
+            var row = document.createElement("div");
+            row.className = "ap-item";
+            row.setAttribute("role", "button");
+            var nm = document.createElement("span");
+            nm.className = "ap-name";
+            nm.textContent = String(a.ssid);
+            var meta = document.createElement("span");
+            meta.className = "ap-meta";
+            var sig = document.createElement("span");
+            sig.className = "sig";
+            var sigi = document.createElement("i");
+            sigi.style.width = rssiPct(a.rssi) + "%";
+            sig.appendChild(sigi);
+            meta.appendChild(sig);
+            meta.appendChild(document.createTextNode(" ch" + a.ch + " " + a.rssi + " dBm"));
+            row.appendChild(nm);
+            row.appendChild(meta);
+            row.onclick = function () {
+              document.getElementById("ssid").value = a.ssid;
+              row.style.outline = "2px solid var(--accent)";
+              setTimeout(function () { row.style.outline = ""; }, 400);
+            };
+            list.appendChild(row);
+          });
+          break;
+        }
+      } catch (e) {
+        showLog("wo", String(e), true);
+        s.textContent = "";
+      } finally {
+        setBusy(false);
+        resumeBackgroundPoll();
+      }
+    }
+
+    async function doSave() {
+      var ssid = document.getElementById("ssid").value.trim();
+      if (!ssid) {
+        showLog("wo", "请先填写 SSID", true);
+        return;
+      }
+      prepareWifiProvisioning();
+      await delayMs(150);
+      showLog("wo", "正在保存到 NVS…", true);
+      setBusy(true);
+      var rebooting = false;
+      try {
+        var body = JSON.stringify({
+          ssid: ssid,
+          password: document.getElementById("pw").value
+        });
+        var r = await fetchWithTimeout("/api/wifi/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: body
+        }, 20000);
+        var text = await r.text();
+        try {
+          var j = JSON.parse(text);
+          if (j.ok && j.reboot) {
+            rebooting = true;
+            showLog("wo", "已保存 SSID「" + ssid + "」，设备约 0.5 秒后重启…", true);
+            return;
+          }
+          if (j.error) {
+            showLog("wo", "保存失败: " + j.error + " (HTTP " + r.status + ")", true);
+            return;
+          }
+        } catch (parseErr) {
+          /* fall through */
+        }
+        showLog("wo", r.status + " " + text, true);
+      } catch (e) {
+        var msg = String(e);
+        if (e && e.name === "AbortError") {
+          msg = "请求超时：请确认已关闭网页预览并重试";
+        }
+        showLog("wo", msg, true);
+      } finally {
+        setBusy(false);
+        if (!rebooting) {
+          resumeBackgroundPoll();
+        }
+      }
+    }
+
+    function openDisconnectModal() {
+      document.getElementById("modal-disconnect").classList.add("on");
+    }
+
+    function closeDisconnectModal() {
+      document.getElementById("modal-disconnect").classList.remove("on");
+    }
+
+    async function confirmStaDisconnect() {
+      closeDisconnectModal();
+      prepareWifiProvisioning();
+      await delayMs(150);
+      showLog("wo", "正在断开并重启…", true);
+      setBusy(true);
+      try {
+        var r = await fetchWithTimeout("/api/wifi/sta_disconnect", { method: "POST" }, 20000);
+        showLog("wo", await r.text(), true);
+      } catch (e) {
+        var msg = String(e);
+        if (e && e.name === "AbortError") {
+          msg = "请求超时：请确认已关闭网页预览并重试";
+        }
+        showLog("wo", msg, true);
+      } finally {
+        setBusy(false);
+        resumeBackgroundPoll();
+      }
+    }
+
     function captureFileName() {
       var d = new Date();
       function p2(n) { return String(n).padStart(2, "0"); }
@@ -329,7 +658,7 @@
     }
 
     async function doCapture() {
-      showLog("拍照中…", true);
+      showLog("out", "拍照中…", true);
       setBusy(true);
       try {
         var r = await fetch("/api/camera/camera.jpg?t=" + Date.now());
@@ -349,26 +678,28 @@
         a.click();
         document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
-        showLog("已保存 " + name + "（" + blob.size + " 字节）", true);
+        showLog("out", "已保存 " + name + "（" + blob.size + " 字节）", true);
       } catch (e) {
-        showLog("拍照失败: " + String(e), true);
+        showLog("out", "拍照失败: " + String(e), true);
       } finally {
         setBusy(false);
       }
     }
 
-    async function refreshAll() {
-      setBusy(true);
-      try {
-        await refreshStatus();
-      } finally {
-        setBusy(false);
-      }
-    }
+    document.getElementById("modal-disconnect").addEventListener("click", function (ev) {
+      if (ev.target.id === "modal-disconnect") closeDisconnectModal();
+    });
 
-    refreshStatus();
+    document.getElementById("card-wifi").addEventListener("focusin", function (ev) {
+      if (ev.target && (ev.target.id === "ssid" || ev.target.id === "pw")) {
+        prepareWifiProvisioning();
+      }
+    });
+
+    refreshWifiStatus();
+    refreshCameraStatus();
     startCameraStream();
-    setInterval(refreshStatus, 5000);
+    resumeBackgroundPoll();
   </script>
 </body>
 </html>

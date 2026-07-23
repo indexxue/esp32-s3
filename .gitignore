@@ -49,3 +49,10 @@ keys/prod/
 # Python cache
 __pycache__/
 *.pyc
+
+# SoftAP steel-ball annotate: captured frames / labels (keep classes.txt + data.yaml)
+camera/tools/steel_ball_annotate/dataset/images/*
+!camera/tools/steel_ball_annotate/dataset/images/.gitkeep
+camera/tools/steel_ball_annotate/dataset/labels/*
+!camera/tools/steel_ball_annotate/dataset/labels/.gitkeep
+camera/tools/steel_ball_annotate/config.json

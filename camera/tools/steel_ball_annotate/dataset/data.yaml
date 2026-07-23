@@ -1,0 +1,18 @@
+# Ultralytics-style dataset config (edit path after copy/move if needed).
+# Coordinate: origin top-left; labels are YOLO normalized cls cx cy w h.
+path: .
+train: images
+val: images
+
+nc: 10
+names:
+  0: cls0
+  1: cls1
+  2: cls2
+  3: cls3
+  4: cls4
+  5: cls5
+  6: cls6
+  7: cls7
+  8: cls8
+  9: cls9

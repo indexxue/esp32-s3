@@ -1,6 +1,6 @@
 /**
  * @file camera_ui.h
- * @brief ST7789 240×135 状态栏与检测框叠加 UI。
+ * @brief ST7789 240×135 状态栏与预览区叠加 UI。
  */
 
 #pragma once
@@ -11,9 +11,6 @@
 
 /** 顶部状态栏高度（像素）。预览 blit 跳过该条带。 */
 #define CAMERA_UI_IP_BAND_H (14U)
-
-/** 推理检测刷新间隔（ms）。 */
-#define CAMERA_UI_DETECT_REFRESH_MS (200U)
 
 status_t camera_ui_init(st7789_t *lcd);
 void camera_ui_draw_idle(st7789_t *lcd);

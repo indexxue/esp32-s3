@@ -343,6 +343,7 @@ JSON 示例（与串口字段对齐，便于后续 SPI 复用语义）：
 
 ### Phase 4 — PC 数据与模型替换（并行，周期视采数）
 
+- [x] SoftAP 采数标注入口：`camera/tools/steel_ball_annotate/`（`annotate_app.py`；YOLO 标签 + `classes.txt`）
 - [ ] PC 数据集 + 10 类训练/导出
 - [ ] 替换 `camera_model` 模型文件与类别
 - [ ] 回归：坐标、粗跟、人读输出、**图传客户端叠框**

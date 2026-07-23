@@ -1,6 +1,7 @@
 camera — ESP32-S3 camera preview device (OTA via web)
 
-Peripherals: ST7789 240x135, OV2640 camera (LCD preview only, no SD card, no web streaming).
+Peripherals: ST7789 240x135, OV2640 camera (LCD + SoftAP/STA web preview/capture + Wi-Fi provision).
+Note: on-device detect model is not linked in this build (preview-only); see plan Phase 4.
 
 Build:
   powershell -ExecutionPolicy Bypass -File .\scripts\build_camera.ps1
@@ -12,6 +13,11 @@ Clean rebuild:
 
 Flash & monitor:
   idf -Project camera -p PORT flash monitor
+
+Web (after join SoftAP ESP32-WebCtrl / esp32web1):
+  http://192.168.4.1/            camera preview + Wi-Fi provision UI
+  http://192.168.4.1/provision   redirects to /
+  http://192.168.4.1/ota         OTA upload
 
 Pins: see common/inc/board.h #if defined(BOARD_PROFILE_CAMERA) section.
   - Single I2C GPIO4/5: OV2640 SCCB

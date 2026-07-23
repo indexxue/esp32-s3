@@ -30,7 +30,7 @@ static volatile uint16_t s_preview_frame_h;
 
 #define CAMERA_SENSOR_PREVIEW_TASK_STACK (8192U)
 #define CAMERA_SENSOR_PREVIEW_TASK_PRIO (5U)
-
+#define CAMERA_SENSOR_LCD_LOCK_MS (200U)
 
 static uint8_t *s_snapshot_buf;
 static uint8_t *s_snapshot_copy;
@@ -45,6 +45,11 @@ static uint32_t s_blit_strip_cap;
 static volatile uint8_t s_flip_vertical   = (uint8_t)CAMERA_SENSOR_FLIP_VERTICAL;
 static volatile uint8_t s_flip_horizontal = (uint8_t)CAMERA_SENSOR_FLIP_HORIZONTAL;
 static volatile u16_t   s_rotate_deg        = 0U;
+static volatile uint8_t s_jpeg_busy        = 0U;
+static TickType_t       s_last_snapshot_tick;
+static TickType_t       s_last_lcd_blit_tick;
+static volatile uint32_t s_frame_count;
+static volatile uint32_t s_lcd_blit_count;
 
 static void *camera_sensor_buf_alloc(uint32_t size)
 {
@@ -418,7 +423,7 @@ static void camera_sensor_blit_rgb565(st7789_t *lcd, const uint8_t *rgb565, uint
     /* rgb565 已为 FLIP 宏归一化后的显示坐标：row 0 = 画面顶部。 */
     crop_y = (uint16_t)((cam_h - view_h) / 2U);
 
-    if (!camera_ui_lcd_lock(80U)) {
+    if (!camera_ui_lcd_lock(CAMERA_SENSOR_LCD_LOCK_MS)) {
         return;
     }
 
@@ -460,6 +465,7 @@ static void camera_sensor_on_frame(void *user_ctx, const uint8_t *rgb565, uint16
     s_preview_frame   = rgb565;
     s_preview_frame_w = width;
     s_preview_frame_h = height;
+    s_frame_count++;
 
     if (s_preview_task != NULL) {
         (void)vTaskNotifyGiveFromISR(s_preview_task, &wake);
@@ -470,18 +476,56 @@ static void camera_sensor_on_frame(void *user_ctx, const uint8_t *rgb565, uint16
 static void camera_sensor_preview_task(void *arg)
 {
     st7789_t *lcd = (st7789_t *)arg;
+    const TickType_t snap_min = pdMS_TO_TICKS(CAMERA_SENSOR_SNAPSHOT_MIN_INTERVAL_MS);
+    const TickType_t lcd_min  = pdMS_TO_TICKS(CAMERA_SENSOR_LCD_MIN_INTERVAL_MS);
 
     for (;;) {
+        TickType_t now;
+        TickType_t since_snap;
+        TickType_t since_lcd;
+        bool_t     do_snap;
+        bool_t     do_lcd;
+
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         if (s_preview_frame == NULL) {
             continue;
         }
 
-        camera_sensor_build_snapshot((const uint8_t *)s_preview_frame, s_preview_frame_w, s_preview_frame_h);
+        now = xTaskGetTickCount();
+        since_snap = now - s_last_snapshot_tick;
+        since_lcd  = now - s_last_lcd_blit_tick;
+        do_snap = ((s_last_snapshot_tick == 0U) || (since_snap >= snap_min)) ? TRUE : FALSE;
+        do_lcd  = ((s_last_lcd_blit_tick == 0U) || (since_lcd >= lcd_min)) ? TRUE : FALSE;
 
-        if ((lcd != NULL) && st7789_is_initialized(lcd) && (s_snapshot_buf != NULL)) {
+        /* JPEG 编码期间跳过本轮 LCD blit，避免 SPI 与编码叠加重导致锁超时丢帧。 */
+        if (s_jpeg_busy != 0U) {
+            do_lcd = FALSE;
+        }
+
+        if ((do_snap == FALSE) && (do_lcd == FALSE)) {
+            continue;
+        }
+
+        if (do_snap != FALSE) {
+            camera_sensor_build_snapshot((const uint8_t *)s_preview_frame,
+                                        s_preview_frame_w,
+                                        s_preview_frame_h);
+            s_last_snapshot_tick = xTaskGetTickCount();
+        }
+
+        if ((do_lcd != FALSE) && (lcd != NULL) && st7789_is_initialized(lcd) && (s_snapshot_buf != NULL) &&
+            (s_snapshot_w > 0U) && (s_snapshot_h > 0U)) {
             camera_sensor_blit_rgb565(lcd, s_snapshot_buf, s_snapshot_w, s_snapshot_h);
+            s_last_lcd_blit_tick = xTaskGetTickCount();
+            s_lcd_blit_count++;
+            if ((s_lcd_blit_count == 1U) || ((s_lcd_blit_count % 50U) == 0U)) {
+                LOG_INFO("cam preview frames=%u lcd_blit=%u %ux%u",
+                         (unsigned)s_frame_count,
+                         (unsigned)s_lcd_blit_count,
+                         (unsigned)s_snapshot_w,
+                         (unsigned)s_snapshot_h);
+            }
         }
     }
 }
@@ -558,6 +602,8 @@ bool_t camera_sensor_is_ready(void)
 status_t camera_sensor_preview_start(void)
 {
     st7789_t *lcd = BoardSt7789();
+    TickType_t start;
+    TickType_t budget;
 
     if (!camera_sensor_is_ready()) {
         return STATUS_FAIL;
@@ -577,7 +623,25 @@ status_t camera_sensor_preview_start(void)
         LOG_WARN("ov2640_set_frame_callback failed");
     }
 
-    return ov2640_start_stream(&s_ov2640) == OV2640_OK ? STATUS_OK : STATUS_FAIL;
+    s_frame_count    = 0U;
+    s_lcd_blit_count = 0U;
+
+    if (ov2640_start_stream(&s_ov2640) != OV2640_OK) {
+        return STATUS_FAIL;
+    }
+
+    /* 等首帧：确认 DVP 有 EOF；超时不判死，预览任务仍会继续等帧。 */
+    start  = xTaskGetTickCount();
+    budget = pdMS_TO_TICKS(2000U);
+    while ((xTaskGetTickCount() - start) < budget) {
+        if (s_frame_count > 0U) {
+            LOG_INFO("cam first frame ok frames=%u", (unsigned)s_frame_count);
+            return STATUS_OK;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    LOG_WARN("cam first frame timeout (no DVP EOF in 2s); keep waiting");
+    return STATUS_OK;
 }
 
 status_t camera_sensor_preview_stop(void)
@@ -657,12 +721,14 @@ status_t camera_sensor_snapshot_jpeg(uint8_t *out, uint32_t out_cap, uint32_t *o
         return STATUS_FAIL;
     }
 
+    s_jpeg_busy = 1U;
     jerr = jpeg_enc_process(s_jpeg_enc,
                             s_snapshot_copy,
                             (int)frame_bytes,
                             out,
                             (int)out_cap,
                             &jpeg_size);
+    s_jpeg_busy = 0U;
     (void)xSemaphoreGive(s_jpeg_mutex);
 
     if ((jerr != JPEG_ERR_OK) || (jpeg_size <= 0)) {

@@ -1,18 +1,19 @@
 /**
  * @file start.c
- * @brief camera 平台壳层：log、NVS、板级、单键、Web/OTA、目标检测推理（可宏关闭）。
+ * @brief camera 平台壳层：log、NVS、板级、单键、Web/OTA、摄像头 LCD 预览。
  */
 
 #include "start.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "camera_ui.h"
 #include "camera_sensor.h"
-#include "camera_model.h"
 #include "web_pages.h"
 
 #include "type.h"
@@ -25,6 +26,12 @@
 #include "flexible_button.h"
 #include "led_scene.h"
 #include "ota.h"
+#include "net_wifi.h"
+
+/** WiFi 等待摄像头 detect/set_format/stream 完成的上限。 */
+#define CAMERA_WIFI_WAIT_MS (8000U)
+
+static SemaphoreHandle_t s_cam_boot_done;
 
 #if CONFIG_WEB_CTRL_AUTO_START
 #include "esp_err.h"
@@ -39,6 +46,14 @@ static void web_ctrl_boot_task(void *arg)
     web_ctrl_config_t wcfg;
 
     (void)arg;
+
+    /* 等摄像头 SCCB 写完再启 WiFi，避免 set_format 与射频并发。 */
+    if (s_cam_boot_done != NULL) {
+        if (xSemaphoreTake(s_cam_boot_done, pdMS_TO_TICKS(CAMERA_WIFI_WAIT_MS)) != pdTRUE) {
+            LOG_WARN("camera boot wait timeout, start WiFi anyway");
+        }
+    }
+
     web_ctrl_config_init_defaults(&wcfg);
     web_ctrl_config_merge_nvs(&wcfg);
     wcfg.root_get_handler = web_pages_root_get_handler;
@@ -63,11 +78,9 @@ static void web_ctrl_boot_task(void *arg)
 #define BTN_SCAN_TASK_STACK_WORDS (3072U)
 #define BTN_SCAN_TASK_PRIORITY (5U)
 
-#define CAMERA_MODULES_TASK_STACK_WORDS (16384U)
+#define CAMERA_MODULES_TASK_STACK_WORDS (4096U)
 #define CAMERA_MODULES_TASK_PRIORITY (4U)
-
-/** 检测框 LCD 绘制 buffer（每框 5 个 uint16: x, y, w, h, color_565）。 */
-#define CAMERA_DETECT_DRAW_BUF_SIZE (CAMERA_MODEL_MAX_BOXES * 5U)
+#define CAMERA_STATUS_REFRESH_MS (1000U)
 
 static void app_idle_default(void)
 {
@@ -142,23 +155,25 @@ static void button_scan_task(void *arg)
 static void camera_modules_task(void *arg)
 {
     st7789_t *lcd = BoardSt7789();
-    uint32_t frame_id = 0U;
-    uint16_t draw_buf[CAMERA_DETECT_DRAW_BUF_SIZE];
+    char      ipbuf[20];
+    char      line[48];
+    char      last_line[48];
 
     (void)arg;
+    last_line[0] = '\0';
 
-    /* ---- LCD UI ---- */
     if (st7789_is_initialized(lcd)) {
         (void)camera_ui_init(lcd);
     }
 
-    /* ---- 摄像头 ---- */
     if (camera_sensor_init() == STATUS_OK) {
         if (camera_sensor_preview_start() != STATUS_OK) {
             LOG_WARN("camera sensor preview start failed");
             if (st7789_is_initialized(lcd)) {
                 camera_ui_set_status_line(lcd, "cam: preview fail");
             }
+        } else if (st7789_is_initialized(lcd)) {
+            camera_ui_set_status_line(lcd, "cam: preview");
         }
     } else {
         if (st7789_is_initialized(lcd)) {
@@ -167,82 +182,25 @@ static void camera_modules_task(void *arg)
         LOG_WARN("camera_sensor_init failed");
     }
 
-    /* ---- 模型（CMakeLists.txt CAMERA_MODEL_ENABLE=1 恢复推理） ---- */
-#ifdef CAMERA_MODEL_SKIP
-    const bool model_ready = false;
-    LOG_INFO("model disabled (CAMERA_MODEL_ENABLE=0)");
-    if (st7789_is_initialized(lcd)) {
-        camera_ui_set_status_line(lcd, "model: off");
+    if (s_cam_boot_done != NULL) {
+        (void)xSemaphoreGive(s_cam_boot_done);
     }
-#else
-    bool model_ready = (camera_model_init() == STATUS_OK);
-    if (model_ready) {
-        LOG_INFO("model ready");
-        if (st7789_is_initialized(lcd)) {
-            camera_ui_set_status_line(lcd, "model: ready");
-        }
-    } else {
-        LOG_WARN("camera_model_init failed");
-        if (st7789_is_initialized(lcd)) {
-            camera_ui_set_status_line(lcd, "model: no file");
-        }
-    }
-#endif
 
-    /* ---- 主循环：预览 + 检测 ---- */
+    /* 轻量状态刷新：顶栏显示 IP，不抢 LCD 预览主路径。 */
     for (;;) {
-        const uint8_t *snap = camera_sensor_get_snapshot();
-        if (snap == NULL) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        if (model_ready) {
-            const camera_detection_result_t *res =
-                camera_model_detect(snap, CAMERA_MODEL_CAM_W, CAMERA_MODEL_CAM_H, frame_id);
-            if (res != NULL && res->count > 0) {
-                /* 填入 draw_buf 并送 LCD */
-                uint8_t n = res->count;
-                if (n > CAMERA_MODEL_MAX_BOXES) n = CAMERA_MODEL_MAX_BOXES;
-                for (uint8_t i = 0; i < n; i++) {
-                    const camera_detection_t *d = &res->boxes[i];
-                    uint16_t color = (d->confidence >= 0.70f) ? 0x07E0   /* 绿 */
-                                   : (d->confidence >= 0.50f) ? 0xFFE0   /* 黄 */
-                                   : 0xF800;                             /* 红 */
-                    uint16_t *p = &draw_buf[i * 5U];
-                    p[0] = d->x;
-                    p[1] = d->y;
-                    p[2] = d->w;
-                    p[3] = d->h;
-                    p[4] = color;
-                }
-                if (st7789_is_initialized(lcd)) {
-                    camera_ui_draw_detection_boxes(lcd, draw_buf, n,
-                                                   CAMERA_MODEL_CAM_W, CAMERA_MODEL_CAM_H);
-                }
-
-                /* 串口输出 */
-                printf("[DETECT] frame=%lu boxes=%u time=%lums\n",
-                       (unsigned long)res->frame_id, res->count,
-                       (unsigned long)res->elapsed_ms);
-                for (uint8_t i = 0; i < n; i++) {
-                    const camera_detection_t *d = &res->boxes[i];
-                    printf("  #%u: cls=%u conf=%.2f xywh=(%u,%u,%u,%u)\n",
-                           i, d->class_id, (double)d->confidence,
-                           d->x, d->y, d->w, d->h);
-                }
-
-                char buf[32];
-                snprintf(buf, sizeof(buf), "det:%u %lums", res->count,
-                         (unsigned long)res->elapsed_ms);
-                if (st7789_is_initialized(lcd)) {
-                    camera_ui_set_status_line(lcd, buf);
-                }
+        if (st7789_is_initialized(lcd) && (camera_sensor_is_ready() != FALSE)) {
+            if (!net_wifi_format_ipv4_for_display(ipbuf, sizeof(ipbuf))) {
+                (void)strncpy(ipbuf, "---", sizeof(ipbuf) - 1U);
+                ipbuf[sizeof(ipbuf) - 1U] = '\0';
             }
-            frame_id++;
+            (void)snprintf(line, sizeof(line), "%s", ipbuf);
+            if (strncmp(line, last_line, sizeof(line)) != 0) {
+                camera_ui_set_status_line(lcd, line);
+                (void)strncpy(last_line, line, sizeof(last_line) - 1U);
+                last_line[sizeof(last_line) - 1U] = '\0';
+            }
         }
-
-        vTaskDelay(pdMS_TO_TICKS(CAMERA_UI_DETECT_REFRESH_MS));
+        vTaskDelay(pdMS_TO_TICKS(CAMERA_STATUS_REFRESH_MS));
     }
 }
 
@@ -266,6 +224,22 @@ static status_t app_init_platform(void)
     if (BoardInit() != STATUS_OK) {
         LOG_ERROR("BoardInit failed");
         return STATUS_FAIL;
+    }
+
+    /*
+     * 摄像头 SCCB 长寄存器表写入对总线抖动敏感。
+     * 先拉起 camera 任务；WiFi 等 cam 给出 boot_done 后再启。
+     */
+    s_cam_boot_done = xSemaphoreCreateBinary();
+    if (s_cam_boot_done == NULL) {
+        LOG_WARN("cam boot semaphore create failed");
+    }
+
+    if (camera_start_modules_task() != STATUS_OK) {
+        LOG_WARN("camera_start_modules_task failed");
+        if (s_cam_boot_done != NULL) {
+            (void)xSemaphoreGive(s_cam_boot_done);
+        }
     }
 
 #if CONFIG_WEB_CTRL_AUTO_START
@@ -342,10 +316,6 @@ static status_t app_init(void)
 
 static void app_run(void)
 {
-    if (camera_start_modules_task() != STATUS_OK) {
-        LOG_ERROR("camera_start_modules_task failed");
-    }
-
     app_idle_default();
 }
 
