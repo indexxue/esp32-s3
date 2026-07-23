@@ -83,6 +83,7 @@ static const char *const TAG = "nvs";
 #define NVS_KEY_RUN_TIME "rtime"
 #define NVS_KEY_WEB_CTRL "web_ctrl"
 #define NVS_KEY_LCD_GAL_BOOT "lcd_gal_boot"
+#define NVS_KEY_CAMERA_CFG "cam_cfg"
 
 static const uint8_t s_default_mac[NVS_MAC_SIZE] = NVS_DEFAULT_MAC;
 
@@ -993,4 +994,83 @@ bool nvs_web_ctrl_settings_delete(void)
     }
     st = blob_del(NVS_KEY_WEB_CTRL);
     return (st == NVS_OK) || (st == NVS_ERR_NOT_FOUND);
+}
+
+void nvs_camera_settings_default(nvs_camera_settings_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    (void)memset(out, 0, sizeof(*out));
+    out->magic        = NVS_CAMERA_SETTINGS_MAGIC;
+    out->web_width    = 320U;
+    out->web_height   = 240U;
+    out->quality      = 55U;
+    out->grayscale    = 0U;
+    out->zoom         = 1U;
+    out->img_rotate   = 0U; /* 0° */
+    out->flip_v       = 1U;
+    out->flip_h       = 0U;
+}
+
+bool nvs_camera_settings_validate(const nvs_camera_settings_t *cfg)
+{
+    if (cfg == NULL) {
+        return false;
+    }
+    if (cfg->magic != NVS_CAMERA_SETTINGS_MAGIC) {
+        return false;
+    }
+    if (!(((cfg->web_width == 240U) && (cfg->web_height == 240U)) ||
+          ((cfg->web_width == 320U) && (cfg->web_height == 240U)) ||
+          ((cfg->web_width == 640U) && (cfg->web_height == 480U)))) {
+        return false;
+    }
+    if ((cfg->quality < 10U) || (cfg->quality > 95U)) {
+        return false;
+    }
+    if (cfg->grayscale > 1U) {
+        return false;
+    }
+    if ((cfg->zoom < 1U) || (cfg->zoom > 4U)) {
+        return false;
+    }
+    if (cfg->img_rotate > 3U) {
+        return false;
+    }
+    if ((cfg->flip_v > 1U) || (cfg->flip_h > 1U)) {
+        return false;
+    }
+    return true;
+}
+
+_Static_assert(sizeof(nvs_camera_settings_t) <= NVS_KEY_VALUE_MAX, "camera settings blob must fit NVS_KEY_VALUE_MAX");
+
+bool nvs_camera_settings_get(nvs_camera_settings_t *out)
+{
+    nvs_camera_settings_t tmp;
+    size_t                len = sizeof(tmp);
+
+    if (out == NULL) {
+        return false;
+    }
+    if (blob_get(NVS_KEY_CAMERA_CFG, &tmp, &len) != NVS_OK) {
+        return false;
+    }
+    if (len != sizeof(tmp) || !nvs_camera_settings_validate(&tmp)) {
+        return false;
+    }
+    *out = tmp;
+    return true;
+}
+
+bool nvs_camera_settings_set(const nvs_camera_settings_t *cfg)
+{
+    if (!s_ready || (cfg == NULL)) {
+        return false;
+    }
+    if (!nvs_camera_settings_validate(cfg)) {
+        return false;
+    }
+    return (blob_set(NVS_KEY_CAMERA_CFG, cfg, sizeof(*cfg)) == NVS_OK);
 }

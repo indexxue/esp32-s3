@@ -210,13 +210,28 @@
     }
     #camView {
       display: block;
-      width: min(100%, 320px);
+      width: min(100%, 480px);
       height: auto;
-      image-rendering: pixelated;
+      image-rendering: auto;
       background: #000;
       border-radius: 4px;
     }
     .cam-meta { font-size: 0.8rem; color: var(--muted); text-align: center; }
+    .cam-ctrl {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 16px;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      max-width: 480px;
+    }
+    .cam-ctrl label { font-size: 0.85rem; color: var(--muted); }
+    .cam-ctrl select, .cam-ctrl input[type="range"] {
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .cam-ctrl .qval { font-variant-numeric: tabular-nums; min-width: 1.8em; display: inline-block; }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -264,8 +279,9 @@
       <div class="card-h">
         <h2>摄像头</h2>
         <div class="row">
-          <button type="button" class="btn btn-ghost busy" id="btn-refresh" onclick="refreshCameraStatus()">刷新状态</button>
+          <button type="button" class="btn btn-ghost busy" id="btn-refresh" onclick="refreshCameraStatus(true)">刷新状态</button>
           <button type="button" class="btn btn-ghost busy" id="btn-cam-stream" onclick="toggleCameraStream()">关闭预览</button>
+          <button type="button" class="btn btn-primary busy" id="btn-cam-save" onclick="saveCamConfig()">保存配置</button>
           <button type="button" class="btn btn-primary busy" id="btn-capture" onclick="doCapture()">拍照保存</button>
         </div>
       </div>
@@ -274,10 +290,41 @@
         <div class="cam-panel">
           <p class="cam-meta" id="camHint">正在连接摄像头…</p>
           <div class="cam-wrap" id="camWrap">
-            <img id="camView" alt="camera preview" width="240" height="240" />
+            <img id="camView" alt="camera preview" width="320" height="240" />
+          </div>
+          <div class="cam-ctrl">
+            <label>分辨率
+              <select id="camSize" class="busy" onchange="previewCamConfig()">
+                <option value="240x240">240×240（更流畅）</option>
+                <option value="320x240" selected>320×240</option>
+                <option value="640x480">640×480（更清晰）</option>
+              </select>
+            </label>
+            <label>画质 <span class="qval" id="camQVal">55</span>
+              <input type="range" id="camQuality" class="busy" min="20" max="85" step="5" value="55" oninput="onCamQualityInput()" onchange="previewCamConfig()" />
+            </label>
+            <label>变焦
+              <select id="camZoom" class="busy" onchange="previewCamConfig()">
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+                <option value="3">3×</option>
+                <option value="4">4×</option>
+              </select>
+            </label>
+            <label>图像旋转
+              <select id="camRotate" class="busy" onchange="previewCamConfig()">
+                <option value="0" selected>0°</option>
+                <option value="1">90°</option>
+                <option value="2">180°</option>
+                <option value="3">270°</option>
+              </select>
+            </label>
+            <label><input type="checkbox" id="camGray" class="busy" onchange="previewCamConfig()" /> 黑白灰</label>
+            <label><input type="checkbox" id="camFlipV" class="busy" checked onchange="previewCamConfig()" /> 上下翻转</label>
+            <label><input type="checkbox" id="camFlipH" class="busy" onchange="previewCamConfig()" /> 左右镜像</label>
           </div>
         </div>
-        <p class="hint">「拍照保存」会抓取当前帧 JPEG 并下载到电脑。网页预览为串行 JPEG 刷新（约 4–5 fps）。</p>
+        <p class="hint">调整参数会立即写入 NVS；也可点「保存配置」（会先停预览再写，更稳）。旋转只改摄像头画面。拍照前会短暂停流。</p>
         <pre class="log" id="out" hidden></pre>
       </div>
     </section>
@@ -296,12 +343,201 @@
 
   <script>
     let camStreamOn = false;
-    let camPollTimer = null;
-    let camLoadBusy = false;
     let camBlobUrl = null;
-    let camFailCount = 0;
     let statusTimer = null;
-    var CAM_POLL_MS = 200;
+    var camCfgBusy = false;
+    var camCfgDirty = false;
+    var CAM_STREAM_URL = "/api/camera/stream.mjpg";
+
+    function onCamQualityInput() {
+      var q = document.getElementById("camQuality");
+      var v = document.getElementById("camQVal");
+      if (q && v) {
+        v.textContent = String(q.value);
+      }
+    }
+
+    function collectCamConfigBody(persist) {
+      var sizeEl = document.getElementById("camSize");
+      var qEl = document.getElementById("camQuality");
+      var zoomEl = document.getElementById("camZoom");
+      var rotEl = document.getElementById("camRotate");
+      var grayEl = document.getElementById("camGray");
+      var fvEl = document.getElementById("camFlipV");
+      var fhEl = document.getElementById("camFlipH");
+      if (!sizeEl || !qEl) {
+        return null;
+      }
+      return {
+        size: sizeEl.value,
+        quality: parseInt(qEl.value, 10),
+        zoom: zoomEl ? parseInt(zoomEl.value, 10) : 1,
+        rotate: rotEl ? parseInt(rotEl.value, 10) : 0,
+        grayscale: grayEl && grayEl.checked ? 1 : 0,
+        flip_v: fvEl && fvEl.checked ? 1 : 0,
+        flip_h: fhEl && fhEl.checked ? 1 : 0,
+        persist: persist ? 1 : 0
+      };
+    }
+
+    /** 调整即写入 NVS（并即时预览）。保存按钮会停流后再写一次，更稳。 */
+    async function previewCamConfig() {
+      return applyCamConfig(true, false);
+    }
+
+    /** 停流后写入 NVS，避免与 MJPEG 抢连接导致保存丢失。 */
+    async function saveCamConfig() {
+      var wasStreaming = camStreamOn;
+      if (wasStreaming) {
+        stopCameraStream();
+        await delayMs(250);
+      }
+      var ok = await applyCamConfig(true, true);
+      if (wasStreaming) {
+        await delayMs(100);
+        startCameraStream();
+      }
+      return ok;
+    }
+
+    async function waitCamCfgIdle(ms) {
+      var t0 = Date.now();
+      while (camCfgBusy && (Date.now() - t0) < ms) {
+        await delayMs(50);
+      }
+      return !camCfgBusy;
+    }
+
+    async function applyCamConfig(persist, withFeedback) {
+      var body;
+      if (!(await waitCamCfgIdle(3000))) {
+        if (withFeedback) {
+          showLog("out", "保存失败: 设备忙，请稍后再试", true);
+        }
+        return false;
+      }
+      body = collectCamConfigBody(persist);
+      if (!body) {
+        return false;
+      }
+      camCfgBusy = true;
+      camCfgDirty = true;
+      onCamQualityInput();
+      if (withFeedback) {
+        showLog("out", "正在保存摄像头配置到 NVS…", true);
+        setBusy(true);
+      }
+      try {
+        var r = await fetchWithTimeout("/api/camera/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        }, 10000);
+        var text = await r.text();
+        var j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (parseErr) {
+          j = null;
+        }
+        if (j && j.ok && (j.saved === true || j.saved === undefined)) {
+          /* saved===undefined：兼容旧固件；新固件必须 saved:true 才算落盘。 */
+          if (persist && j.saved === false) {
+            if (withFeedback) {
+              showLog("out", "已预览但未写入 NVS，请再点「保存配置」", true);
+            }
+            return false;
+          }
+          camCfgDirty = false;
+          syncCamControlsFromStatus(j);
+          if (withFeedback) {
+            showLog("out",
+              "已保存到 NVS：旋转 " + ((j.rotate || 0) * 90) + "° / 变焦 " + (j.zoom || 1) + "× / " +
+              (j.cfg_width || j.width) + "×" + (j.cfg_height || j.height) + " q=" + j.quality +
+              "（重启后保留）",
+              true);
+          }
+          return true;
+        }
+        if (withFeedback) {
+          showLog("out", "保存失败: " + ((j && j.error) ? j.error : ("HTTP " + r.status + " " + text)), true);
+        }
+        return false;
+      } catch (e) {
+        if (withFeedback) {
+          var msg = String(e);
+          if (e && e.name === "AbortError") {
+            msg = "请求超时：请关闭预览后重试「保存配置」";
+          }
+          showLog("out", "保存失败: " + msg, true);
+        }
+        return false;
+      } finally {
+        camCfgBusy = false;
+        if (withFeedback) {
+          setBusy(false);
+        }
+      }
+    }
+
+    function setSelectValue(el, val) {
+      if (!el) return;
+      var s = String(val);
+      for (var i = 0; i < el.options.length; i++) {
+        if (el.options[i].value === s) {
+          el.selectedIndex = i;
+          return;
+        }
+      }
+    }
+
+    function syncCamControlsFromStatus(j2) {
+      var sizeEl = document.getElementById("camSize");
+      var qEl = document.getElementById("camQuality");
+      var zoomEl = document.getElementById("camZoom");
+      var rotEl = document.getElementById("camRotate");
+      var grayEl = document.getElementById("camGray");
+      var fvEl = document.getElementById("camFlipV");
+      var fhEl = document.getElementById("camFlipH");
+      if (j2.stream) {
+        CAM_STREAM_URL = String(j2.stream);
+      }
+      if (sizeEl && (j2.cfg_width || j2.width)) {
+        var key = (j2.cfg_width && j2.cfg_height)
+          ? (j2.cfg_width + "x" + j2.cfg_height)
+          : (j2.width + "x" + j2.height);
+        for (var i = 0; i < sizeEl.options.length; i++) {
+          if (sizeEl.options[i].value === key) {
+            sizeEl.selectedIndex = i;
+            break;
+          }
+        }
+      }
+      if (qEl && typeof j2.quality === "number") {
+        qEl.value = String(j2.quality);
+        onCamQualityInput();
+      }
+      if (typeof j2.zoom === "number") {
+        setSelectValue(zoomEl, j2.zoom);
+      }
+      if (typeof j2.rotate === "number") {
+        setSelectValue(rotEl, j2.rotate);
+      }
+      if (grayEl && typeof j2.grayscale === "number") {
+        grayEl.checked = j2.grayscale !== 0;
+      }
+      if (fvEl && typeof j2.flip_v === "number") {
+        fvEl.checked = j2.flip_v !== 0;
+      }
+      if (fhEl && typeof j2.flip_h === "number") {
+        fhEl.checked = j2.flip_h !== 0;
+      }
+      var view = document.getElementById("camView");
+      if (view && j2.width && j2.height) {
+        view.width = j2.width;
+        view.height = j2.height;
+      }
+    }
 
     function esc(t) {
       return String(t === undefined || t === null ? "" : t)
@@ -369,10 +605,11 @@
     }
 
     function prepareWifiProvisioning() {
+      /* 仅暂停网页拉流，不关板端摄像头；扫描/保存走完后可再开预览。 */
       stopCameraStream();
       pauseBackgroundPoll();
       var hint = document.getElementById("camHint");
-      if (hint) hint.textContent = "预览已暂停（配网中）";
+      if (hint) hint.textContent = "预览已暂停（配网中），完成后点「开启预览」";
     }
 
     async function refreshWifiStatus() {
@@ -394,16 +631,35 @@
       }
     }
 
-    async function refreshCameraStatus() {
+    async function refreshCameraStatus(forceSync) {
       var st = document.getElementById("cam-st");
       try {
         var r2 = await fetch("/api/camera/status");
         var j2 = await r2.json();
         var ready = j2.camera === true;
+        var hasFrame = ready && j2.width > 0 && (j2.frames > 0 || j2.lcd_blit > 0);
         var chips =
           "<span class='chip " + (ready ? "ok" : "warn") + "'><strong>摄像头</strong>" + (ready ? "就绪" : "未就绪") + "</span>";
         if (ready && j2.width) {
           chips += "<span class='chip'><strong>分辨率</strong>" + esc(String(j2.width)) + "×" + esc(String(j2.height)) + "</span>";
+        }
+        /* 用户改过但未点保存时，定时刷新不要覆盖控件；手动「刷新状态」可强制同步。 */
+        if ((forceSync || !camCfgDirty) && !camCfgBusy) {
+          syncCamControlsFromStatus(j2);
+          if (forceSync) {
+            camCfgDirty = false;
+          }
+        }
+        chips += "<span class='chip " + (hasFrame ? "ok" : "warn") + "'><strong>帧</strong>" +
+                 esc(String(j2.frames || 0)) + "</span>";
+        if (typeof j2.rotate === "number") {
+          chips += "<span class='chip'><strong>旋转</strong>" + esc(String(j2.rotate * 90)) + "°</span>";
+        }
+        if (camCfgDirty) {
+          chips += "<span class='chip warn'><strong>配置</strong>未保存</span>";
+        }
+        if (j2.paused) {
+          chips += "<span class='chip warn'><strong>状态</strong>已暂停</span>";
         }
         st.innerHTML = chips;
       } catch (e) {
@@ -414,13 +670,9 @@
     function stopCameraStream() {
       var camView = document.getElementById("camView");
       camStreamOn = false;
-      camLoadBusy = false;
-      camFailCount = 0;
-      if (camPollTimer) {
-        clearTimeout(camPollTimer);
-        camPollTimer = null;
-      }
       if (camView) {
+        camView.onload = null;
+        camView.onerror = null;
         if (camBlobUrl) {
           URL.revokeObjectURL(camBlobUrl);
           camBlobUrl = null;
@@ -431,66 +683,35 @@
       if (btn) btn.textContent = "开启预览";
     }
 
-    function scheduleCameraPoll(delayMs) {
-      if (!camStreamOn || camLoadBusy) {
-        return;
-      }
-      if (camPollTimer) {
-        clearTimeout(camPollTimer);
-      }
-      camPollTimer = setTimeout(function () {
-        camPollTimer = null;
-        tickCameraFrame();
-      }, delayMs != null ? delayMs : CAM_POLL_MS);
-    }
-
-    async function tickCameraFrame() {
+    function bindMjpegHandlers() {
       var camView = document.getElementById("camView");
       var camHint = document.getElementById("camHint");
-      if (!camStreamOn || !camView || camLoadBusy) {
+      if (!camView) {
         return;
       }
-      camLoadBusy = true;
-      try {
-        var r = await fetch("/api/camera/camera.jpg?t=" + Date.now());
+      camView.onload = function () {
+        if (camHint && camStreamOn) {
+          camHint.textContent = "预览中（MJPEG 流）";
+        }
+      };
+      camView.onerror = function () {
         if (!camStreamOn) {
           return;
         }
-        if (!r.ok) {
-          throw new Error("HTTP " + r.status);
-        }
-        var blob = await r.blob();
-        if (!camStreamOn || !blob || blob.size === 0) {
-          return;
-        }
-        var url = URL.createObjectURL(blob);
-        if (camBlobUrl) {
-          URL.revokeObjectURL(camBlobUrl);
-        }
-        camBlobUrl = url;
-        camView.src = url;
-        camFailCount = 0;
         if (camHint) {
-          camHint.textContent = "预览中（约 4–5 fps）";
+          camHint.textContent = "流中断，正在重连…";
         }
-      } catch (e) {
-        camFailCount += 1;
-        if (camHint && camStreamOn) {
-          camHint.textContent = camFailCount >= 3
-            ? "预览暂时不可用（摄像头忙或配网中），稍后重试…"
-            : "正在等待摄像头帧…";
-        }
-      } finally {
-        camLoadBusy = false;
-        if (camStreamOn) {
-          var backoff = camFailCount > 0 ? Math.min(CAM_POLL_MS * (1 + camFailCount), 1500) : CAM_POLL_MS;
-          scheduleCameraPoll(backoff);
-        }
-      }
+        setTimeout(function () {
+          if (camStreamOn && camView) {
+            camView.src = CAM_STREAM_URL + "?t=" + Date.now();
+          }
+        }, 800);
+      };
     }
 
     async function startCameraStream() {
       var btn = document.getElementById("btn-cam-stream");
+      var camView = document.getElementById("camView");
       try {
         await fetch("/api/camera/camera_resume", { method: "POST" });
       } catch (e) {
@@ -499,8 +720,11 @@
       camStreamOn = true;
       document.getElementById("camWrap").classList.remove("hidden");
       if (btn) btn.textContent = "关闭预览";
-      document.getElementById("camHint").textContent = "正在连接摄像头…";
-      scheduleCameraPoll(0);
+      document.getElementById("camHint").textContent = "正在连接摄像头流…";
+      bindMjpegHandlers();
+      if (camView) {
+        camView.src = CAM_STREAM_URL + "?t=" + Date.now();
+      }
     }
 
     function toggleCameraStream() {
@@ -658,12 +882,23 @@
     }
 
     async function doCapture() {
+      var wasStreaming = camStreamOn;
       showLog("out", "拍照中…", true);
       setBusy(true);
       try {
-        var r = await fetch("/api/camera/camera.jpg?t=" + Date.now());
+        if (wasStreaming) {
+          stopCameraStream();
+          await delayMs(250);
+        }
+        var r = await fetchWithTimeout("/api/camera/camera.jpg?t=" + Date.now(), null, 8000);
         if (!r.ok) {
-          throw new Error("HTTP " + r.status);
+          var errText = "";
+          try {
+            errText = await r.text();
+          } catch (ignore) {
+            errText = "";
+          }
+          throw new Error("HTTP " + r.status + (errText ? (" " + errText) : ""));
         }
         var blob = await r.blob();
         if (!blob || blob.size === 0) {
@@ -680,9 +915,16 @@
         setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
         showLog("out", "已保存 " + name + "（" + blob.size + " 字节）", true);
       } catch (e) {
-        showLog("out", "拍照失败: " + String(e), true);
+        var msg = String(e);
+        if (e && e.name === "AbortError") {
+          msg = "拍照超时：请关闭预览后重试";
+        }
+        showLog("out", "拍照失败: " + msg, true);
       } finally {
         setBusy(false);
+        if (wasStreaming) {
+          startCameraStream();
+        }
       }
     }
 
@@ -690,12 +932,7 @@
       if (ev.target.id === "modal-disconnect") closeDisconnectModal();
     });
 
-    document.getElementById("card-wifi").addEventListener("focusin", function (ev) {
-      if (ev.target && (ev.target.id === "ssid" || ev.target.id === "pw")) {
-        prepareWifiProvisioning();
-      }
-    });
-
+    /* 聚焦 SSID/密码时不再自动停预览，避免误触导致一直「忙」。 */
     refreshWifiStatus();
     refreshCameraStatus();
     startCameraStream();

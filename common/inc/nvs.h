@@ -171,6 +171,30 @@ bool nvs_web_ctrl_settings_delete(void);
 bool nvs_lcd_gallery_boot_name_set(const char *name);
 bool nvs_lcd_gallery_boot_name_get(char *out, size_t out_cap);
 
+/* -------------------------------------------------------------------------- */
+/* Camera 预览偏好（灰度 / 变焦 / 旋转等）                                     */
+/* -------------------------------------------------------------------------- */
+
+#define NVS_CAMERA_SETTINGS_MAGIC 0x43414D31u /* "CAM1" LE */
+
+typedef struct __attribute__((packed)) {
+    uint32_t magic;
+    uint16_t web_width;
+    uint16_t web_height;
+    uint8_t  quality;     /* 10–95 */
+    uint8_t  grayscale;   /* 0=彩色 1=灰度 */
+    uint8_t  zoom;        /* 1–4：1=整幅缩小，N=视野约 1/N */
+    uint8_t  img_rotate;  /* 0/1/2/3 → 0°/90°/180°/270° 图像旋转 */
+    uint8_t  flip_v;
+    uint8_t  flip_h;
+    uint8_t  reserved[6];
+} nvs_camera_settings_t;
+
+void nvs_camera_settings_default(nvs_camera_settings_t *out);
+bool nvs_camera_settings_validate(const nvs_camera_settings_t *cfg);
+bool nvs_camera_settings_get(nvs_camera_settings_t *out);
+bool nvs_camera_settings_set(const nvs_camera_settings_t *cfg);
+
 #ifdef __cplusplus
 }
 #endif

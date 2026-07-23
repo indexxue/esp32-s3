@@ -619,6 +619,38 @@ static bool net_wifi_peer_ipv4_on_netif_subnet(esp_netif_t *netif, uint32_t addr
     return ((peer_h & nm_h) == (if_h & nm_h));
 }
 
+/** RFC1918 私网 IPv4（STA 跨 VLAN/掩码边缘时仍可预览）。 */
+static bool net_wifi_ipv4_is_private(uint32_t addr_nbo)
+{
+    const uint32_t h = ntohl(addr_nbo);
+
+    if ((h & 0xff000000U) == 0x0a000000U) {
+        return true; /* 10.0.0.0/8 */
+    }
+    if ((h & 0xfff00000U) == 0xac100000U) {
+        return true; /* 172.16.0.0/12 */
+    }
+    if ((h & 0xffff0000U) == 0xc0a80000U) {
+        return true; /* 192.168.0.0/16 */
+    }
+    return false;
+}
+
+static bool net_wifi_peer_ipv4_allowed(uint32_t addr_nbo)
+{
+    if (net_wifi_peer_ipv4_on_netif_subnet(s_ap_netif, addr_nbo)) {
+        return true;
+    }
+    if (net_wifi_peer_ipv4_on_netif_subnet(s_sta_netif, addr_nbo)) {
+        return true;
+    }
+    /* STA：同局域网私网即可（手机 VPN/访客网关掩码与板子不一致时，严格同子网会误杀）。 */
+    if ((s_running_mode == NET_WIFI_MODE_STA) && net_wifi_ipv4_is_private(addr_nbo)) {
+        return true;
+    }
+    return false;
+}
+
 bool net_wifi_http_peer_on_local_subnet(int sock_fd)
 {
     struct sockaddr_storage peer;
@@ -629,23 +661,31 @@ bool net_wifi_http_peer_on_local_subnet(int sock_fd)
     }
     slen = (socklen_t)sizeof(peer);
     if (getpeername(sock_fd, (struct sockaddr *)&peer, &slen) != 0) {
+        ESP_LOGW(TAG, "peer allow: getpeername fd=%d failed", sock_fd);
         return false;
     }
     if (peer.ss_family == AF_INET) {
         const struct sockaddr_in *in4 = (const struct sockaddr_in *)&peer;
 
-        if (net_wifi_peer_ipv4_on_netif_subnet(s_ap_netif, in4->sin_addr.s_addr)) {
-            return true;
-        }
-        return net_wifi_peer_ipv4_on_netif_subnet(s_sta_netif, in4->sin_addr.s_addr);
+        return net_wifi_peer_ipv4_allowed(in4->sin_addr.s_addr);
     }
 #if CONFIG_LWIP_IPV6
     if (peer.ss_family == AF_INET6) {
         const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)&peer;
         const uint8_t             *b  = in6->sin6_addr.s6_addr;
 
+        /* fe80::/10 链路本地 */
         if ((b[0] == 0xfeU) && ((b[1] & 0xc0U) == 0x80U)) {
             return true;
+        }
+        /* ::ffff:a.b.c.d（双栈栈上常见，浏览器走 IPv6 套接字） */
+        if ((b[0] == 0U) && (b[1] == 0U) && (b[2] == 0U) && (b[3] == 0U) && (b[4] == 0U) &&
+            (b[5] == 0U) && (b[6] == 0U) && (b[7] == 0U) && (b[8] == 0U) && (b[9] == 0U) &&
+            (b[10] == 0xffU) && (b[11] == 0xffU)) {
+            uint32_t v4;
+
+            (void)memcpy(&v4, &b[12], sizeof(v4));
+            return net_wifi_peer_ipv4_allowed(v4);
         }
     }
 #endif

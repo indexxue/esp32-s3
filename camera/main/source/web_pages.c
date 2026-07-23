@@ -1,6 +1,6 @@
 /**
  * @file web_pages.c
- * @brief camera HTTP 页面与 REST：根页面、状态、JPEG 快照（网页预览 + 拍照下载共用）。
+ * @brief camera HTTP 页面与 REST：根页面、状态、JPEG 快照、MJPEG 流。
  */
 
 #include "web_pages.h"
@@ -8,9 +8,11 @@
 #include "camera_sensor.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "esp_heap_caps.h"
@@ -23,14 +25,43 @@ extern const char index_html_end[] asm("_binary_index_html_end");
 
 static const char *TAG = "web_pages";
 
-#define CAMERA_WEB_JPEG_BUF_CAP (49152U)
+/** 640×480 JPEG 余量；预览优先走 sensor 侧 cache。 */
+#define CAMERA_WEB_JPEG_BUF_CAP (98304U)
+#define CAMERA_WEB_MJPEG_BOUNDARY "frame"
+#define CAMERA_WEB_MJPEG_MAX_FRAMES (0U) /* 0 = 直到客户端断开 */
 
 static volatile bool s_web_camera_paused;
+static uint8_t            *s_web_jpeg_buf;
+static SemaphoreHandle_t   s_web_jpeg_mtx;
+static volatile bool       s_mjpeg_busy;
 
 static void web_pages_wifi_prepare_hook(void)
 {
     s_web_camera_paused = true;
     camera_sensor_prepare_for_reboot();
+}
+
+static status_t web_jpeg_buf_ensure(void)
+{
+    if (s_web_jpeg_buf != NULL) {
+        return STATUS_OK;
+    }
+    s_web_jpeg_buf = (uint8_t *)heap_caps_malloc(CAMERA_WEB_JPEG_BUF_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_web_jpeg_buf == NULL) {
+        s_web_jpeg_buf = (uint8_t *)heap_caps_malloc(CAMERA_WEB_JPEG_BUF_CAP, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (s_web_jpeg_buf == NULL) {
+        return STATUS_NO_MEM;
+    }
+    if (s_web_jpeg_mtx == NULL) {
+        s_web_jpeg_mtx = xSemaphoreCreateMutex();
+        if (s_web_jpeg_mtx == NULL) {
+            heap_caps_free(s_web_jpeg_buf);
+            s_web_jpeg_buf = NULL;
+            return STATUS_NO_MEM;
+        }
+    }
+    return STATUS_OK;
 }
 
 static esp_err_t web_send_json(httpd_req_t *req, const char *json)
@@ -70,6 +101,8 @@ esp_err_t web_pages_root_get_handler(httpd_req_t *req)
 {
     const size_t len = (size_t)(index_html_end - index_html_start);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    (void)httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
+    (void)httpd_resp_set_hdr(req, "Pragma", "no-cache");
     return httpd_resp_send(req, index_html_start, len);
 }
 
@@ -82,14 +115,32 @@ static esp_err_t web_favicon_get_handler(httpd_req_t *req)
 
 static esp_err_t web_api_status_get(httpd_req_t *req)
 {
-    char body[128];
+    char body[480];
 
     (void)snprintf(body,
                    sizeof(body),
-                   "{\"product\":\"camera\",\"camera\":%s,\"width\":%u,\"height\":%u}",
+                   "{\"product\":\"camera\",\"camera\":%s,\"width\":%u,\"height\":%u,"
+                   "\"quality\":%u,\"poll_ms\":%u,\"grayscale\":%u,\"zoom\":%u,"
+                   "\"rotate\":%u,\"flip_v\":%u,\"flip_h\":%u,"
+                   "\"cfg_width\":%u,\"cfg_height\":%u,"
+                   "\"frames\":%u,\"lcd_blit\":%u,\"paused\":%s,"
+                   "\"stream\":\"/api/camera/stream.mjpg\","
+                   "\"sizes\":[\"240x240\",\"320x240\",\"640x480\"]}",
                    (camera_sensor_is_ready() != FALSE) ? "true" : "false",
                    (unsigned)camera_sensor_get_snapshot_width(),
-                   (unsigned)camera_sensor_get_snapshot_height());
+                   (unsigned)camera_sensor_get_snapshot_height(),
+                   (unsigned)camera_sensor_get_jpeg_quality(),
+                   (unsigned)camera_sensor_get_web_poll_ms(),
+                   (unsigned)camera_sensor_get_grayscale(),
+                   (unsigned)camera_sensor_get_zoom(),
+                   (unsigned)camera_sensor_get_img_rotate(),
+                   (unsigned)camera_sensor_get_flip_v(),
+                   (unsigned)camera_sensor_get_flip_h(),
+                   (unsigned)camera_sensor_get_web_width(),
+                   (unsigned)camera_sensor_get_web_height(),
+                   (unsigned)camera_sensor_get_frame_count(),
+                   (unsigned)camera_sensor_get_lcd_blit_count(),
+                   s_web_camera_paused ? "true" : "false");
     return web_send_json(req, body);
 }
 
@@ -110,10 +161,9 @@ static esp_err_t web_camera_check_ready(httpd_req_t *req)
     return ESP_OK;
 }
 
-/** 网页预览与「拍照保存」共用：返回最新帧 JPEG。 */
+/** 单帧 JPEG：拍照下载 / 兼容旧轮询。使用静态缓冲，避免每请求 malloc。 */
 static esp_err_t web_api_camera_jpeg_get(httpd_req_t *req)
 {
-    uint8_t *jpeg_buf;
     uint32_t jpeg_len = 0U;
 
     if (!web_local_peer_allowed(req)) {
@@ -122,16 +172,19 @@ static esp_err_t web_api_camera_jpeg_get(httpd_req_t *req)
     if (web_camera_check_ready(req) != ESP_OK) {
         return ESP_FAIL;
     }
-
-    jpeg_buf = (uint8_t *)heap_caps_malloc(CAMERA_WEB_JPEG_BUF_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (jpeg_buf == NULL) {
+    if (web_jpeg_buf_ensure() != STATUS_OK) {
         (void)httpd_resp_set_status(req, "500 Internal Server Error");
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"no_memory\"}", HTTPD_RESP_USE_STRLEN);
     }
+    if (xSemaphoreTake(s_web_jpeg_mtx, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        (void)httpd_resp_set_status(req, "503 Service Unavailable");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"busy\"}", HTTPD_RESP_USE_STRLEN);
+    }
 
-    if (camera_sensor_snapshot_jpeg(jpeg_buf, CAMERA_WEB_JPEG_BUF_CAP, &jpeg_len) != STATUS_OK) {
-        heap_caps_free(jpeg_buf);
+    if (camera_sensor_snapshot_jpeg(s_web_jpeg_buf, CAMERA_WEB_JPEG_BUF_CAP, &jpeg_len) != STATUS_OK) {
+        (void)xSemaphoreGive(s_web_jpeg_mtx);
         (void)httpd_resp_set_status(req, "503 Service Unavailable");
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"no_frame\"}", HTTPD_RESP_USE_STRLEN);
@@ -139,8 +192,100 @@ static esp_err_t web_api_camera_jpeg_get(httpd_req_t *req)
 
     (void)httpd_resp_set_type(req, "image/jpeg");
     (void)httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    (void)httpd_resp_send(req, (const char *)jpeg_buf, jpeg_len);
-    heap_caps_free(jpeg_buf);
+    (void)httpd_resp_send(req, (const char *)s_web_jpeg_buf, (size_t)jpeg_len);
+    (void)xSemaphoreGive(s_web_jpeg_mtx);
+    return ESP_OK;
+}
+
+/** multipart/x-mixed-replace MJPEG：浏览器 <img src> 直接播流。 */
+static esp_err_t web_api_camera_mjpeg_get(httpd_req_t *req)
+{
+    uint32_t seq = 0U;
+    uint32_t frames = 0U;
+    char     part_hdr[128];
+    esp_err_t err = ESP_OK;
+
+    if (!web_local_peer_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
+    if (web_camera_check_ready(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    if (s_mjpeg_busy) {
+        (void)httpd_resp_set_status(req, "503 Service Unavailable");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"stream_busy\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    if (web_jpeg_buf_ensure() != STATUS_OK) {
+        (void)httpd_resp_set_status(req, "500 Internal Server Error");
+        (void)httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"no_memory\"}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    s_mjpeg_busy = true;
+    camera_sensor_web_stream_enter();
+
+    (void)httpd_resp_set_type(req, "multipart/x-mixed-replace; boundary=" CAMERA_WEB_MJPEG_BOUNDARY);
+    (void)httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
+    (void)httpd_resp_set_hdr(req, "Pragma", "no-cache");
+    (void)httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    while (!s_web_camera_paused) {
+        uint32_t jpeg_len = 0U;
+        int      hdr_len;
+
+        if (camera_sensor_wait_jpeg_seq(&seq, 1000U) != STATUS_OK) {
+            /* 无新帧：发空闲探测，避免中间代理/浏览器以为挂死。 */
+            continue;
+        }
+        if (xSemaphoreTake(s_web_jpeg_mtx, pdMS_TO_TICKS(200)) != pdTRUE) {
+            continue;
+        }
+        if (camera_sensor_copy_jpeg_cache(s_web_jpeg_buf, CAMERA_WEB_JPEG_BUF_CAP, &jpeg_len) != STATUS_OK) {
+            (void)xSemaphoreGive(s_web_jpeg_mtx);
+            continue;
+        }
+
+        hdr_len = snprintf(part_hdr,
+                           sizeof(part_hdr),
+                           "--" CAMERA_WEB_MJPEG_BOUNDARY "\r\n"
+                           "Content-Type: image/jpeg\r\n"
+                           "Content-Length: %u\r\n"
+                           "\r\n",
+                           (unsigned)jpeg_len);
+        if (hdr_len <= 0) {
+            (void)xSemaphoreGive(s_web_jpeg_mtx);
+            err = ESP_FAIL;
+            break;
+        }
+
+        err = httpd_resp_send_chunk(req, part_hdr, (ssize_t)hdr_len);
+        if (err != ESP_OK) {
+            (void)xSemaphoreGive(s_web_jpeg_mtx);
+            break;
+        }
+        err = httpd_resp_send_chunk(req, (const char *)s_web_jpeg_buf, (ssize_t)jpeg_len);
+        (void)xSemaphoreGive(s_web_jpeg_mtx);
+        if (err != ESP_OK) {
+            break;
+        }
+        err = httpd_resp_send_chunk(req, "\r\n", 2);
+        if (err != ESP_OK) {
+            break;
+        }
+
+        frames++;
+#if CAMERA_WEB_MJPEG_MAX_FRAMES > 0
+        if (frames >= CAMERA_WEB_MJPEG_MAX_FRAMES) {
+            break;
+        }
+#endif
+    }
+
+    (void)httpd_resp_send_chunk(req, NULL, 0);
+    camera_sensor_web_stream_leave();
+    s_mjpeg_busy = false;
+    ESP_LOGI(TAG, "mjpeg end frames=%u err=%s", (unsigned)frames, esp_err_to_name(err));
     return ESP_OK;
 }
 
@@ -151,6 +296,143 @@ static esp_err_t web_api_camera_resume_post(httpd_req_t *req)
     }
     s_web_camera_paused = false;
     return web_send_json(req, "{\"ok\":true}");
+}
+
+static bool web_parse_u16_after_key(const char *body, const char *key, uint16_t *out)
+{
+    const char *p = strstr(body, key);
+    if ((p == NULL) || (out == NULL)) {
+        return false;
+    }
+    p = strchr(p, ':');
+    if (p == NULL) {
+        return false;
+    }
+    *out = (uint16_t)strtoul(p + 1, NULL, 10);
+    return true;
+}
+
+/**
+ * POST /api/camera/config
+ * {"size":"320x240","quality":55,"grayscale":0,"zoom":1,"rotate":0,"flip_v":1,"flip_h":0,"persist":1}
+ * rotate: 0/1/2/3 → 0°/90°/180°/270°（图像旋转，非屏幕驱动）
+ * persist: 1=写入 NVS（默认），0=仅运行时预览
+ */
+static esp_err_t web_api_camera_config_post(httpd_req_t *req)
+{
+    char                  body[256];
+    int                   received;
+    nvs_camera_settings_t st;
+    uint16_t              q16;
+    uint16_t              tmp;
+    uint16_t              w16;
+    uint16_t              h16;
+    uint16_t              persist16 = 1U;
+    bool_t                persist;
+    char                  resp[224];
+
+    if (!web_local_peer_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
+    if (req->content_len <= 0 || req->content_len >= (int)sizeof(body)) {
+        (void)httpd_resp_set_status(req, "400 Bad Request");
+        return web_send_json(req, "{\"ok\":false,\"error\":\"bad_body\"}");
+    }
+
+    received = httpd_req_recv(req, body, req->content_len);
+    if (received <= 0) {
+        (void)httpd_resp_set_status(req, "400 Bad Request");
+        return web_send_json(req, "{\"ok\":false,\"error\":\"bad_body\"}");
+    }
+    body[received] = '\0';
+
+    nvs_camera_settings_default(&st);
+    st.web_width   = camera_sensor_get_web_width();
+    st.web_height  = camera_sensor_get_web_height();
+    st.quality     = camera_sensor_get_jpeg_quality();
+    st.grayscale   = camera_sensor_get_grayscale();
+    st.zoom        = camera_sensor_get_zoom();
+    st.img_rotate  = camera_sensor_get_img_rotate();
+    st.flip_v      = camera_sensor_get_flip_v();
+    st.flip_h      = camera_sensor_get_flip_h();
+
+    if (strstr(body, "240x240") != NULL) {
+        st.web_width  = 240U;
+        st.web_height = 240U;
+    } else if (strstr(body, "320x240") != NULL) {
+        st.web_width  = 320U;
+        st.web_height = 240U;
+    } else if (strstr(body, "640x480") != NULL) {
+        st.web_width  = 640U;
+        st.web_height = 480U;
+    } else {
+        w16 = st.web_width;
+        h16 = st.web_height;
+        if (web_parse_u16_after_key(body, "\"width\"", &w16)) {
+            st.web_width = w16;
+        }
+        if (web_parse_u16_after_key(body, "\"height\"", &h16)) {
+            st.web_height = h16;
+        }
+    }
+
+    q16 = st.quality;
+    if (web_parse_u16_after_key(body, "\"quality\"", &q16)) {
+        st.quality = (uint8_t)q16;
+    }
+    tmp = st.grayscale;
+    if (web_parse_u16_after_key(body, "\"grayscale\"", &tmp)) {
+        st.grayscale = (uint8_t)tmp;
+    }
+    tmp = st.zoom;
+    if (web_parse_u16_after_key(body, "\"zoom\"", &tmp)) {
+        st.zoom = (uint8_t)tmp;
+    }
+    tmp = st.img_rotate;
+    if (web_parse_u16_after_key(body, "\"rotate\"", &tmp)) {
+        st.img_rotate = (uint8_t)tmp;
+    }
+    tmp = st.flip_v;
+    if (web_parse_u16_after_key(body, "\"flip_v\"", &tmp)) {
+        st.flip_v = (uint8_t)tmp;
+    }
+    tmp = st.flip_h;
+    if (web_parse_u16_after_key(body, "\"flip_h\"", &tmp)) {
+        st.flip_h = (uint8_t)tmp;
+    }
+    if (web_parse_u16_after_key(body, "\"persist\"", &persist16)) {
+        /* keep parsed value */
+    } else {
+        persist16 = 1U; /* 未带 persist 字段时一律落盘 */
+    }
+    /* 安全默认：除非明确 persist:0，否则写入 NVS */
+    persist = (persist16 != 0U) ? TRUE : FALSE;
+
+    if (camera_sensor_apply_settings(&st, persist) != STATUS_OK) {
+        (void)httpd_resp_set_status(req, "400 Bad Request");
+        return web_send_json(req,
+                             (persist != FALSE) ? "{\"ok\":false,\"error\":\"save_failed\"}"
+                                                : "{\"ok\":false,\"error\":\"bad_cfg\"}");
+    }
+
+    (void)snprintf(resp,
+                   sizeof(resp),
+                   "{\"ok\":true,\"saved\":%s,\"cfg_width\":%u,\"cfg_height\":%u,"
+                   "\"width\":%u,\"height\":%u,\"quality\":%u,\"poll_ms\":%u,"
+                   "\"grayscale\":%u,\"zoom\":%u,\"rotate\":%u,\"flip_v\":%u,\"flip_h\":%u}",
+                   (persist != FALSE) ? "true" : "false",
+                   (unsigned)st.web_width,
+                   (unsigned)st.web_height,
+                   (unsigned)camera_sensor_get_snapshot_width(),
+                   (unsigned)camera_sensor_get_snapshot_height(),
+                   (unsigned)st.quality,
+                   (unsigned)camera_sensor_get_web_poll_ms(),
+                   (unsigned)st.grayscale,
+                   (unsigned)st.zoom,
+                   (unsigned)st.img_rotate,
+                   (unsigned)st.flip_v,
+                   (unsigned)st.flip_h);
+    return web_send_json(req, resp);
 }
 
 esp_err_t web_pages_register(httpd_handle_t server)
@@ -170,10 +452,20 @@ esp_err_t web_pages_register(httpd_handle_t server)
         .method  = HTTP_GET,
         .handler = web_api_camera_jpeg_get,
     };
+    httpd_uri_t camera_mjpeg = {
+        .uri     = "/api/camera/stream.mjpg",
+        .method  = HTTP_GET,
+        .handler = web_api_camera_mjpeg_get,
+    };
     httpd_uri_t camera_resume = {
         .uri     = "/api/camera/camera_resume",
         .method  = HTTP_POST,
         .handler = web_api_camera_resume_post,
+    };
+    httpd_uri_t camera_cfg = {
+        .uri     = "/api/camera/config",
+        .method  = HTTP_POST,
+        .handler = web_api_camera_config_post,
     };
     esp_err_t err;
 
@@ -182,6 +474,7 @@ esp_err_t web_pages_register(httpd_handle_t server)
     }
 
     web_ctrl_wifi_set_prepare_hook(web_pages_wifi_prepare_hook);
+    (void)web_jpeg_buf_ensure();
 
     err = web_pages_register_uri(server, &favicon);
     if (err != ESP_OK) {
@@ -195,5 +488,13 @@ esp_err_t web_pages_register(httpd_handle_t server)
     if (err != ESP_OK) {
         return err;
     }
-    return web_pages_register_uri(server, &camera_resume);
+    err = web_pages_register_uri(server, &camera_mjpeg);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = web_pages_register_uri(server, &camera_resume);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return web_pages_register_uri(server, &camera_cfg);
 }

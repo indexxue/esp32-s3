@@ -88,9 +88,11 @@ bool net_wifi_http_sensitive_peer_allowed(int sock_fd);
 
 /**
  * 局域网媒体端点（如摄像头预览/拍照）放行判定：
- * 对端位于 SoftAP 子网，或与 STA 同一 IPv4 子网（IPv6 仅链路本地）即放行。
- * 比 `net_wifi_http_sensitive_peer_allowed` 宽松（后者仅 SoftAP 模式放行），
- * 但仍拒绝跨网段/公网对端；配网、OTA 等敏感端点勿用本函数。
+ * - SoftAP / STA：对端与对应 netif 同一 IPv4 子网
+ * - STA：另允许 RFC1918 私网对端（掩码/网关不一致时避免误 403）
+ * - IPv6：链路本地，或 IPv4-mapped（::ffff:a.b.c.d）按上列 IPv4 规则
+ * 比 `net_wifi_http_sensitive_peer_allowed` 宽松（后者仅 SoftAP 放行）；
+ * 配网、OTA 等敏感端点勿用本函数。
  */
 bool net_wifi_http_peer_on_local_subnet(int sock_fd);
 
