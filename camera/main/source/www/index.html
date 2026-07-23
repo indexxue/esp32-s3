@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>camera</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --surface2: #243044;
+      --border: #2d3a4d;
+      --text: #e8eef7;
+      --muted: #8b9cb3;
+      --accent: #3d8bfd;
+      --accent-dim: #2a6fd6;
+      --radius: 12px;
+      --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(160deg, #0a0e14 0%, #121a24 50%, #0f1419 100%);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
+    .top { margin-bottom: 24px; }
+    .top h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.02em; }
+    .top p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .card-h {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 14px 16px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+    }
+    .card-h h2 { font-size: 1rem; font-weight: 600; margin: 0; }
+    .card-b { padding: 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 9px 16px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      font: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-dim); }
+    .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+    .btn-ghost:hover:not(:disabled) { background: var(--surface2); }
+    .status { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 11px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .chip strong { color: var(--text); font-weight: 600; margin-left: 4px; }
+    .chip.ok { border-color: #2a5c45; color: #9ae6c3; }
+    .chip.warn { border-color: #5c4a2a; color: #e6d39a; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 10px; }
+    .log {
+      white-space: pre-wrap;
+      background: #0d1218;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.8rem;
+      max-height: 200px;
+      overflow: auto;
+      margin-top: 12px;
+      color: #c5d4e8;
+    }
+    .log[hidden] { display: none; }
+    .cam-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .cam-wrap {
+      display: inline-block;
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 4px;
+      line-height: 0;
+      max-width: 100%;
+    }
+    #camView {
+      display: block;
+      width: min(100%, 320px);
+      height: auto;
+      image-rendering: pixelated;
+      background: #000;
+      border-radius: 4px;
+    }
+    .cam-meta { font-size: 0.8rem; color: var(--muted); text-align: center; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <h1>camera</h1>
+      <p>网页预览摄像头画面并拍照保存到电脑。SoftAP 模式下连接设备热点后访问 <code>http://192.168.4.1/</code>。</p>
+    </header>
+
+    <section class="card" id="card-camera">
+      <div class="card-h">
+        <h2>摄像头</h2>
+        <div class="row">
+          <button type="button" class="btn btn-ghost busy" id="btn-refresh" onclick="refreshAll()">刷新状态</button>
+          <button type="button" class="btn btn-ghost busy" id="btn-cam-stream" onclick="toggleCameraStream()">关闭预览</button>
+          <button type="button" class="btn btn-primary busy" id="btn-capture" onclick="doCapture()">拍照保存</button>
+        </div>
+      </div>
+      <div class="card-b">
+        <div class="status" id="st"><span class="chip">状态加载中…</span></div>
+        <div class="cam-panel">
+          <p class="cam-meta" id="camHint">正在连接摄像头…</p>
+          <div class="cam-wrap" id="camWrap">
+            <img id="camView" alt="camera preview" width="240" height="240" />
+          </div>
+        </div>
+        <p class="hint">「拍照保存」会抓取当前帧 JPEG 并下载到电脑（浏览器默认下载目录），文件名带时间戳。网页预览为串行 JPEG 刷新（约 4–5 fps）。</p>
+        <pre class="log" id="out" hidden></pre>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    let camStreamOn = false;
+    let camPollTimer = null;
+    let camLoadBusy = false;
+    let camBlobUrl = null;
+    let camFailCount = 0;
+    var CAM_POLL_MS = 200;
+
+    function esc(t) {
+      return String(t === undefined || t === null ? "" : t)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;");
+    }
+
+    function setBusy(b) {
+      document.querySelectorAll(".busy").forEach(function (el) {
+        el.disabled = b;
+      });
+    }
+
+    function showLog(txt, show) {
+      var el = document.getElementById("out");
+      if (!el) return;
+      if (!txt) {
+        el.hidden = true;
+        el.textContent = "";
+        return;
+      }
+      el.hidden = !show;
+      el.textContent = txt;
+    }
+
+    async function refreshStatus() {
+      var st = document.getElementById("st");
+      var chips = "";
+      try {
+        var r = await fetch("/api/wifi/status");
+        var j = await r.json();
+        if (j.ok) {
+          var ok = j.sta_has_ip === true || j.softap === true;
+          chips +=
+            "<span class='chip'><strong>模式</strong>" + esc(j.mode || "—") + "</span>" +
+            "<span class='chip'><strong>IP</strong>" + esc(j.ip || "—") + "</span>" +
+            "<span class='chip " + (ok ? "ok" : "warn") + "'><strong>网络</strong>" + (ok ? "已连接" : "未就绪") + "</span>";
+        }
+      } catch (e) {
+        chips += "<span class='chip warn'><strong>网络</strong>异常</span>";
+      }
+      try {
+        var r2 = await fetch("/api/camera/status");
+        var j2 = await r2.json();
+        var ready = j2.camera === true;
+        chips += "<span class='chip " + (ready ? "ok" : "warn") + "'><strong>摄像头</strong>" + (ready ? "就绪" : "未就绪") + "</span>";
+        if (ready && j2.width) {
+          chips += "<span class='chip'><strong>分辨率</strong>" + esc(String(j2.width)) + "×" + esc(String(j2.height)) + "</span>";
+        }
+      } catch (e) {
+        chips += "<span class='chip warn'><strong>摄像头</strong>异常</span>";
+      }
+      st.innerHTML = chips || "<span class='chip warn'>无状态</span>";
+    }
+
+    function stopCameraStream() {
+      var camView = document.getElementById("camView");
+      camStreamOn = false;
+      camLoadBusy = false;
+      camFailCount = 0;
+      if (camPollTimer) {
+        clearTimeout(camPollTimer);
+        camPollTimer = null;
+      }
+      if (camView) {
+        if (camBlobUrl) {
+          URL.revokeObjectURL(camBlobUrl);
+          camBlobUrl = null;
+        }
+        camView.removeAttribute("src");
+      }
+      var btn = document.getElementById("btn-cam-stream");
+      if (btn) btn.textContent = "开启预览";
+    }
+
+    function scheduleCameraPoll(delayMs) {
+      if (!camStreamOn || camLoadBusy) {
+        return;
+      }
+      if (camPollTimer) {
+        clearTimeout(camPollTimer);
+      }
+      camPollTimer = setTimeout(function () {
+        camPollTimer = null;
+        tickCameraFrame();
+      }, delayMs != null ? delayMs : CAM_POLL_MS);
+    }
+
+    async function tickCameraFrame() {
+      var camView = document.getElementById("camView");
+      var camHint = document.getElementById("camHint");
+      if (!camStreamOn || !camView || camLoadBusy) {
+        return;
+      }
+      camLoadBusy = true;
+      try {
+        var r = await fetch("/api/camera/camera.jpg?t=" + Date.now());
+        if (!camStreamOn) {
+          return;
+        }
+        if (!r.ok) {
+          throw new Error("HTTP " + r.status);
+        }
+        var blob = await r.blob();
+        if (!camStreamOn || !blob || blob.size === 0) {
+          return;
+        }
+        var url = URL.createObjectURL(blob);
+        if (camBlobUrl) {
+          URL.revokeObjectURL(camBlobUrl);
+        }
+        camBlobUrl = url;
+        camView.src = url;
+        camFailCount = 0;
+        if (camHint) {
+          camHint.textContent = "预览中（约 4–5 fps）";
+        }
+      } catch (e) {
+        camFailCount += 1;
+        if (camHint && camStreamOn) {
+          camHint.textContent = camFailCount >= 3
+            ? "预览暂时不可用（摄像头忙），稍后重试…"
+            : "正在等待摄像头帧…";
+        }
+      } finally {
+        camLoadBusy = false;
+        if (camStreamOn) {
+          var backoff = camFailCount > 0 ? Math.min(CAM_POLL_MS * (1 + camFailCount), 1500) : CAM_POLL_MS;
+          scheduleCameraPoll(backoff);
+        }
+      }
+    }
+
+    async function startCameraStream() {
+      var btn = document.getElementById("btn-cam-stream");
+      try {
+        await fetch("/api/camera/camera_resume", { method: "POST" });
+      } catch (e) {
+        /* ignore */
+      }
+      camStreamOn = true;
+      document.getElementById("camWrap").classList.remove("hidden");
+      if (btn) btn.textContent = "关闭预览";
+      document.getElementById("camHint").textContent = "正在连接摄像头…";
+      scheduleCameraPoll(0);
+    }
+
+    function toggleCameraStream() {
+      if (camStreamOn) {
+        stopCameraStream();
+        document.getElementById("camHint").textContent = "预览已关闭";
+        return;
+      }
+      startCameraStream();
+    }
+
+    function captureFileName() {
+      var d = new Date();
+      function p2(n) { return String(n).padStart(2, "0"); }
+      return "camera_" + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) +
+             "_" + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds()) + ".jpg";
+    }
+
+    async function doCapture() {
+      showLog("拍照中…", true);
+      setBusy(true);
+      try {
+        var r = await fetch("/api/camera/camera.jpg?t=" + Date.now());
+        if (!r.ok) {
+          throw new Error("HTTP " + r.status);
+        }
+        var blob = await r.blob();
+        if (!blob || blob.size === 0) {
+          throw new Error("空帧");
+        }
+        var name = captureFileName();
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+        showLog("已保存 " + name + "（" + blob.size + " 字节）", true);
+      } catch (e) {
+        showLog("拍照失败: " + String(e), true);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function refreshAll() {
+      setBusy(true);
+      try {
+        await refreshStatus();
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    refreshStatus();
+    startCameraStream();
+    setInterval(refreshStatus, 5000);
+  </script>
+</body>
+</html>

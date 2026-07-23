@@ -62,11 +62,11 @@ $env:IDF_GITHUB_ASSETS = "dl.espressif.cn/github_assets"
 & cmd /c "`"$installScript`" esp32s3"
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "ESP-IDF install.bat failed with exit code $LASTEXITCODE (GitHub/network). Retrying python env only..."
-    $venvPy = Join-Path $espRoot "python_env\idf5.5_py3.11_env\Scripts\python.exe"
+    $venvPy = Join-Path $espRoot "python_env\idf5.5_py3.13_env\Scripts\python.exe"
     if (-not (Test-Path $venvPy)) {
         $req = Join-Path $idfPath "tools\requirements\requirements.core.txt"
         $constraint = Join-Path $espRoot "espidf.constraints.v5.5.txt"
-        $venvDir = Join-Path $espRoot "python_env\idf5.5_py3.11_env"
+        $venvDir = Join-Path $espRoot "python_env\idf5.5_py3.13_env"
         python -m venv $venvDir
         $py = Join-Path $venvDir "Scripts\python.exe"
         & $py -m pip install -r $req --upgrade --constraint $constraint --extra-index-url https://dl.espressif.com/pypi

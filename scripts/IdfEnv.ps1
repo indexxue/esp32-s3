@@ -14,7 +14,7 @@ function Initialize-IdfEnvironment {
 
     $repoRoot = Get-IdfRepoRoot
     $idfPath = Join-Path $repoRoot "Espressif\frameworks\esp-idf-v5.5.4"
-    $idfPython = Join-Path $repoRoot "Espressif\python_env\idf5.5_py3.11_env\Scripts\python.exe"
+    $idfPython = Join-Path $repoRoot "Espressif\python_env\idf5.5_py3.13_env\Scripts\python.exe"
     $idfPy = Join-Path $idfPath "tools\idf.py"
     $cmakeBin = Join-Path $repoRoot "Espressif\tools\cmake\3.30.2\bin"
     $ninjaBin = Join-Path $repoRoot "Espressif\tools\ninja\1.12.1"
@@ -66,7 +66,7 @@ function Resolve-IdfProjectPath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("project", "ble_demo", "factory", "ballot_guard", "voice_hub")]
+        [ValidateSet("project", "ble_demo", "factory", "ballot_guard", "voice_hub", "camera")]
         [string]$Project,
         [Parameter(Mandatory = $true)]
         [hashtable]$IdfEnv

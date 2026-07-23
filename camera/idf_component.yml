@@ -1,0 +1,5 @@
+## camera 不依赖 Component Registry 的摄像头组件。
+## OV2640 使用仓库 cbb/ov2640；检测栈使用本地 components/esp_dl。
+dependencies:
+  idf:
+    version: ">=5.5.0"

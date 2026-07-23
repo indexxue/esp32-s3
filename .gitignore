@@ -8,22 +8,27 @@ project/build/
 factory/build/
 ballot_guard/build/
 ble_demo/build/
+camera/build/
 project/sdkconfig
 factory/sdkconfig
 ballot_guard/sdkconfig
 ble_demo/sdkconfig
 voice_hub/sdkconfig
+camera/sdkconfig
 project/sdkconfig.old
 factory/sdkconfig.old
 ballot_guard/sdkconfig.old
 ble_demo/sdkconfig.old
 voice_hub/sdkconfig.old
+camera/sdkconfig.old
 
 # Component manager (if used)
 project/dependencies.lock
 project/managed_components/
 voice_hub/dependencies.lock
 voice_hub/managed_components/
+camera/dependencies.lock
+camera/managed_components/
 
 # PyInstaller: LCD 图转工具 Windows 打包中间目录
 tools/build_pyinstaller/
@@ -34,6 +39,8 @@ project/cmake_reconf.txt
 project/cmake_repro.txt
 project/release_log.txt
 project/.signing_profile
+camera/build.log
+camera/.signing_profile
 
 # Secure Boot signing keys (see keys/README.md)
 keys/dev/

@@ -308,6 +308,9 @@ static esp_err_t start_softap(const net_wifi_config_t *cfg)
         return err;
     }
 
+    /* 关闭 modem 省电：默认 MIN_MODEM 会造成 HTTP 卡顿与丢包（网页预览不可用）。 */
+    (void)esp_wifi_set_ps(WIFI_PS_NONE);
+
     s_running_mode = NET_WIFI_MODE_SOFTAP;
     ESP_LOGI(TAG, "SoftAP SSID=%s channel=%u", cfg->softap_ssid, (unsigned int)ch);
     return ESP_OK;
@@ -386,6 +389,9 @@ static esp_err_t start_sta(const net_wifi_config_t *cfg)
         rollback_sta_setup();
         return err;
     }
+
+    /* 关闭 modem 省电：默认 MIN_MODEM 会造成 HTTP 卡顿与丢包（网页预览不可用）。 */
+    (void)esp_wifi_set_ps(WIFI_PS_NONE);
 
     err = esp_wifi_connect();
     if (err != ESP_OK) {
@@ -588,6 +594,62 @@ bool net_wifi_softap_peer_ipv4_on_ap_subnet(uint32_t addr_nbo)
         return false;
     }
     return ((peer_h & nm_h) == (ap_h & nm_h));
+}
+
+/** 对端 IPv4 是否与指定 netif 同一子网。 */
+static bool net_wifi_peer_ipv4_on_netif_subnet(esp_netif_t *netif, uint32_t addr_nbo)
+{
+    esp_netif_ip_info_t info;
+    uint32_t            if_h;
+    uint32_t            nm_h;
+    uint32_t            peer_h;
+
+    if (netif == NULL) {
+        return false;
+    }
+    if (esp_netif_get_ip_info(netif, &info) != ESP_OK || info.ip.addr == 0U) {
+        return false;
+    }
+    if_h   = ntohl(info.ip.addr);
+    nm_h   = ntohl(info.netmask.addr);
+    peer_h = ntohl(addr_nbo);
+    if (nm_h == 0U) {
+        return false;
+    }
+    return ((peer_h & nm_h) == (if_h & nm_h));
+}
+
+bool net_wifi_http_peer_on_local_subnet(int sock_fd)
+{
+    struct sockaddr_storage peer;
+    socklen_t               slen;
+
+    if (!s_wifi_iface_started || (sock_fd < 0)) {
+        return false;
+    }
+    slen = (socklen_t)sizeof(peer);
+    if (getpeername(sock_fd, (struct sockaddr *)&peer, &slen) != 0) {
+        return false;
+    }
+    if (peer.ss_family == AF_INET) {
+        const struct sockaddr_in *in4 = (const struct sockaddr_in *)&peer;
+
+        if (net_wifi_peer_ipv4_on_netif_subnet(s_ap_netif, in4->sin_addr.s_addr)) {
+            return true;
+        }
+        return net_wifi_peer_ipv4_on_netif_subnet(s_sta_netif, in4->sin_addr.s_addr);
+    }
+#if CONFIG_LWIP_IPV6
+    if (peer.ss_family == AF_INET6) {
+        const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)&peer;
+        const uint8_t             *b  = in6->sin6_addr.s6_addr;
+
+        if ((b[0] == 0xfeU) && ((b[1] & 0xc0U) == 0x80U)) {
+            return true;
+        }
+    }
+#endif
+    return false;
 }
 
 esp_err_t net_wifi_wait_sta_got_ip(uint32_t timeout_ms)

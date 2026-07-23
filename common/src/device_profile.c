@@ -21,8 +21,13 @@ static const device_button_spec_t s_buttons_ballot_guard[] = {
     {15, BTN_ID_BACK, "返回", 0, (uint16_t)(BTN_PERMISSION_BACK | BTN_PERMISSION_RESET)},
 };
 
-/** voice_hub 单键：GPIO37 功能键（与 board.h voice_hub 段 BOARD_VOICE_HUB_PIN_BUTTON 一致）。 */
+/** voice_hub 单键：GPIO0 功能键（与 board.h voice_hub 段 BOARD_VOICE_HUB_PIN_BUTTON 一致）。 */
 static const device_button_spec_t s_buttons_voice_hub[] = {
+    {0, BTN_ID_CONFIRM, "功能", 0, (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET)},
+};
+
+/** camera 单键：GPIO0 功能键。 */
+static const device_button_spec_t s_buttons_camera[] = {
     {0, BTN_ID_CONFIRM, "功能", 0, (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET)},
 };
 
@@ -70,6 +75,17 @@ static const device_product_profile_t s_product_profiles[] = {
         .lcd_smoke_title    = "voice_hub LCD OK",
         .lcd_smoke_subtitle = "240x135 ready",
     },
+    {
+        .product_id         = NVS_PROJECT_ID_CAMERA,
+        .name               = "camera",
+        .board_mask         = DEVICE_BOARD_MASK_I2C | DEVICE_BOARD_MASK_LCD,
+        .platform_mask      = DEVICE_PLATFORM_MASK_BUTTON | DEVICE_PLATFORM_MASK_WEB |
+                              DEVICE_PLATFORM_MASK_LED,
+        .buttons            = s_buttons_camera,
+        .button_count       = (uint8_t)(sizeof(s_buttons_camera) / sizeof(s_buttons_camera[0])),
+        .lcd_smoke_title    = "camera LCD OK",
+        .lcd_smoke_subtitle = "240x135 ready",
+    },
 };
 
 typedef struct {
@@ -80,6 +96,7 @@ typedef struct {
 static const device_hardware_entry_t s_hardware_table[] = {
     {NVS_HARDWARE_ID_TY_S3_REV_A, "ty_s3_rev_a"},
     {NVS_HARDWARE_ID_VOICE_HUB_REV_A, "voice_hub_rev_a"},
+    {NVS_HARDWARE_ID_CAMERA_REV_A, "camera_rev_a"},
 };
 
 static const device_product_profile_t *product_profile_lookup(uint32_t product_id)

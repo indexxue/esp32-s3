@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("project", "ble_demo", "factory", "ballot_guard", "voice_hub")]
+    [ValidateSet("project", "ble_demo", "factory", "ballot_guard", "voice_hub", "camera")]
     [string]$Project = "project",
     [ValidateSet("build", "reconfigure", "clean", "fullclean", "size", "size-components", "size-files")]
     [string]$Action = "build",

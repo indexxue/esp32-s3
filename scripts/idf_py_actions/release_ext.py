@@ -33,7 +33,7 @@ _VERSION_RE = re.compile(r'^V?(?P<maj>\d+)\.(?P<min>\d+)\.(?P<pat>\d+)$', re.IGN
 _CMAKE_PROJECT_RE = re.compile(r'project\s*\(\s*(\w+)\s*\)')
 
 # ESP-IDF 工程目录名（与 CMake project(...) 一致），release-all 默认顺序。
-ALL_RELEASE_PRODUCTS = ('project', 'ble_demo', 'factory', 'ballot_guard', 'voice_hub')
+ALL_RELEASE_PRODUCTS = ('project', 'ble_demo', 'factory', 'ballot_guard', 'voice_hub', 'camera')
 
 MANIFEST_SCHEMA = 3
 

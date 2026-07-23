@@ -87,6 +87,14 @@ bool net_wifi_softap_peer_ipv4_on_ap_subnet(uint32_t addr_nbo);
 bool net_wifi_http_sensitive_peer_allowed(int sock_fd);
 
 /**
+ * 局域网媒体端点（如摄像头预览/拍照）放行判定：
+ * 对端位于 SoftAP 子网，或与 STA 同一 IPv4 子网（IPv6 仅链路本地）即放行。
+ * 比 `net_wifi_http_sensitive_peer_allowed` 宽松（后者仅 SoftAP 模式放行），
+ * 但仍拒绝跨网段/公网对端；配网、OTA 等敏感端点勿用本函数。
+ */
+bool net_wifi_http_peer_on_local_subnet(int sock_fd);
+
+/**
  * @brief 阻塞等待 STA 拿到 DHCP IPv4。
  * @note 仅 STA 模式有效；`WIFI_EVENT_STA_START` 会清除陈旧 GOT_IP 位。
  */
