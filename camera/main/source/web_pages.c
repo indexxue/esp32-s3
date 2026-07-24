@@ -6,6 +6,7 @@
 #include "web_pages.h"
 
 #include "camera_sensor.h"
+#include "servo_ctrl.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +16,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "board.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "net_wifi.h"
@@ -312,6 +314,131 @@ static bool web_parse_u16_after_key(const char *body, const char *key, uint16_t 
     return true;
 }
 
+static bool web_parse_f32_after_key(const char *body, const char *key, float *out)
+{
+    const char *p = strstr(body, key);
+    char       *end = NULL;
+    float       v;
+
+    if ((p == NULL) || (out == NULL)) {
+        return false;
+    }
+    p = strchr(p, ':');
+    if (p == NULL) {
+        return false;
+    }
+    v = strtof(p + 1, &end);
+    if (end == (p + 1)) {
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
+static esp_err_t web_api_servo_status_json(httpd_req_t *req)
+{
+    char  body[256];
+    float pan  = 0.0f;
+    float tilt = 0.0f;
+    bool  ready;
+
+    ready = (servo_is_ready() != FALSE);
+    if (ready) {
+        (void)servo_get_angle(SERVO_CH_PAN, &pan);
+        (void)servo_get_angle(SERVO_CH_TILT, &tilt);
+    }
+
+    (void)snprintf(body,
+                   sizeof(body),
+                   "{\"ok\":true,\"ready\":%s,\"pan_deg\":%.1f,\"tilt_deg\":%.1f,"
+                   "\"pan_min\":%d,\"pan_max\":%d,\"tilt_min\":%d,\"tilt_max\":%d,"
+                   "\"center\":%d,\"step_default\":5}",
+                   ready ? "true" : "false",
+                   (double)pan,
+                   (double)tilt,
+                   BOARD_SERVO_PAN_MIN_DEG,
+                   BOARD_SERVO_PAN_MAX_DEG,
+                   BOARD_SERVO_TILT_MIN_DEG,
+                   BOARD_SERVO_TILT_MAX_DEG,
+                   BOARD_SERVO_CENTER_DEG);
+    return web_send_json(req, body);
+}
+
+static esp_err_t web_api_servo_status_get(httpd_req_t *req)
+{
+    if (!web_local_peer_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
+    return web_api_servo_status_json(req);
+}
+
+/**
+ * POST /api/servo
+ * {"center":1}
+ * {"pan":90} / {"tilt":90}          绝对角
+ * {"pan_delta":5} / {"tilt_delta":-5} 相对步进
+ */
+static esp_err_t web_api_servo_post(httpd_req_t *req)
+{
+    char     body[192];
+    int      received;
+    float    v;
+    uint16_t center16 = 0U;
+    bool     acted    = false;
+    status_t st       = STATUS_OK;
+
+    if (!web_local_peer_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
+    if (servo_is_ready() == FALSE) {
+        (void)httpd_resp_set_status(req, "503 Service Unavailable");
+        return web_send_json(req, "{\"ok\":false,\"error\":\"servo_not_ready\"}");
+    }
+    if (req->content_len <= 0 || req->content_len >= (int)sizeof(body)) {
+        (void)httpd_resp_set_status(req, "400 Bad Request");
+        return web_send_json(req, "{\"ok\":false,\"error\":\"bad_body\"}");
+    }
+
+    received = httpd_req_recv(req, body, req->content_len);
+    if (received <= 0) {
+        (void)httpd_resp_set_status(req, "400 Bad Request");
+        return web_send_json(req, "{\"ok\":false,\"error\":\"bad_body\"}");
+    }
+    body[received] = '\0';
+
+    if (web_parse_u16_after_key(body, "\"center\"", &center16) && (center16 != 0U)) {
+        st    = servo_center_all();
+        acted = true;
+    }
+    if (web_parse_f32_after_key(body, "\"pan_delta\"", &v)) {
+        st    = servo_nudge(SERVO_CH_PAN, v);
+        acted = true;
+    }
+    if (web_parse_f32_after_key(body, "\"tilt_delta\"", &v)) {
+        st    = servo_nudge(SERVO_CH_TILT, v);
+        acted = true;
+    }
+    /* 绝对角：用更长键名 pan_delta 已先处理；此处匹配 "pan": / "tilt": */
+    if (web_parse_f32_after_key(body, "\"pan\":", &v)) {
+        st    = servo_set_angle(SERVO_CH_PAN, v);
+        acted = true;
+    }
+    if (web_parse_f32_after_key(body, "\"tilt\":", &v)) {
+        st    = servo_set_angle(SERVO_CH_TILT, v);
+        acted = true;
+    }
+
+    if (!acted) {
+        (void)httpd_resp_set_status(req, "400 Bad Request");
+        return web_send_json(req, "{\"ok\":false,\"error\":\"no_action\"}");
+    }
+    if (st != STATUS_OK) {
+        (void)httpd_resp_set_status(req, "500 Internal Server Error");
+        return web_send_json(req, "{\"ok\":false,\"error\":\"servo_fail\"}");
+    }
+    return web_api_servo_status_json(req);
+}
+
 /**
  * POST /api/camera/config
  * {"size":"320x240","quality":55,"grayscale":0,"zoom":1,"rotate":0,"flip_v":1,"flip_h":0,"persist":1}
@@ -467,6 +594,16 @@ esp_err_t web_pages_register(httpd_handle_t server)
         .method  = HTTP_POST,
         .handler = web_api_camera_config_post,
     };
+    httpd_uri_t servo_status = {
+        .uri     = "/api/servo/status",
+        .method  = HTTP_GET,
+        .handler = web_api_servo_status_get,
+    };
+    httpd_uri_t servo_post = {
+        .uri     = "/api/servo",
+        .method  = HTTP_POST,
+        .handler = web_api_servo_post,
+    };
     esp_err_t err;
 
     if (server == NULL) {
@@ -496,5 +633,13 @@ esp_err_t web_pages_register(httpd_handle_t server)
     if (err != ESP_OK) {
         return err;
     }
-    return web_pages_register_uri(server, &camera_cfg);
+    err = web_pages_register_uri(server, &camera_cfg);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = web_pages_register_uri(server, &servo_status);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return web_pages_register_uri(server, &servo_post);
 }

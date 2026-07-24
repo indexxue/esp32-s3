@@ -1,0 +1,47 @@
+menu "models: ball_detect"
+    config FLASH_ESPDET_PICO_224_224_BALL
+        bool "flash espdet_pico_224_224_ball"
+        depends on !BALL_DETECT_MODEL_IN_SDCARD
+        default y
+
+    choice
+        prompt "default ball_detect model"
+        default ESPDET_PICO_224_224_BALL
+        help
+            default ball_detect model
+        config ESPDET_PICO_224_224_BALL
+            bool "espdet_pico_224_224_ball"
+            depends on BALL_DETECT_MODEL_IN_SDCARD || FLASH_ESPDET_PICO_224_224_BALL
+    endchoice
+
+    config DEFAULT_BALL_DETECT_MODEL
+        int
+        default 0 if ESPDET_PICO_224_224_BALL
+
+    choice
+        prompt "ball_detect model location"
+        default BALL_DETECT_MODEL_IN_FLASH_RODATA
+        help
+            ball_detect model location
+        config BALL_DETECT_MODEL_IN_FLASH_RODATA
+            bool "flash_rodata"
+        config BALL_DETECT_MODEL_IN_FLASH_PARTITION
+            bool "flash_partition"
+        config BALL_DETECT_MODEL_IN_SDCARD
+            bool "sdcard"
+    endchoice
+
+    config BALL_DETECT_MODEL_LOCATION
+        int
+        default 0 if BALL_DETECT_MODEL_IN_FLASH_RODATA
+        default 1 if BALL_DETECT_MODEL_IN_FLASH_PARTITION
+        default 2 if BALL_DETECT_MODEL_IN_SDCARD
+
+    config BALL_DETECT_MODEL_SDCARD_DIR
+        string "ball_detect model sdcard dir"
+        default "models/s3" if IDF_TARGET_ESP32S3
+        default "models/p4" if IDF_TARGET_ESP32P4
+        depends on BALL_DETECT_MODEL_IN_SDCARD
+        help
+            Directory of models relative to sdcard mount point.
+endmenu

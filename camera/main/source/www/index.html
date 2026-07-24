@@ -232,6 +232,37 @@
       vertical-align: middle;
     }
     .cam-ctrl .qval { font-variant-numeric: tabular-nums; min-width: 1.8em; display: inline-block; }
+    .gimbal-pad {
+      display: grid;
+      grid-template-columns: repeat(3, 64px);
+      grid-template-rows: repeat(3, 48px);
+      gap: 8px;
+      justify-content: center;
+      margin: 12px auto;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .gimbal-pad .btn {
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      font-size: 1.1rem;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .gimbal-pad .btn.holding {
+      background: var(--accent-dim);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .gimbal-pad .g-up { grid-column: 2; grid-row: 1; }
+    .gimbal-pad .g-left { grid-column: 1; grid-row: 2; }
+    .gimbal-pad .g-center { grid-column: 2; grid-row: 2; }
+    .gimbal-pad .g-right { grid-column: 3; grid-row: 2; }
+    .gimbal-pad .g-down { grid-column: 2; grid-row: 3; }
+    .gimbal-meta { text-align: center; font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -239,7 +270,7 @@
   <div class="wrap">
     <header class="top">
       <h1>camera</h1>
-      <p>Wi‑Fi 配网与摄像头预览。SoftAP 下连设备热点后访问 <code>http://192.168.4.1/</code>（<code>/provision</code> 会跳转到本页）。</p>
+      <p>Wi‑Fi 配网、摄像头预览与云台手动控制。SoftAP 下连设备热点后访问 <code>http://192.168.4.1/</code>。</p>
     </header>
 
     <section class="card" id="card-wifi">
@@ -326,6 +357,38 @@
         </div>
         <p class="hint">调整参数会立即写入 NVS；也可点「保存配置」（会先停预览再写，更稳）。旋转只改摄像头画面。拍照前会短暂停流。</p>
         <pre class="log" id="out" hidden></pre>
+      </div>
+    </section>
+
+    <section class="card" id="card-gimbal">
+      <div class="card-h">
+        <h2>云台（舵机）</h2>
+        <div class="row">
+          <button type="button" class="btn btn-ghost busy" id="btn-servo-refresh" onclick="refreshServoStatus()">刷新角度</button>
+          <button type="button" class="btn btn-primary busy" id="btn-servo-center" onclick="servoCenter()">回中</button>
+        </div>
+      </div>
+      <div class="card-b">
+        <div class="status" id="servo-st"><span class="chip">状态加载中…</span></div>
+        <p class="gimbal-meta" id="servoAngles">pan=— tilt=—</p>
+        <div class="cam-ctrl" style="margin-bottom:8px">
+          <label>步进
+            <select id="servoStep" class="busy">
+              <option value="2">2°</option>
+              <option value="5" selected>5°</option>
+              <option value="10">10°</option>
+            </select>
+          </label>
+        </div>
+        <div class="gimbal-pad" id="gimbalPad">
+          <button type="button" class="btn btn-ghost busy g-up" data-sx="0" data-sy="-1" title="俯仰上仰（点按/长按）">▲</button>
+          <button type="button" class="btn btn-ghost busy g-left" data-sx="-1" data-sy="0" title="偏航左转（点按/长按）">◀</button>
+          <button type="button" class="btn btn-primary busy g-center" id="btn-servo-pad-center" title="回中">中</button>
+          <button type="button" class="btn btn-ghost busy g-right" data-sx="1" data-sy="0" title="偏航右转（点按/长按）">▶</button>
+          <button type="button" class="btn btn-ghost busy g-down" data-sx="0" data-sy="1" title="俯仰下俯（点按/长按）">▼</button>
+        </div>
+        <p class="hint">方向键支持点按一步或长按连续转动；长按期间保持预览暂停，松手约 0.7s 后恢复。右/下为正。板端长按 GPIO0 也可回中。</p>
+        <pre class="log" id="servo-out" hidden></pre>
       </div>
     </section>
   </div>
@@ -928,13 +991,319 @@
       }
     }
 
+    function applyServoStatus(j) {
+      var st = document.getElementById("servo-st");
+      var ang = document.getElementById("servoAngles");
+      if (!j || !st) {
+        return;
+      }
+      if (j.ready) {
+        st.innerHTML = "<span class=\"chip ok\">舵机<strong>就绪</strong></span>" +
+          "<span class=\"chip\">限位 pan " + j.pan_min + "–" + j.pan_max +
+          " / tilt " + j.tilt_min + "–" + j.tilt_max + "</span>";
+      } else {
+        st.innerHTML = "<span class=\"chip warn\">舵机<strong>未就绪</strong></span>";
+      }
+      if (ang) {
+        ang.textContent = j.ready
+          ? ("pan=" + Number(j.pan_deg).toFixed(1) + "°  tilt=" + Number(j.tilt_deg).toFixed(1) + "°")
+          : "pan=— tilt=—";
+      }
+    }
+
+    async function refreshServoStatus() {
+      try {
+        var r = await withCamStreamPaused(function () {
+          return fetchWithTimeout("/api/servo/status", null, 8000);
+        });
+        var j = await r.json();
+        applyServoStatus(j);
+      } catch (e) {
+        var st = document.getElementById("servo-st");
+        if (st) {
+          st.innerHTML = "<span class=\"chip warn\">舵机状态读取失败</span>";
+        }
+      }
+    }
+
+    /**
+     * MJPEG 长连接会占满 SoftAP httpd worker。
+     * 云台控制：进入时停流；长按期间不恢复；松手后再延迟恢复。
+     */
+    var servoResumeTimer = null;
+    var servoStreamWantResume = false;
+    var servoHold = {
+      active: false,
+      sx: 0,
+      sy: 0,
+      timer: null,
+      inFlight: false,
+      btn: null
+    };
+    var SERVO_HOLD_REPEAT_MS = 200;
+
+    function servoClearResumeTimer() {
+      if (servoResumeTimer) {
+        clearTimeout(servoResumeTimer);
+        servoResumeTimer = null;
+      }
+    }
+
+    async function servoPauseStream() {
+      servoClearResumeTimer();
+      if (camStreamOn) {
+        servoStreamWantResume = true;
+        stopCameraStream();
+        var hint = document.getElementById("camHint");
+        if (hint) {
+          hint.textContent = servoHold.active
+            ? "预览已暂停（长按云台）…"
+            : "预览已暂停（云台控制）…";
+        }
+        await delayMs(250);
+      }
+    }
+
+    function servoMaybeResumeStream(delay) {
+      if (servoHold.active) {
+        return;
+      }
+      if (!servoStreamWantResume) {
+        return;
+      }
+      servoClearResumeTimer();
+      servoResumeTimer = setTimeout(function () {
+        servoResumeTimer = null;
+        if (servoHold.active) {
+          return;
+        }
+        servoStreamWantResume = false;
+        startCameraStream();
+      }, typeof delay === "number" ? delay : 700);
+    }
+
+    async function withCamStreamPaused(fn) {
+      await servoPauseStream();
+      try {
+        return await fn();
+      } finally {
+        servoMaybeResumeStream(700);
+      }
+    }
+
+    async function servoPost(body, opts) {
+      opts = opts || {};
+      var quiet = !!opts.quiet;
+      if (!quiet) {
+        setBusy(true);
+      }
+      try {
+        await servoPauseStream();
+        var r = await fetchWithTimeout("/api/servo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        }, 8000);
+        var text = await r.text();
+        var j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (parseErr) {
+          j = null;
+        }
+        if (!j || !j.ok) {
+          showLog("servo-out", "控制失败: " + ((j && j.error) ? j.error : ("HTTP " + r.status + " " + text)), true);
+          return false;
+        }
+        applyServoStatus(j);
+        showLog("servo-out", "", false);
+        return true;
+      } catch (e) {
+        var msg = String(e);
+        if (e && e.name === "AbortError") {
+          msg = "请求超时：请先点「关闭预览」再试云台，或稍后重试";
+        }
+        showLog("servo-out", "控制失败: " + msg, true);
+        return false;
+      } finally {
+        if (!quiet) {
+          setBusy(false);
+        }
+        if (!servoHold.active) {
+          servoMaybeResumeStream(700);
+        }
+      }
+    }
+
+    function servoStepDeg() {
+      var el = document.getElementById("servoStep");
+      var n = el ? parseFloat(el.value) : 5;
+      return isFinite(n) && n > 0 ? n : 5;
+    }
+
+    /** sx/sy: -1/0/1，乘以步进；tilt 上仰为负 delta（减小俯仰角） */
+    async function servoNudge(sx, sy, opts) {
+      var step = servoStepDeg();
+      var body = {};
+      if (sx) {
+        body.pan_delta = sx * step;
+      }
+      if (sy) {
+        body.tilt_delta = sy * step;
+      }
+      return servoPost(body, opts);
+    }
+
+    async function servoCenter() {
+      servoHoldStop();
+      return servoPost({ center: 1 });
+    }
+
+    function servoHoldClearBtn() {
+      if (servoHold.btn) {
+        servoHold.btn.classList.remove("holding");
+        servoHold.btn = null;
+      }
+    }
+
+    function servoHoldStop() {
+      if (!servoHold.active && !servoHold.timer) {
+        servoHoldClearBtn();
+        return;
+      }
+      servoHold.active = false;
+      servoHold.sx = 0;
+      servoHold.sy = 0;
+      if (servoHold.timer) {
+        clearTimeout(servoHold.timer);
+        servoHold.timer = null;
+      }
+      servoHoldClearBtn();
+      servoMaybeResumeStream(700);
+    }
+
+    function servoHoldScheduleNext() {
+      if (!servoHold.active) {
+        return;
+      }
+      if (servoHold.timer) {
+        clearTimeout(servoHold.timer);
+      }
+      servoHold.timer = setTimeout(function () {
+        servoHold.timer = null;
+        servoHoldTick();
+      }, SERVO_HOLD_REPEAT_MS);
+    }
+
+    async function servoHoldTick() {
+      if (!servoHold.active) {
+        return;
+      }
+      if (servoHold.inFlight) {
+        servoHoldScheduleNext();
+        return;
+      }
+      servoHold.inFlight = true;
+      try {
+        var ok = await servoNudge(servoHold.sx, servoHold.sy, { quiet: true });
+        if (!ok) {
+          servoHoldStop();
+          return;
+        }
+      } finally {
+        servoHold.inFlight = false;
+      }
+      if (servoHold.active) {
+        servoHoldScheduleNext();
+      }
+    }
+
+    function servoPadDown(ev) {
+      var btn = ev.currentTarget;
+      var sx;
+      var sy;
+
+      if (!btn || btn.disabled) {
+        return;
+      }
+      if (typeof ev.button === "number" && ev.button !== 0) {
+        return;
+      }
+      sx = parseInt(btn.getAttribute("data-sx"), 10);
+      sy = parseInt(btn.getAttribute("data-sy"), 10);
+      if (!isFinite(sx) || !isFinite(sy) || (sx === 0 && sy === 0)) {
+        return;
+      }
+
+      ev.preventDefault();
+      try {
+        btn.setPointerCapture(ev.pointerId);
+      } catch (captureErr) {
+        /* ignore */
+      }
+
+      if (servoHold.active && servoHold.sx === sx && servoHold.sy === sy) {
+        return;
+      }
+      servoHoldStop();
+      servoHold.active = true;
+      servoHold.sx = sx;
+      servoHold.sy = sy;
+      servoHold.btn = btn;
+      btn.classList.add("holding");
+      servoHoldTick();
+    }
+
+    function servoPadUp(ev) {
+      if (ev) {
+        ev.preventDefault();
+      }
+      servoHoldStop();
+    }
+
+    function bindGimbalPad() {
+      var pad = document.getElementById("gimbalPad");
+      var centerBtn = document.getElementById("btn-servo-pad-center");
+      var dirs;
+      var i;
+      var btn;
+
+      if (!pad) {
+        return;
+      }
+      dirs = pad.querySelectorAll("button[data-sx]");
+      for (i = 0; i < dirs.length; i++) {
+        btn = dirs[i];
+        btn.addEventListener("pointerdown", servoPadDown);
+        btn.addEventListener("pointerup", servoPadUp);
+        btn.addEventListener("pointercancel", servoPadUp);
+        btn.addEventListener("lostpointercapture", servoPadUp);
+        btn.addEventListener("contextmenu", function (e) {
+          e.preventDefault();
+        });
+      }
+      if (centerBtn) {
+        centerBtn.addEventListener("click", function () {
+          servoCenter();
+        });
+      }
+      window.addEventListener("blur", servoHoldStop);
+      document.addEventListener("visibilitychange", function () {
+        if (document.hidden) {
+          servoHoldStop();
+        }
+      });
+    }
+
     document.getElementById("modal-disconnect").addEventListener("click", function (ev) {
       if (ev.target.id === "modal-disconnect") closeDisconnectModal();
     });
 
     /* 聚焦 SSID/密码时不再自动停预览，避免误触导致一直「忙」。 */
+    bindGimbalPad();
     refreshWifiStatus();
     refreshCameraStatus();
+    refreshServoStatus();
     startCameraStream();
     resumeBackgroundPoll();
   </script>

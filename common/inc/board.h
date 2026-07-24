@@ -135,7 +135,7 @@
 #elif defined(BOARD_PROFILE_CAMERA)
 
 /* -------------------------------------------------------------------------- */
-/* camera_rev_a — 240x135 ST7789 / OV2640 (no SD card, no web camera)          */
+/* camera_rev_a — 240x135 ST7789 / OV2640 / SoftAP web preview / dual servo   */
 /* Only one I2C bus (GPIO4/5): OV2640 SCCB; no other I2C peripherals.         */
 /* -------------------------------------------------------------------------- */
 
@@ -220,7 +220,41 @@
 #define BOARD_CAMERA_WS2812_PIN (48)
 #define BOARD_CAMERA_WS2812_COUNT (1U)
 
-/* camera: no battery ADC */
+/*
+ * MG996R 双舵机（LEDC 50 Hz）。
+ * 画面坐标：原点左上，x 右、y 下。
+ *   Pan  (PWM1/GPIO46)：err_x>0 → 右转（使目标回中）；反向时翻 BOARD_SERVO_PAN_SIGN
+ *   Tilt (PWM2/GPIO3) ：err_y>0 → 下俯；反向时翻 BOARD_SERVO_TILT_SIGN
+ * 软限位为保守初值，上板标定后再改。
+ */
+#define BOARD_SERVO_PAN_PIN (46)
+#define BOARD_SERVO_TILT_PIN (3)
+#define BOARD_SERVO_PWM_FREQ_HZ (50U)
+#define BOARD_SERVO_PWM_TIMER (0)       /* PWM_TIMER_0_E */
+#define BOARD_SERVO_PAN_PWM_CH (0)      /* PWM_CHANNEL_0_E */
+#define BOARD_SERVO_TILT_PWM_CH (1)     /* PWM_CHANNEL_1_E */
+#define BOARD_SERVO_PULSE_MIN_US (500U)
+#define BOARD_SERVO_PULSE_MAX_US (2500U)
+#define BOARD_SERVO_CENTER_PULSE_US (1500U)
+#define BOARD_SERVO_CENTER_DEG (90)
+#define BOARD_SERVO_PAN_MIN_DEG (20)
+#define BOARD_SERVO_PAN_MAX_DEG (160)
+#define BOARD_SERVO_TILT_MIN_DEG (40)
+#define BOARD_SERVO_TILT_MAX_DEG (140)
+#define BOARD_SERVO_PAN_SIGN (1)
+#define BOARD_SERVO_TILT_SIGN (1)
+
+/*
+ * 对外通信 SPI1 预留脚（产品名 SPI1 → 硬件 SPI3，因 SPI2 给 ST7789）。
+ * 本阶段仅宏定义，禁止 SpiDriverInit / spi_bus_initialize。
+ */
+#define BOARD_SPI1_HOST (SPI_HOST_3_E)
+#define BOARD_SPI1_PIN_SCK (21)
+#define BOARD_SPI1_PIN_MOSI (47)
+#define BOARD_SPI1_PIN_MISO (45)
+#define BOARD_SPI1_PIN_CS (14)
+
+/* camera: no battery ADC（GPIO3 已划给舵机 Tilt，勿作 ADC） */
 #define BOARD_BATTERY_PIN_ENABLE (-1)
 #define BOARD_BATTERY_PIN_ADC (-1)
 #define BOARD_BATTERY_ADC_CHANNEL ADC_CHANNEL_0_E

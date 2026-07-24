@@ -9,6 +9,10 @@
 
 #include "nvs.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * 传感器采集分辨率。640×480 SVGA，避免 240 直出 CIF 开窗的四周偏紫。
  * 网页/LCD：zoom=1 整幅缩小；zoom>1 中心取更小窗口再缩放。
@@ -101,3 +105,15 @@ status_t camera_sensor_set_web_cfg(uint16_t width, uint16_t height, uint8_t qual
 
 status_t camera_sensor_copy_jpeg_cache(uint8_t *out, uint32_t out_cap, uint32_t *out_len);
 status_t camera_sensor_snapshot_jpeg(uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+
+/**
+ * 拷贝当前 RGB565 snapshot（与网页/LCD 同源）。
+ * @param out      输出缓冲
+ * @param out_cap  容量（字节）
+ * @param out_w/h  输出宽高
+ */
+status_t camera_sensor_copy_rgb565(uint8_t *out, uint32_t out_cap, uint16_t *out_w, uint16_t *out_h);
+
+#ifdef __cplusplus
+}
+#endif

@@ -10,6 +10,7 @@
 
 #include "board.h"
 #include "camera_ui.h"
+#include "camera_model.h"
 
 #include "dma.h"
 #include "i2c.h"
@@ -698,7 +699,29 @@ static void camera_sensor_preview_task(void *arg)
 
         if ((do_lcd != FALSE) && (lcd != NULL) && st7789_is_initialized(lcd) && (s_snapshot_buf != NULL) &&
             (s_snapshot_w > 0U) && (s_snapshot_h > 0U)) {
+            uint16_t box_flat[CAMERA_MODEL_MAX_BOXES * CAMERA_MODEL_UI_BOX_STRIDE];
+            uint8_t box_count = 0U;
+            uint16_t box_w = s_snapshot_w;
+            uint16_t box_h = s_snapshot_h;
+
             camera_sensor_blit_rgb565(lcd, s_snapshot_buf, s_snapshot_w, s_snapshot_h);
+            if (camera_model_is_ready() != FALSE) {
+                if (camera_model_fill_ui_boxes(box_flat,
+                                               (uint8_t)CAMERA_MODEL_MAX_BOXES,
+                                               &box_count,
+                                               &box_w,
+                                               &box_h) == STATUS_OK) {
+                    if (box_count > 0U) {
+                        if (box_w == 0U) {
+                            box_w = s_snapshot_w;
+                        }
+                        if (box_h == 0U) {
+                            box_h = s_snapshot_h;
+                        }
+                        camera_ui_draw_detection_boxes(lcd, box_flat, box_count, box_w, box_h);
+                    }
+                }
+            }
             s_last_lcd_blit_tick = xTaskGetTickCount();
             s_lcd_blit_count++;
             if ((s_lcd_blit_count == 1U) || ((s_lcd_blit_count % 50U) == 0U)) {
@@ -884,6 +907,38 @@ uint16_t camera_sensor_get_snapshot_width(void)
 uint16_t camera_sensor_get_snapshot_height(void)
 {
     return s_snapshot_h;
+}
+
+status_t camera_sensor_copy_rgb565(uint8_t *out, uint32_t out_cap, uint16_t *out_w, uint16_t *out_h)
+{
+    uint32_t frame_bytes;
+    uint16_t width;
+    uint16_t height;
+
+    if ((out == NULL) || (out_w == NULL) || (out_h == NULL)) {
+        return STATUS_INVALID_ARG;
+    }
+    if (camera_sensor_snapshot_mtx_init() != STATUS_OK) {
+        return STATUS_FAIL;
+    }
+    if (xSemaphoreTake(s_snapshot_mtx, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return STATUS_TIMEOUT;
+    }
+
+    width = s_snapshot_w;
+    height = s_snapshot_h;
+    frame_bytes = (uint32_t)width * (uint32_t)height * 2U;
+    if ((s_snapshot_buf == NULL) || (width == 0U) || (height == 0U) || (frame_bytes == 0U) ||
+        (frame_bytes > s_snapshot_bytes) || (out_cap < frame_bytes)) {
+        (void)xSemaphoreGive(s_snapshot_mtx);
+        return STATUS_FAIL;
+    }
+
+    (void)memcpy(out, s_snapshot_buf, (size_t)frame_bytes);
+    *out_w = width;
+    *out_h = height;
+    (void)xSemaphoreGive(s_snapshot_mtx);
+    return STATUS_OK;
 }
 
 uint16_t camera_sensor_get_web_width(void)

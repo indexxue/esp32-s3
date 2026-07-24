@@ -56,3 +56,12 @@ camera/tools/steel_ball_annotate/dataset/images/*
 camera/tools/steel_ball_annotate/dataset/labels/*
 !camera/tools/steel_ball_annotate/dataset/labels/.gitkeep
 camera/tools/steel_ball_annotate/config.json
+camera/tools/steel_ball_annotate/*.pt
+camera/tools/steel_ball_annotate/*.onnx
+camera/tools/steel_ball_annotate/*.zip
+camera/tools/steel_ball_annotate/validate_config.json
+camera/tools/steel_ball_annotate/result_*.jpg
+camera/tools/steel_ball_annotate/过程文档.md
+
+# esp-detection train tree (clone locally; do not commit)
+camera/tools/esp-detection/

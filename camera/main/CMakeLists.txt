@@ -1,5 +1,4 @@
-# camera 主组件：LCD 预览 + SoftAP/STA 网页图传（本阶段不含端侧检测模型）。
-# 钢珠检测模型待 Phase 4 再接入（见 camera/plan/steel_ball_gimbal_plan.md）。
+# camera 主组件：LCD 预览 + SoftAP/STA 网页图传 + 钢珠 ESPDet 检测叠框。
 
 idf_component_register(
     SRCS
@@ -7,10 +6,12 @@ idf_component_register(
         "start.c"
         "source/camera_ui.c"
         "source/camera_sensor.c"
+        "source/camera_model.cpp"
         "source/web_pages.c"
+        "source/servo_ctrl.c"
     INCLUDE_DIRS "." "source"
     EMBED_FILES "source/www/index.html"
-    REQUIRES cbb common bsp_driver esp_timer app_update web_ctrl nvs_flash esp_new_jpeg
+    REQUIRES cbb common bsp_driver esp_timer app_update web_ctrl nvs_flash esp_new_jpeg ball_detect
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE

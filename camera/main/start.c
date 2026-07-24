@@ -14,7 +14,9 @@
 
 #include "camera_ui.h"
 #include "camera_sensor.h"
+#include "camera_model.h"
 #include "web_pages.h"
+#include "servo_ctrl.h"
 
 #include "type.h"
 
@@ -123,7 +125,12 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
     LOG_INFO("key %s (%s): %s", button_id_to_str(id), (name != NULL) ? name : "?", button_event_to_str(event));
 
     if (event == BTN_EVENT_LONG_PRESS) {
-        LOG_INFO("button long press");
+        LOG_INFO("button long press → servo center");
+        if (servo_center_all() != STATUS_OK) {
+            LOG_WARN("servo_center_all failed");
+        } else if (st7789_is_initialized(lcd)) {
+            camera_ui_set_status_line(lcd, "servo: center");
+        }
         return;
     }
 
@@ -175,6 +182,14 @@ static void camera_modules_task(void *arg)
         } else if (st7789_is_initialized(lcd)) {
             camera_ui_set_status_line(lcd, "cam: preview");
         }
+        if (camera_model_start() != STATUS_OK) {
+            LOG_WARN("camera_model_start failed");
+            if (st7789_is_initialized(lcd)) {
+                camera_ui_set_status_line(lcd, "detect: fail");
+            }
+        } else if (st7789_is_initialized(lcd)) {
+            camera_ui_set_status_line(lcd, "detect: ball");
+        }
     } else {
         if (st7789_is_initialized(lcd)) {
             camera_ui_set_status_line(lcd, "cam: init fail");
@@ -224,6 +239,10 @@ static status_t app_init_platform(void)
     if (BoardInit() != STATUS_OK) {
         LOG_ERROR("BoardInit failed");
         return STATUS_FAIL;
+    }
+
+    if (servo_init() != STATUS_OK) {
+        LOG_WARN("servo_init failed (gimbal unavailable)");
     }
 
     /*

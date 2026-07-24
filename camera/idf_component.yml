@@ -1,5 +1,5 @@
-## camera 不依赖 Component Registry 的摄像头组件。
-## OV2640 使用仓库 cbb/ov2640。端侧检测模型（esp_dl）本阶段不接入。
+## camera 使用仓库内 esp_dl + ball_detect（钢珠 ESPDet）。
+## OV2640 使用仓库 cbb/ov2640。
 dependencies:
   idf:
     version: ">=5.5.0"
