@@ -17,6 +17,7 @@
 #include "camera_model.h"
 #include "web_pages.h"
 #include "servo_ctrl.h"
+#include "camera_spi_host.h"
 
 #include "type.h"
 
@@ -243,6 +244,10 @@ static status_t app_init_platform(void)
 
     if (servo_init() != STATUS_OK) {
         LOG_WARN("servo_init failed (gimbal unavailable)");
+    }
+
+    if (camera_spi_host_start() != STATUS_OK) {
+        LOG_WARN("camera_spi_host_start failed (MCU link unavailable)");
     }
 
     /*

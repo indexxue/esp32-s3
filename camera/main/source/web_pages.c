@@ -337,30 +337,45 @@ static bool web_parse_f32_after_key(const char *body, const char *key, float *ou
 
 static esp_err_t web_api_servo_status_json(httpd_req_t *req)
 {
-    char  body[256];
-    float pan  = 0.0f;
-    float tilt = 0.0f;
-    bool  ready;
+    char            body[384];
+    float           pan  = 0.0f;
+    float           tilt = 0.0f;
+    uint16_t        pan_us  = 0U;
+    uint16_t        tilt_us = 0U;
+    servo_limits_t  lim;
+    bool            ready;
+
+    (void)memset(&lim, 0, sizeof(lim));
+    (void)servo_get_limits(&lim);
 
     ready = (servo_is_ready() != FALSE);
     if (ready) {
         (void)servo_get_angle(SERVO_CH_PAN, &pan);
         (void)servo_get_angle(SERVO_CH_TILT, &tilt);
+        (void)servo_get_pulse_us(SERVO_CH_PAN, &pan_us);
+        (void)servo_get_pulse_us(SERVO_CH_TILT, &tilt_us);
     }
 
     (void)snprintf(body,
                    sizeof(body),
                    "{\"ok\":true,\"ready\":%s,\"pan_deg\":%.1f,\"tilt_deg\":%.1f,"
-                   "\"pan_min\":%d,\"pan_max\":%d,\"tilt_min\":%d,\"tilt_max\":%d,"
-                   "\"center\":%d,\"step_default\":5}",
+                   "\"pan_us\":%u,\"tilt_us\":%u,"
+                   "\"pan_min\":%.1f,\"pan_max\":%.1f,\"tilt_min\":%.1f,\"tilt_max\":%.1f,"
+                   "\"angle_max\":%.0f,\"center\":%.0f,\"pulse_min\":%u,\"pulse_max\":%u,"
+                   "\"step_default\":5}",
                    ready ? "true" : "false",
                    (double)pan,
                    (double)tilt,
-                   BOARD_SERVO_PAN_MIN_DEG,
-                   BOARD_SERVO_PAN_MAX_DEG,
-                   BOARD_SERVO_TILT_MIN_DEG,
-                   BOARD_SERVO_TILT_MAX_DEG,
-                   BOARD_SERVO_CENTER_DEG);
+                   (unsigned)pan_us,
+                   (unsigned)tilt_us,
+                   (double)lim.pan_min_deg,
+                   (double)lim.pan_max_deg,
+                   (double)lim.tilt_min_deg,
+                   (double)lim.tilt_max_deg,
+                   (double)lim.angle_max_deg,
+                   (double)lim.center_deg,
+                   (unsigned)BOARD_SERVO_PULSE_MIN_US,
+                   (unsigned)BOARD_SERVO_PULSE_MAX_US);
     return web_send_json(req, body);
 }
 
@@ -375,16 +390,30 @@ static esp_err_t web_api_servo_status_get(httpd_req_t *req)
 /**
  * POST /api/servo
  * {"center":1}
- * {"pan":90} / {"tilt":90}          绝对角
- * {"pan_delta":5} / {"tilt_delta":-5} 相对步进
+ * {"pan":180} / {"tilt":180}              绝对角（0–angle_max，受软限位）
+ * {"pan_delta":5} / {"tilt_delta":-5}     相对步进
+ * {"pan_min":0,"pan_max":360,"tilt_min":60,"tilt_max":300}  改软限位
+ * {"limits_reset":1}                      恢复 board.h 默认限位
+ * {"pan_pulse":1500} / {"tilt_pulse":500} 原始脉宽 µs（绕过角度软限位，仍夹在 500–2500）
  */
 static esp_err_t web_api_servo_post(httpd_req_t *req)
 {
-    char     body[192];
+    char     body[256];
     int      received;
     float    v;
+    float    pan_min;
+    float    pan_max;
+    float    tilt_min;
+    float    tilt_max;
     uint16_t center16 = 0U;
+    uint16_t reset16  = 0U;
+    uint16_t pulse16  = 0U;
     bool     acted    = false;
+    bool     lim_any  = false;
+    const float *p_pan_min  = NULL;
+    const float *p_pan_max  = NULL;
+    const float *p_tilt_min = NULL;
+    const float *p_tilt_max = NULL;
     status_t st       = STATUS_OK;
 
     if (!web_local_peer_allowed(req)) {
@@ -406,6 +435,35 @@ static esp_err_t web_api_servo_post(httpd_req_t *req)
     }
     body[received] = '\0';
 
+    if (web_parse_u16_after_key(body, "\"limits_reset\"", &reset16) && (reset16 != 0U)) {
+        st    = servo_reset_limits();
+        acted = true;
+    }
+    if (web_parse_f32_after_key(body, "\"pan_min\"", &pan_min)) {
+        p_pan_min = &pan_min;
+        lim_any   = true;
+    }
+    if (web_parse_f32_after_key(body, "\"pan_max\"", &pan_max)) {
+        p_pan_max = &pan_max;
+        lim_any   = true;
+    }
+    if (web_parse_f32_after_key(body, "\"tilt_min\"", &tilt_min)) {
+        p_tilt_min = &tilt_min;
+        lim_any    = true;
+    }
+    if (web_parse_f32_after_key(body, "\"tilt_max\"", &tilt_max)) {
+        p_tilt_max = &tilt_max;
+        lim_any    = true;
+    }
+    if (lim_any) {
+        st = servo_set_limits(p_pan_min, p_pan_max, p_tilt_min, p_tilt_max);
+        if (st == STATUS_INVALID_ARG) {
+            (void)httpd_resp_set_status(req, "400 Bad Request");
+            return web_send_json(req, "{\"ok\":false,\"error\":\"bad_limits\"}");
+        }
+        acted = true;
+    }
+
     if (web_parse_u16_after_key(body, "\"center\"", &center16) && (center16 != 0U)) {
         st    = servo_center_all();
         acted = true;
@@ -418,7 +476,16 @@ static esp_err_t web_api_servo_post(httpd_req_t *req)
         st    = servo_nudge(SERVO_CH_TILT, v);
         acted = true;
     }
-    /* 绝对角：用更长键名 pan_delta 已先处理；此处匹配 "pan": / "tilt": */
+    /* 原始脉宽：绕过角度软限位，便于扫极限 */
+    if (web_parse_u16_after_key(body, "\"pan_pulse\"", &pulse16)) {
+        st    = servo_set_pulse_us(SERVO_CH_PAN, pulse16);
+        acted = true;
+    }
+    if (web_parse_u16_after_key(body, "\"tilt_pulse\"", &pulse16)) {
+        st    = servo_set_pulse_us(SERVO_CH_TILT, pulse16);
+        acted = true;
+    }
+    /* 绝对角：更长键名已先处理；此处匹配 "pan": / "tilt": */
     if (web_parse_f32_after_key(body, "\"pan\":", &v)) {
         st    = servo_set_angle(SERVO_CH_PAN, v);
         acted = true;

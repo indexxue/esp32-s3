@@ -9,6 +9,7 @@ idf_component_register(
         "source/camera_model.cpp"
         "source/web_pages.c"
         "source/servo_ctrl.c"
+        "source/camera_spi_host.c"
     INCLUDE_DIRS "." "source"
     EMBED_FILES "source/www/index.html"
     REQUIRES cbb common bsp_driver esp_timer app_update web_ctrl nvs_flash esp_new_jpeg ball_detect

@@ -450,11 +450,14 @@ static status_t board_st7789_init(void)
         return STATUS_FAIL;
     }
 
+    devCfg.host           = BOARD_ST7789_SPI_HOST;
     devCfg.chipSelectPin  = (s32_t)BOARD_ST7789_SPI_DEV_CS_PIN;
     devCfg.clockSpeedHz   = BOARD_ST7789_SPI_CLOCK_HZ;
     devCfg.mode           = SPI_CLOCK_MODE_0_E;
     devCfg.flags          = 0U;
     devCfg.queueSize      = 7U;
+    devCfg.csEnaPretrans  = 0U;
+    devCfg.csEnaPosttrans = 0U;
 
     if (SpiRegisterDevice(&devCfg) != TRUE) {
         LOG_ERROR("ST7789: SpiRegisterDevice failed, esp err %d", (int)SpiGetLastError());

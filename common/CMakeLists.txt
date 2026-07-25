@@ -15,6 +15,7 @@ idf_component_register(
         "src/battery.c"
         "src/buzzer.c"
         "src/cmd.c"
+        "src/spi_link.c"
     INCLUDE_DIRS "inc" "ota/inc"
     REQUIRES log bsp_driver cbb freertos fatfs vfs esp_driver_sdmmc esp_timer sdmmc nvs_flash app_update esp_http_client mbedtls
 )

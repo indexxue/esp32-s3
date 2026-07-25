@@ -225,7 +225,8 @@
  * 画面坐标：原点左上，x 右、y 下。
  *   Pan  (PWM1/GPIO46)：err_x>0 → 右转（使目标回中）；反向时翻 BOARD_SERVO_PAN_SIGN
  *   Tilt (PWM2/GPIO3) ：err_y>0 → 下俯；反向时翻 BOARD_SERVO_TILT_SIGN
- * 软限位为保守初值，上板标定后再改。
+ * 角度 0–ANGLE_MAX 线性映射 PULSE_MIN–MAX µs；中位 ANGLE_MAX/2 → CENTER_PULSE。
+ * 软限位为上电默认（Pan 全行程、Tilt 240° 窗），运行时可由 /api/servo 改。
  */
 #define BOARD_SERVO_PAN_PIN (46)
 #define BOARD_SERVO_TILT_PIN (3)
@@ -236,23 +237,35 @@
 #define BOARD_SERVO_PULSE_MIN_US (500U)
 #define BOARD_SERVO_PULSE_MAX_US (2500U)
 #define BOARD_SERVO_CENTER_PULSE_US (1500U)
-#define BOARD_SERVO_CENTER_DEG (90)
-#define BOARD_SERVO_PAN_MIN_DEG (20)
-#define BOARD_SERVO_PAN_MAX_DEG (160)
-#define BOARD_SERVO_TILT_MIN_DEG (40)
-#define BOARD_SERVO_TILT_MAX_DEG (140)
+#define BOARD_SERVO_ANGLE_MAX_DEG (360)
+#define BOARD_SERVO_CENTER_DEG (180)
+#define BOARD_SERVO_PAN_MIN_DEG (0)
+#define BOARD_SERVO_PAN_MAX_DEG (360)
+/* Tilt 机械行程约 240°：以中位对称默认窗 60–300 */
+#define BOARD_SERVO_TILT_MIN_DEG (60)
+#define BOARD_SERVO_TILT_MAX_DEG (300)
 #define BOARD_SERVO_PAN_SIGN (1)
 #define BOARD_SERVO_TILT_SIGN (1)
 
 /*
- * 对外通信 SPI1 预留脚（产品名 SPI1 → 硬件 SPI3，因 SPI2 给 ST7789）。
- * 本阶段仅宏定义，禁止 SpiDriverInit / spi_bus_initialize。
+ * 对外通信 SPI1（产品名）→ 硬件 SPI3；与 ST7789 的 SPI2 隔离。
+ * 锁定：Mode1 (CPOL=0,CPHA=1) / 1 MHz / 32B / ~20 ms。
+ * SCK=21 CS=14；逻辑 MOSI=GPIO45、逻辑 MISO=GPIO47（软件对调，对接 TM4C 丝印）。
  */
 #define BOARD_SPI1_HOST (SPI_HOST_3_E)
 #define BOARD_SPI1_PIN_SCK (21)
-#define BOARD_SPI1_PIN_MOSI (47)
-#define BOARD_SPI1_PIN_MISO (45)
+#define BOARD_SPI1_PIN_MOSI (45)
+#define BOARD_SPI1_PIN_MISO (47)
 #define BOARD_SPI1_PIN_CS (14)
+#ifndef BOARD_SPI1_CLOCK_HZ
+#define BOARD_SPI1_CLOCK_HZ (1000000U)
+#endif
+#ifndef BOARD_SPI1_POLL_MS
+#define BOARD_SPI1_POLL_MS (20U)
+#endif
+#ifndef BOARD_SPI1_ENABLE
+#define BOARD_SPI1_ENABLE (1)
+#endif
 
 /* camera: no battery ADC（GPIO3 已划给舵机 Tilt，勿作 ADC） */
 #define BOARD_BATTERY_PIN_ENABLE (-1)

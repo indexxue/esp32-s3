@@ -227,10 +227,16 @@
       max-width: 480px;
     }
     .cam-ctrl label { font-size: 0.85rem; color: var(--muted); }
-    .cam-ctrl select, .cam-ctrl input[type="range"] {
+    .cam-ctrl select, .cam-ctrl input[type="range"], .cam-ctrl input[type="number"] {
       margin-left: 6px;
       vertical-align: middle;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
     }
+    .cam-ctrl input[type="number"] { width: 5.5em; }
     .cam-ctrl .qval { font-variant-numeric: tabular-nums; min-width: 1.8em; display: inline-block; }
     .gimbal-pad {
       display: grid;
@@ -387,7 +393,21 @@
           <button type="button" class="btn btn-ghost busy g-right" data-sx="1" data-sy="0" title="偏航右转（点按/长按）">▶</button>
           <button type="button" class="btn btn-ghost busy g-down" data-sx="0" data-sy="1" title="俯仰下俯（点按/长按）">▼</button>
         </div>
-        <p class="hint">方向键支持点按一步或长按连续转动；长按期间保持预览暂停，松手约 0.7s 后恢复。右/下为正。板端长按 GPIO0 也可回中。</p>
+        <div class="cam-ctrl" style="margin-top:14px">
+          <label>Pan min <input type="number" id="servoPanMin" class="busy" step="1" min="0" max="360" /></label>
+          <label>max <input type="number" id="servoPanMax" class="busy" step="1" min="0" max="360" /></label>
+          <label>Tilt min <input type="number" id="servoTiltMin" class="busy" step="1" min="0" max="360" /></label>
+          <label>max <input type="number" id="servoTiltMax" class="busy" step="1" min="0" max="360" /></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="btn btn-primary busy" onclick="servoApplyLimits()">应用限位</button>
+          <button type="button" class="btn btn-ghost busy" onclick="servoResetLimits()">恢复默认</button>
+          <button type="button" class="btn btn-ghost busy" onclick="servoGotoLimit('pan','min')">Pan→min</button>
+          <button type="button" class="btn btn-ghost busy" onclick="servoGotoLimit('pan','max')">Pan→max</button>
+          <button type="button" class="btn btn-ghost busy" onclick="servoGotoLimit('tilt','min')">Tilt→min</button>
+          <button type="button" class="btn btn-ghost busy" onclick="servoGotoLimit('tilt','max')">Tilt→max</button>
+        </div>
+        <p class="hint">角度 0–360°（中位 180°）。默认俯仰软限位 60–300（约 240°）；可改限位后点「→min/max」测极限。原始脉宽可用 API <code>pan_pulse</code>/<code>tilt_pulse</code>。右/下为正；板端长按 GPIO0 回中。</p>
         <pre class="log" id="servo-out" hidden></pre>
       </div>
     </section>
@@ -991,6 +1011,19 @@
       }
     }
 
+    function fillServoLimitInputs(j) {
+      function setNum(id, v) {
+        var el = document.getElementById(id);
+        if (el && typeof v === "number") {
+          el.value = String(v);
+        }
+      }
+      setNum("servoPanMin", Number(j.pan_min));
+      setNum("servoPanMax", Number(j.pan_max));
+      setNum("servoTiltMin", Number(j.tilt_min));
+      setNum("servoTiltMax", Number(j.tilt_max));
+    }
+
     function applyServoStatus(j) {
       var st = document.getElementById("servo-st");
       var ang = document.getElementById("servoAngles");
@@ -1000,15 +1033,18 @@
       if (j.ready) {
         st.innerHTML = "<span class=\"chip ok\">舵机<strong>就绪</strong></span>" +
           "<span class=\"chip\">限位 pan " + j.pan_min + "–" + j.pan_max +
-          " / tilt " + j.tilt_min + "–" + j.tilt_max + "</span>";
+          " / tilt " + j.tilt_min + "–" + j.tilt_max + "</span>" +
+          "<span class=\"chip\">满量程 0–" + (j.angle_max != null ? j.angle_max : 360) + "°</span>";
       } else {
         st.innerHTML = "<span class=\"chip warn\">舵机<strong>未就绪</strong></span>";
       }
       if (ang) {
         ang.textContent = j.ready
-          ? ("pan=" + Number(j.pan_deg).toFixed(1) + "°  tilt=" + Number(j.tilt_deg).toFixed(1) + "°")
+          ? ("pan=" + Number(j.pan_deg).toFixed(1) + "° (" + (j.pan_us || "—") + "µs)  " +
+             "tilt=" + Number(j.tilt_deg).toFixed(1) + "° (" + (j.tilt_us || "—") + "µs)")
           : "pan=— tilt=—";
       }
+      fillServoLimitInputs(j);
     }
 
     async function refreshServoStatus() {
@@ -1157,6 +1193,55 @@
     async function servoCenter() {
       servoHoldStop();
       return servoPost({ center: 1 });
+    }
+
+    function servoReadLimitInputs() {
+      function num(id) {
+        var el = document.getElementById(id);
+        var n = el ? parseFloat(el.value) : NaN;
+        return isFinite(n) ? n : null;
+      }
+      return {
+        pan_min: num("servoPanMin"),
+        pan_max: num("servoPanMax"),
+        tilt_min: num("servoTiltMin"),
+        tilt_max: num("servoTiltMax")
+      };
+    }
+
+    async function servoApplyLimits() {
+      var lim = servoReadLimitInputs();
+      var body = {};
+      var k;
+      for (k in lim) {
+        if (lim[k] != null) {
+          body[k] = lim[k];
+        }
+      }
+      if (!Object.keys(body).length) {
+        showLog("servo-out", "限位输入无效", true);
+        return false;
+      }
+      servoHoldStop();
+      return servoPost(body);
+    }
+
+    async function servoResetLimits() {
+      servoHoldStop();
+      return servoPost({ limits_reset: 1 });
+    }
+
+    async function servoGotoLimit(axis, which) {
+      var lim = servoReadLimitInputs();
+      var key = axis + "_" + which;
+      var body = {};
+      if (lim[key] == null) {
+        showLog("servo-out", "限位输入无效", true);
+        return false;
+      }
+      body[axis] = lim[key];
+      servoHoldStop();
+      return servoPost(body);
     }
 
     function servoHoldClearBtn() {

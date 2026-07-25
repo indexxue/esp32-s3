@@ -1,6 +1,6 @@
 /**
  * @file servo_ctrl.c
- * @brief MG996R 双舵机：50 Hz LEDC，脉宽 500–2500 µs ↔ 角度，软限位。
+ * @brief MG996R 双舵机：50 Hz LEDC，脉宽 ↔ 0–360°，运行时软限位。
  *        控制入口：网页 REST / 板端按键；不走串口命令。
  */
 
@@ -17,7 +17,7 @@
 
 #define SERVO_PERIOD_US (1000000U / BOARD_SERVO_PWM_FREQ_HZ)
 #define SERVO_ANGLE_MIN_ABS (0.0f)
-#define SERVO_ANGLE_MAX_ABS (180.0f)
+#define SERVO_ANGLE_MAX_ABS ((float)BOARD_SERVO_ANGLE_MAX_DEG)
 
 typedef struct {
     float    angle_deg;
@@ -28,6 +28,11 @@ typedef struct {
 static servo_state_t s_pan;
 static servo_state_t s_tilt;
 static bool_t        s_inited;
+
+static float s_pan_min_deg  = (float)BOARD_SERVO_PAN_MIN_DEG;
+static float s_pan_max_deg  = (float)BOARD_SERVO_PAN_MAX_DEG;
+static float s_tilt_min_deg = (float)BOARD_SERVO_TILT_MIN_DEG;
+static float s_tilt_max_deg = (float)BOARD_SERVO_TILT_MAX_DEG;
 
 static servo_state_t *servo_state(servo_ch_t ch)
 {
@@ -54,11 +59,11 @@ static float servo_clamp_deg(servo_ch_t ch, float deg)
     float hi;
 
     if (ch == SERVO_CH_PAN) {
-        lo = (float)BOARD_SERVO_PAN_MIN_DEG;
-        hi = (float)BOARD_SERVO_PAN_MAX_DEG;
+        lo = s_pan_min_deg;
+        hi = s_pan_max_deg;
     } else {
-        lo = (float)BOARD_SERVO_TILT_MIN_DEG;
-        hi = (float)BOARD_SERVO_TILT_MAX_DEG;
+        lo = s_tilt_min_deg;
+        hi = s_tilt_max_deg;
     }
     if (deg < lo) {
         return lo;
@@ -154,6 +159,43 @@ static status_t servo_apply_pulse(servo_ch_t ch, uint16_t us)
     return STATUS_OK;
 }
 
+static status_t servo_clamp_current_to_limits(void)
+{
+    status_t st;
+    float    deg;
+
+    if (s_pan.ready != FALSE) {
+        deg = servo_clamp_deg(SERVO_CH_PAN, s_pan.angle_deg);
+        if (deg != s_pan.angle_deg) {
+            st = servo_apply_pulse(SERVO_CH_PAN, servo_deg_to_pulse(deg));
+            if (st != STATUS_OK) {
+                return st;
+            }
+        }
+    }
+    if (s_tilt.ready != FALSE) {
+        deg = servo_clamp_deg(SERVO_CH_TILT, s_tilt.angle_deg);
+        if (deg != s_tilt.angle_deg) {
+            st = servo_apply_pulse(SERVO_CH_TILT, servo_deg_to_pulse(deg));
+            if (st != STATUS_OK) {
+                return st;
+            }
+        }
+    }
+    return STATUS_OK;
+}
+
+static bool_t servo_limit_pair_ok(float lo, float hi)
+{
+    if (lo < SERVO_ANGLE_MIN_ABS || hi > SERVO_ANGLE_MAX_ABS) {
+        return FALSE;
+    }
+    if (lo >= hi) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
 status_t servo_init(void)
 {
     PwmDriverConfig_t  pwm = {0};
@@ -191,7 +233,11 @@ status_t servo_init(void)
         return STATUS_FAIL;
     }
 
-    s_inited = TRUE;
+    s_inited       = TRUE;
+    s_pan_min_deg  = (float)BOARD_SERVO_PAN_MIN_DEG;
+    s_pan_max_deg  = (float)BOARD_SERVO_PAN_MAX_DEG;
+    s_tilt_min_deg = (float)BOARD_SERVO_TILT_MIN_DEG;
+    s_tilt_max_deg = (float)BOARD_SERVO_TILT_MAX_DEG;
     (void)memset(&s_pan, 0, sizeof(s_pan));
     (void)memset(&s_tilt, 0, sizeof(s_tilt));
 
@@ -201,12 +247,20 @@ status_t servo_init(void)
         return st;
     }
 
-    LOG_INFO("%s: pan=GPIO%d tilt=GPIO%d @ %u Hz center=%u us",
+    LOG_INFO("%s: pan=GPIO%d tilt=GPIO%d @ %u Hz center=%d deg (%u us) map=0..%d",
              TAG,
              BOARD_SERVO_PAN_PIN,
              BOARD_SERVO_TILT_PIN,
              (unsigned)BOARD_SERVO_PWM_FREQ_HZ,
-             (unsigned)BOARD_SERVO_CENTER_PULSE_US);
+             BOARD_SERVO_CENTER_DEG,
+             (unsigned)BOARD_SERVO_CENTER_PULSE_US,
+             BOARD_SERVO_ANGLE_MAX_DEG);
+    LOG_INFO("%s: soft limits pan=%d..%d tilt=%d..%d (runtime tunable)",
+             TAG,
+             BOARD_SERVO_PAN_MIN_DEG,
+             BOARD_SERVO_PAN_MAX_DEG,
+             BOARD_SERVO_TILT_MIN_DEG,
+             BOARD_SERVO_TILT_MAX_DEG);
     return STATUS_OK;
 }
 
@@ -245,6 +299,20 @@ status_t servo_get_angle(servo_ch_t ch, float *deg)
     return STATUS_OK;
 }
 
+status_t servo_get_pulse_us(servo_ch_t ch, uint16_t *us)
+{
+    const servo_state_t *st = servo_state(ch);
+
+    if ((st == NULL) || (us == NULL)) {
+        return STATUS_INVALID_ARG;
+    }
+    if ((s_inited == FALSE) || (st->ready == FALSE)) {
+        return STATUS_INVALID_STATE;
+    }
+    *us = st->pulse_us;
+    return STATUS_OK;
+}
+
 status_t servo_center_all(void)
 {
     status_t st;
@@ -264,4 +332,77 @@ status_t servo_nudge(servo_ch_t ch, float delta_deg)
         return STATUS_INVALID_STATE;
     }
     return servo_set_angle(ch, cur + delta_deg);
+}
+
+status_t servo_get_limits(servo_limits_t *out)
+{
+    if (out == NULL) {
+        return STATUS_INVALID_ARG;
+    }
+    out->pan_min_deg   = s_pan_min_deg;
+    out->pan_max_deg   = s_pan_max_deg;
+    out->tilt_min_deg  = s_tilt_min_deg;
+    out->tilt_max_deg  = s_tilt_max_deg;
+    out->angle_max_deg = SERVO_ANGLE_MAX_ABS;
+    out->center_deg    = (float)BOARD_SERVO_CENTER_DEG;
+    return STATUS_OK;
+}
+
+status_t servo_set_limits(const float *pan_min,
+                          const float *pan_max,
+                          const float *tilt_min,
+                          const float *tilt_max)
+{
+    float new_pan_min  = s_pan_min_deg;
+    float new_pan_max  = s_pan_max_deg;
+    float new_tilt_min = s_tilt_min_deg;
+    float new_tilt_max = s_tilt_max_deg;
+
+    if (s_inited == FALSE) {
+        return STATUS_INVALID_STATE;
+    }
+
+    if (pan_min != NULL) {
+        new_pan_min = *pan_min;
+    }
+    if (pan_max != NULL) {
+        new_pan_max = *pan_max;
+    }
+    if (tilt_min != NULL) {
+        new_tilt_min = *tilt_min;
+    }
+    if (tilt_max != NULL) {
+        new_tilt_max = *tilt_max;
+    }
+
+    if (servo_limit_pair_ok(new_pan_min, new_pan_max) == FALSE) {
+        return STATUS_INVALID_ARG;
+    }
+    if (servo_limit_pair_ok(new_tilt_min, new_tilt_max) == FALSE) {
+        return STATUS_INVALID_ARG;
+    }
+
+    s_pan_min_deg  = new_pan_min;
+    s_pan_max_deg  = new_pan_max;
+    s_tilt_min_deg = new_tilt_min;
+    s_tilt_max_deg = new_tilt_max;
+
+    LOG_INFO("%s: limits pan=%.1f..%.1f tilt=%.1f..%.1f",
+             TAG,
+             (double)s_pan_min_deg,
+             (double)s_pan_max_deg,
+             (double)s_tilt_min_deg,
+             (double)s_tilt_max_deg);
+
+    return servo_clamp_current_to_limits();
+}
+
+status_t servo_reset_limits(void)
+{
+    float pan_min  = (float)BOARD_SERVO_PAN_MIN_DEG;
+    float pan_max  = (float)BOARD_SERVO_PAN_MAX_DEG;
+    float tilt_min = (float)BOARD_SERVO_TILT_MIN_DEG;
+    float tilt_max = (float)BOARD_SERVO_TILT_MAX_DEG;
+
+    return servo_set_limits(&pan_min, &pan_max, &tilt_min, &tilt_max);
 }

@@ -110,9 +110,15 @@ sdkconfig（见 sdkconfig.defaults）：
 
 已完成：SoftAP 采数标注、ESPDet 训量化、固件推理、LCD 绿框。
 后续可选：`/api/detect/latest` 网页客户端叠框、云台按框中心粗跟、补困难样本再训。
+SPI 主机对外通信（与小车 TM4C）：协议正文 `plan/camera_spi_host_protocol_plan.md`（v1.2）；
+  MCU 评审结论 + ESP 实施清单 `plan/camera-spi-host-protocol-review.md`（v2.0）。
+  固件：SPI3 Master Mode1 / 1 MHz / 20 ms HEARTBEAT（`camera_spi_host`）；
+  引脚 SCK=21 逻辑MOSI=45 逻辑MISO=47 CS=14（软件对调）。
 
 舵机轴：PWM1=GPIO46 Pan；PWM2=GPIO3 Tilt。画面 err_x>0 → pan 右；err_y>0 → tilt 下。
 装反时改 `BOARD_SERVO_PAN_SIGN` / `BOARD_SERVO_TILT_SIGN`（`common/inc/board.h`）。
+角度：0–360° ↔ 500–2500 µs，中位 180°=1500 µs。默认软限位 Pan 0–360、Tilt 60–300（约 240°）。
+软限位可运行时改（不写 NVS，重启恢复 board.h 默认）。
 
 ================================================================================
 工程命令
@@ -134,16 +140,22 @@ Web（加入 SoftAP ESP32-WebCtrl / esp32web1 后）:
   http://192.168.4.1/ota         OTA 上传
   预览：JPEG 轮询 /api/camera/camera.jpg ；可选 MJPEG /api/camera/stream.mjpg
   舵机：GET /api/servo/status ；POST /api/servo
-        {"center":1} | {"pan_delta":5} | {"tilt":90}
-  网页 D-pad：点按一步、长按连续；长按期间暂停 MJPEG，松手约 0.7s 后恢复。
-  板键 GPIO0 长按回中。无 USB 串口舵机命令。
+        {"center":1} | {"pan_delta":5} | {"tilt":180}
+        {"pan_min":0,"pan_max":360,"tilt_min":60,"tilt_max":300}  改软限位
+        {"limits_reset":1}                                       恢复默认限位
+        {"pan":0} / {"tilt":300}                                 测极限角
+        {"pan_pulse":500} / {"tilt_pulse":2500}                  原始脉宽（绕过角度软限位）
+  网页 D-pad：点按一步、长按连续；可改限位并一键到 min/max。
+  长按期间暂停 MJPEG，松手约 0.7s 后恢复。板键 GPIO0 长按回中。无 USB 串口舵机命令。
 
 Pins: see common/inc/board.h #if defined(BOARD_PROFILE_CAMERA)
   - I2C GPIO4/5: OV2640 SCCB
   - N16R8: GPIO35/36/37 Octal PSRAM；按键 GPIO0
   - WS2812 GPIO48（1 LED）
   - Servo Pan GPIO46；Tilt GPIO3；LEDC 50 Hz
-  - SPI1 预留（本阶段不 init）：SCK=21, MOSI=47, MISO=45, CS=14
+  - SPI1 对外（硬件 SPI3，与 ST7789 的 SPI2 隔离）：SCK=21, CS=14；
+    逻辑 MOSI=GPIO45、逻辑 MISO=GPIO47（软件对调）；
+    Mode1 / 1 MHz / 32B HEARTBEAT 轮询（`camera_spi_host`）
   - ST7789 SPI2：SCK=39, MOSI=38, CS=42, DC=40, RST=41, BL=1
   - OV2640 DVP：XCLK=15, D0–D7=11/9/8/10/12/18/17/16
 
