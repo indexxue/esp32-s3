@@ -43,52 +43,61 @@ camera — ESP32-S3 摄像头预览 + 钢珠检测 + 云台
 说明：Ultralytics 默认导出的 `best.onnx` **不能直接上 ESP32**（Detect 头与 ESP-DL
 后处理不兼容）。板端必须以 ESPDet + `.espdl` 为准；YOLOv8 权重仅作 PC 对照。
 
----- 3. ESPDet 训练 + 量化（推荐 WSL） ----
+---- 3. ESPDet 训练 + 量化（用户在 WSL 自行执行） ----
 
-使用乐鑫 [esp-detection](https://github.com/espressif/esp-detection)（自行 clone，
-勿整仓提交到本仓库）。
+完整命令与排错见：`camera/tools/esp-detection/过程文档.md`  
+（训练/量化由用户在终端跑；下文为摘要。）
 
-1) 将单类 zip 解压到 esp-detection：
-     datasets/steel_ball_1cls/{images,labels}/{train,val}
-2) 编写 `cfg/datasets/steel_ball.yaml`：
-     path: datasets/steel_ball_1cls
-     train: images/train
-     val: images/val
-     names: { 0: ball }
-3) 校准图：把 val 图拷到 `deploy/ball_calib/`。
-4) 小显存/CPU：改 `train.py` 中 `epochs`/`batch`/`device`（示例：200 / 8 / cpu）。
-5) 一键（目标芯片必须 esp32s3）：
+目录：`camera/tools/esp-detection/`（已在本仓库 tools 下）。
+
+1) 解压单类 zip → `datasets/steel_ball_1cls/`；val 图拷到 `deploy/ball_calib/`。
+2) 确认 `cfg/datasets/steel_ball.yaml`（path=datasets/steel_ball_1cls，names 0:ball）。
+3) 按需改 `train.py`：`epochs=200` / `batch=8` / `device=cpu`。
+4) 训练：
+     conda activate espdet
      python espdet_run.py \
-       --class_name ball \
-       --pretrained_path None \
+       --class_name ball --pretrained_path None \
        --dataset "cfg/datasets/steel_ball.yaml" \
-       --size 224 224 \
-       --target "esp32s3" \
+       --size 224 224 --target "esp32s3" \
        --calib_data "deploy/ball_calib" \
        --espdl "espdet_pico_224_224_ball.espdl" \
        --img "ball_test.jpg"
-6) 若一键脚本在导出后中断，可手动量化：
-     from deploy.quantize import quant_espdet
-     quant_espdet(onnx_path='runs/detect/train/weights/best.onnx',
-                  target='esp32s3', num_of_bits=8, device='cpu', batchsz=4,
-                  imgsz=224, calib_dir='deploy/ball_calib',
-                  espdl_model_path='espdet_pico_224_224_ball.espdl')
+5) 若末尾 TypeError：可忽略。以日志中的 run 目录为准（可能是 train / train-2…），
+   对已生成的 best.onnx 手动量化：
+     python /tmp/quant_ball.py   # 脚本内容见 过程文档.md §4
+6) 产物在 esp-detection 根目录：`espdet_pico_224_224_ball.espdl`（约数百 KB）。
+   CPU 量化可能数分钟无输出，属正常。
 
-产物：`espdet_pico_224_224_ball.espdl`（约数百 KB）。
+---- 4. 带日期导入固件并编译 ----
 
----- 4. 导入固件 ----
+量化产物默认：`camera/tools/esp-detection/espdet_pico_224_224_ball.espdl`
 
-1) 将 `.espdl` 放到：
-     camera/components/ball_detect/models/s3/espdet_pico_224_224_ball.espdl
-2) 组件 `ball_detect` 在构建时打包进 flash rodata；`main` 通过 `camera_model`
-   加载并推理。
-3) 编译烧录：
-     idf -Project camera build
-     idf -Project camera -p PORT flash monitor
-4) 验收：串口可见 `cam_model` / `infer ... boxes=N`；LCD 预览叠绿色检测框。
+固件槽位文件名固定（CMake / 加载名勿改）：
+  camera/components/ball_detect/models/s3/espdet_pico_224_224_ball.espdl
+
+每次训完用导入脚本（会打日期戳 + 写 boot 日志宏）：
+  py -3 camera\tools\promote_ball_model.py --note "train-2 mAP50=0.943"
+
+脚本会：
+  1) 归档带日期副本：
+       models/s3/archive/espdet_pico_224_224_ball_YYYYMMDD_HHMMSS.espdl
+  2) 覆盖上述固定文件名（编入 flash rodata 用）
+  3) 更新 components/ball_detect/model_stamp.h
+       BALL_DETECT_MODEL_STAMP / NOTE / ARCHIVE
+
+然后编译烧录（仓库根目录）：
+  idf -Project camera build
+  idf -Project camera -p PORT flash monitor
+
+验收：
+  串口 `cam_model init ok (espdet ball stamp=YYYYMMDD_HHMMSS note=...)`
+  以及 `infer ... boxes=N`；LCD 绿框。
+  若板上仍像旧模型：删 camera\build 后重编。
+
+详情：`camera/tools/esp-detection/过程文档.md` §5（本地训练树内；本 README 为准入门）。
 
 关键源码：
-  components/ball_detect/     ESPDet 封装 + 模型文件
+  components/ball_detect/     ESPDet 封装 + models/s3/*.espdl
   main/source/camera_model.*  检测任务与结果缓存
   main/source/camera_ui.*     LCD 画框
   main/source/camera_sensor.* 预览；blit 后叠框
@@ -143,4 +152,5 @@ OTA:
   manifest key: products.camera.ota
   上传 camera_*.bin 至 http://<device>/ota
 
-相关工具说明：`camera/tools/steel_ball_annotate/README.txt`
+相关工具说明：`camera/tools/steel_ball_annotate/README.txt`  
+模型导入（带日期）：`camera/tools/promote_ball_model.py`；训练细则：`camera/tools/esp-detection/过程文档.md`

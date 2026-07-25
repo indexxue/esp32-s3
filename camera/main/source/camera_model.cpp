@@ -17,6 +17,7 @@
 
 #include "camera_sensor.h"
 #include "espdet_detect.hpp"
+#include "model_stamp.h"
 #include "dl_image_define.hpp"
 #include "log.h"
 #include "lcd.h"
@@ -167,7 +168,10 @@ extern "C" status_t camera_model_init(void)
     }
 
     s_ready = TRUE;
-    LOG_INFO("%s init ok (espdet ball)", TAG);
+    LOG_INFO("%s init ok (espdet ball stamp=%s note=%s)",
+             TAG,
+             BALL_DETECT_MODEL_STAMP,
+             BALL_DETECT_MODEL_NOTE);
     return STATUS_OK;
 }
 

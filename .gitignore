@@ -65,3 +65,7 @@ camera/tools/steel_ball_annotate/过程文档.md
 
 # esp-detection train tree (clone locally; do not commit)
 camera/tools/esp-detection/
+
+# dated ball model archives (active .espdl + model_stamp.h stay tracked)
+camera/components/ball_detect/models/s3/archive/*.espdl
+camera/components/ball_detect/models/s3/MODEL_STAMP.txt

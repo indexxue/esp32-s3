@@ -1,0 +1,3 @@
+# Archived dated .espdl copies (espdet_pico_224_224_ball_YYYYMMDD_HHMMSS.espdl).
+# Active firmware model is the sibling file: ../espdet_pico_224_224_ball.espdl
+# Promote with: camera/tools/esp-detection/promote_ball_model.py
