@@ -1,10 +1,10 @@
-# Camera ↔ TM4C SPI 通信协议（双方公共约定）
+# Camera ↔ MCU SPI 通信协议（双方公共约定）
 
-**版本**：1.7  
+**版本**：1.9  
 **日期**：2026-07-26  
 **路径（ESP 仓库）**：`camera/plan/camera-spi-protocol.md`  
 **文档性质**：ESP32-S3 Camera 与 TM4C123 小车主控的**唯一公共协议源**  
-**同步约定**：任一侧改帧格式 / `msg_id` / flags / CRC / 脚位 / Mode，须**升版本号 + 改变更记录**，并把本文同步到对端仓库同名文件（建议 MCU 侧亦放 `plan/camera-spi-protocol.md` 或 `docs/camera-spi-protocol.md`）。  
+**适用仓库**：两侧固件均可引用本文；改字典须同步改两端常量头文件  
 **实现锚点**：
 
 | 侧 | 常量 / 模块 |
@@ -12,7 +12,7 @@
 | TM4C | `Common/inc/camera_spi.h`、`Common/src/camera_spi.c`（L1～L3 已落地） |
 | ESP32 | `camera/main/source/spi_link.h`、`camera_spi_host.c`（与本文 `msg_id` / flags / CRC 一致） |
 
-> **请只按本文实施。** 旧路径 `plan/camera_spi_host_protocol_plan.md`、旧文件名 `camera-spi-role-agreement.md`，以及 Mode0、ESP MOSI=47/MISO=45、「链路仍 DOWN」等描述一律作废。
+> **请只按本文实施。** 旧文件名 `camera-spi-role-agreement.md`、`camera_spi_host_protocol_plan.md`，以及 Mode0、ESP MOSI=47/MISO=45、「链路仍 DOWN」等描述一律作废。
 
 ---
 
@@ -20,26 +20,26 @@
 
 | 侧 | SPI 角色 | 职责 |
 |----|----------|------|
-| Camera（ESP32-S3） | **Master** | 约每 20 ms 发起 32B 全双工交换；执行控制；回 `CTRL_ACK`；按优先级上报 DETECT/SERVO |
+| Camera（ESP32-S3） | **Master** | 约每 20 ms 发起 32B 全双工交换；执行控制；回 `CTRL_ACK`；按优先级上报 DETECT/SERVO/NET_INFO |
 | 小车 MCU（TM4C123） | **Slave** | CS 前装好本拍 TX；决策并投递 `CTRL_CMD`；置 `SLAVE_HAS_CMD`；对账 `req_id`；消费上报 |
 
 | 方向 | 谁发 | 内容 |
 |------|------|------|
 | 控制命令 | **MCU → Camera** | `CTRL_CMD (0x30)` + `SLAVE_HAS_CMD` |
 | 控制结果 | **Camera → MCU** | `CTRL_ACK (0x31)`，按 `req_id` 对账 |
-| 业务上报 | **Camera → MCU** | `DETECT_RESULT (0x10)`、`SERVO_TELEMETRY (0x20)` |
+| 业务上报 | **Camera → MCU** | `DETECT_RESULT (0x10)`、`SERVO_TELEMETRY (0x20)`、`NET_INFO (0x03)` |
 | 总线节奏 | **Camera** | 每约 20 ms 发起一帧全双工交换 |
 
 **一句话**：车（MCU）下命令，相机（ESP）干活并上报。
 
-**首版产品边界**：仅云台 + 检测；不进底盘运动闭环；不传 JPEG；无 IRQ；无多从机。
+**首版产品边界**：仅云台 + 检测；不进底盘运动闭环；**不传 JPEG**（图传走 WiFi HTTP）；无 IRQ；无多从机。
 
 **联调顺序（强制）**：HEARTBEAT 稳定 → 再开 DETECT/SERVO → 最后 CTRL。
 
-**当前基线（双方已确认）**：L0 / L1 HEARTBEAT 已通（Mode1 / 1 MHz / 20 ms / 32B）。
+**当前基线（双方已确认）**：L0～L3 + 真实 DETECT 已通；**SPI `NET_INFO`/`GET_NET_INFO` 已写入协议 v1.9**；TM4C 蓝牙已暴露舵机/检测/图传入口。
 
-**双方进度（2026-07-26）**：L0～L3 联调已通（含 `cam center` ACK）。  
-**ESP 下一步**：`DETECT_RESULT` / `SERVO_TELEMETRY` 接真实模块；`DETECT_ENABLE` 真开关推理；CTRL 舵机命令已驱动硬件；稳定性验收见 §8 D/G。
+**MCU 进度（2026-07-26）**：`camera_spi` + `proto` `0x0040`–`0x0045` + `proto_client` 相机页已合入。  
+**ESP 进度**：实现 `NET_INFO(0x03)` 与 `GET_NET_INFO(0x21)` 并与本文对齐。
 
 ---
 
@@ -112,7 +112,7 @@
 | N1 | 控制不保证 exactly-once | 命令幂等 + `req_id` |
 | N2 | 检测不保证每拍都发 | MCU 以最新帧为准 |
 | N3 | 同帧最多 2 框 | 优先高分 |
-| N4 | 不传 JPEG/图像 | 范围外 |
+| N4 | 不传 JPEG/图像 | 范围外；图传走 WiFi HTTP |
 | N5 | 无 IRQ 时 MCU→Camera 可能延迟 2～3 个轮询周期 | 接受轮询拉取 |
 | N6 | >1 MHz 不默认零误码 | 升钟前验收 |
 
@@ -191,10 +191,13 @@ CRC16 = 0x6EB9 → 帧末：B9 6E
 
 ### 4.5 Master 发送优先级（每 20 ms 最多一帧）
 
-1. 上拍 MISO 带 `SLAVE_HAS_CMD` → 本拍发 HEARTBEAT，便于 Slave 吐出 `CTRL_CMD`  
-2. 有新检测 → `DETECT_RESULT (0x10)`  
-3. 舵机遥测到期（建议 10～20 Hz）→ `SERVO_TELEMETRY (0x20)`  
-4. 否则 → `HEARTBEAT (0x01)`  
+1. 有待发 `CTRL_ACK` → 本拍发 `CTRL_ACK`  
+2. 上拍 MISO 带 `SLAVE_HAS_CMD` → 本拍发 HEARTBEAT，便于 Slave 吐出 `CTRL_CMD`  
+3. CTRL 刚改角强制遥测 → `SERVO_TELEMETRY`  
+4. 有待发 `NET_INFO`（`GET_NET_INFO` 或 IP 变化）→ `NET_INFO (0x03)`  
+5. 有新检测 → `DETECT_RESULT (0x10)`  
+6. 舵机遥测到期（建议 10～20 Hz）→ `SERVO_TELEMETRY (0x20)`  
+7. 否则 → `HEARTBEAT (0x01)`  
 
 ### 4.6 双方发送策略
 
@@ -208,7 +211,7 @@ CRC16 = 0x6EB9 → 帧末：B9 6E
 
 - 链路保活：每拍可发合法 HEARTBEAT（`role=1`）  
 - 收到合法 `CTRL_CMD` 后，在后续拍发 `CTRL_ACK (0x31)`（**不是 Slave 发 ACK**）  
-- 业务阶段按 §4.5 插发 DETECT / SERVO  
+- 业务阶段按 §4.5 插发 DETECT / SERVO / NET_INFO  
 
 ### 4.7 HEARTBEAT 线上样例（双方对照）
 
@@ -245,6 +248,7 @@ MCU 正常应答时，头为 `5A A5 ...`，payload `role=2`。
 |--------|------|------|------|
 | `0x01` | HEARTBEAT | 双向 | 存活（当前双方已用） |
 | `0x02` | STATUS | 双向 | 状态与链路计数 |
+| `0x03` | NET_INFO | Camera→MCU | 图传入口（IPv4/端口/path_id） |
 | `0x10` | DETECT_RESULT | Camera→MCU | 检测框（最多 2） |
 | `0x20` | SERVO_TELEMETRY | Camera→MCU | 云台角度/脉宽/限位 |
 | `0x30` | CTRL_CMD | MCU→Camera | 控制 |
@@ -268,6 +272,28 @@ MCU 正常应答时，头为 `5A A5 ...`，payload `role=2`。
 | 6 | u16 | `magic_err_count` |
 | 8 | u16 | `last_nack_code` |
 | 10 | u16 | `rsv` |
+
+### 5.3a NET_INFO `0x03`（len=12）
+
+| 偏移 | 类型 | 字段 |
+|------|------|------|
+| 0 | u32 | `ipv4`：`a.b.c.d` → `a\|(b<<8)\|(c<<16)\|(d<<24)`；无效时 0 |
+| 4 | u16 | `http_port`（通常 80） |
+| 6 | u8 | `wifi_mode`：0=OFF，1=STA，2=SoftAP |
+| 7 | u8 | `flags`：bit0=`HAS_IP`，bit1=`HTTP_UP`，bit2=`STREAM_READY` |
+| 8 | u8 | `stream_path_id`：0=`/api/camera/stream.mjpg`（枚举，不传字符串） |
+| 9 | u8 | `rsv` |
+| 10 | u16 | `rsv2` |
+
+MCU 查询：CTRL `GET_NET_INFO (0x21)` 无参数；Camera ACK 后按优先级插发 `NET_INFO`。IP 变化亦可主动上报。
+
+上位机组 URL：
+
+```text
+http://{a}.{b}.{c}.{d}:{http_port}/api/camera/stream.mjpg
+```
+
+（`stream_path_id=0`）
 
 ### 5.4 DETECT_RESULT `0x10`
 
@@ -328,6 +354,7 @@ CTRL_CMD 头：
 | `0x13` | SERVO_SET_LIMITS | 4×i16（pan_min/max, tilt_min/max，×100） | 建议支持 |
 | `0x14` | SERVO_RESET_LIMITS | 无参数 | 建议支持 |
 | `0x20` | SET_STREAM_MODE | u8 mode | 可先 `UNSUPPORTED` |
+| `0x21` | GET_NET_INFO | 无参数 | Camera **需支持**：随后发 `NET_INFO` |
 
 CTRL_ACK：
 
@@ -337,7 +364,7 @@ CTRL_ACK：
 | 1 | u8 | `req_id` 回显 |
 | 2 | u8 | `result`：0=OK，1=BAD_PARAM，2=BUSY，3=UNSUPPORTED，4=FAILED |
 | 3 | u8 | `rsv` |
-| 4 | u32 | `detail` 可选 |
+| 4 | u32 | `detail` 可选（`GET_NET_INFO` 时可带当前 `ipv4`） |
 
 ### 5.7 标志位
 
@@ -366,8 +393,8 @@ CTRL_ACK：
 |--------|----------------------|-------------------|------|
 | L0 通路 | 发合法帧 / 固定图案可辨 | Mode1 Slave 装缓冲；可辨 MOSI | **双方已通** |
 | L1 心跳 | 发 `HEARTBEAT role=1`；认 `role=2` | 发 `HEARTBEAT role=2`；认 `role=1` | **双方已通** |
-| L2 上报 | 按 §4.5 发 `0x10` / `0x20` | 解析缓存 + 周期日志 + `cam detect/servo` | **双方已通；ESP 已接真实检测/舵机** |
-| L3 控制 | 解析 `0x30`，执行，回 `0x31` | `SLAVE_HAS_CMD`→`0x30`→对账 `0x31`（100 ms 重发×5） | **双方已通（center 等）；抽检其余 CTRL** |
+| L2 上报 | 按 §4.5 发 `0x10` / `0x20` / `0x03` | 解析缓存 + 周期日志 | **DETECT 真实已通；NET_INFO ESP 已实现** |
+| L3 控制 | 解析 `0x30`，执行，回 `0x31` | `SLAVE_HAS_CMD`→`0x30`→对账 `0x31`（100 ms 重发×5） | **双方已通；含 GET_NET_INFO** |
 
 **双方保持**：
 
@@ -387,8 +414,8 @@ CTRL_ACK：
 | B. 接线 | 按 §1；共地；不热插拔 | **已对齐** |
 | C. L0/L1 | 1 MHz：双方 `link=OK`，`rx_ok` 增，`peer_role` 互认 | **已通过** |
 | D. 稳定 | ≥1 min，CRC 错率 &lt; 0.1%（或双方约定） | 请双方确认 |
-| E. L2 业务 | MCU 正确识别 DETECT/SERVO；Camera 按优先级上报 | **固件就绪，待联调** |
-| F. L3 控制 | `SERVO_CENTER` / `DETECT_ENABLE` 得 ACK=OK | **固件就绪，待联调** |
+| E. L2 业务 | MCU 正确识别 DETECT/SERVO/NET_INFO | **DETECT 真实已通过；NET_INFO 待联调** |
+| F. L3 控制 | `SERVO_CENTER` / `DETECT_ENABLE` / `GET_NET_INFO` 得 ACK=OK | **center 已通过；GET_NET_INFO 待联调** |
 | G. 压力 | 50 Hz×10 min；断线恢复 | 后续 |
 
 ### 现场检查
@@ -410,6 +437,7 @@ CTRL_ACK：
 | T4 | MCU 发回中 | ACK=OK，云台回中 |
 | T5 | 故意错 CRC | 不执行命令，计数增加 |
 | T6 | 断 MISO 再恢复 | 先 LINK_DOWN，恢复后自动 LINK_OK |
+| T7 | `GET_NET_INFO` | ACK=OK；随后 `NET_INFO`；URL 可开 MJPEG |
 
 ---
 
@@ -424,16 +452,17 @@ CTRL_ACK：
 | 9–10 | 1 MHz 联调；升钟 ≤4 MHz 验收 | 是 | 锁定 |
 | 11 | 20 ms 轮询 | 是 | 锁定 |
 | 12–13 | DETECT≤2；`deg_x100`；box 无独立 `h` | 是 | 锁定 |
-| 14 | CTRL 表 | Follow/Stream 可 UNSUPPORTED | 锁定 |
+| 14 | CTRL 表 | Follow/Stream 可 UNSUPPORTED；`GET_NET_INFO` 需支持 | 锁定 |
 | 15–16 | `SLAVE_HAS_CMD`；保障/非保障 | 是 | 锁定 |
 | 17 | 脚位 | ESP 21/45/47/14 ↔ PA2/PA4/PA5/PA3 | **锁定** |
+| 18 | 图传 | SPI 只传 `NET_INFO`；HTTP `/api/camera/stream.mjpg` | **锁定** |
 
-**共同结论**：物理层与 L1 勿回退。MCU/ESP 均已交 L2/L3 实现；双方联调验收。
+**共同结论**：链路与控制闭环已通；**真实钢珠 DETECT 已通**。后续：`NET_INFO` 联调、真实舵机动作/遥测、稳定性与压力验收。
 
 | 侧 | 日期 | 状态 |
 |----|------|------|
-| Camera（ESP32-S3） | 2026-07-26 | 认可定稿；**L2/L3 已合入（见 §10）** |
-| MCU（TM4C123） | 2026-07-26 | 认可定稿；**L2/L3 固件已合入，待联调** |
+| Camera（ESP32-S3） | 2026-07-26 | L0～L3 + 真实 DETECT；**NET_INFO/GET_NET_INFO 已实现** |
+| MCU（TM4C123） | 2026-07-26 | L0～L3 已通；NET_INFO 消费待联调 |
 
 ---
 
@@ -446,11 +475,13 @@ CTRL_ACK：
 | ESP | `spi1: RX 5A A5 01 ..` | 收到 MCU 合法帧头 |
 | ESP | `spi1: link=OK ... peer_role=2` | L1 正常 |
 | ESP | `spi1: DETECT tx n=...` / `SERVO tx pan=...` | L2 业务上报 |
+| ESP | `spi1: NET_INFO tx ip=... port=...` | 图传入口上报 |
 | ESP | `spi1: CTRL_CMD rx` / `CTRL_ACK tx` | L3 控制对账 |
 | ESP | `spi1: link=DOWN` | 连续多帧无合法应答 |
 | ESP | `MISO stuck LOW` / `float/idle HIGH` | 查线 / CS / MCU 是否运行 |
 | MCU | UART7：`cam_spi link=OK` / `peer_role=1` | L1 正常 |
 | MCU | `cam_spi DETECT n=...` / `cam_spi SERVO pan=...` | L2 已收到业务帧 |
+| MCU | `cam_spi NET_INFO ...` | 已收到图传入口 |
 | MCU | `cam_spi CTRL_CMD queue` / `CTRL_ACK ok` | L3 对账成功 |
 | MCU | 厂测 UART7：`cam status` / `cam detect` / `cam center` | L2/L3 手工联调 |
 | MCU | `cam_spi: RX=00 MOSI open?` | 查 ESP45(MOSI)↔PA4 / 线序 |
@@ -493,57 +524,40 @@ uint16_t spi_link_crc16(const uint8_t *data, size_t len)
 
 | 项 | 旧描述（作废） | 本文 |
 |----|----------------|------|
-| 路径 / 文档名 | 根目录 `plan/camera_spi_host_protocol_plan.md` 等 | **`camera/plan/camera-spi-protocol.md`**（双方公共） |
+| 文档名 | `camera_spi_host_protocol_plan.md` / `camera-spi-role-agreement.md` | **`camera-spi-protocol.md`**（双方公共） |
 | SPI Mode | Mode0 | **Mode1** |
 | ESP MOSI / MISO | 47 / 45 | **45 / 47** |
 | 升钟上限 | 有的稿写 8 MHz | **≤4 MHz 且须验收** |
 | CTRL_ACK 发送方 | 误写在 Slave 策略里 | **Camera（Master）发送** |
 | L1 状态 | 部分旧说明写仍 DOWN | **已通，进入 L2/L3** |
+| 图传 | 误以为走 SPI | **SPI 仅 NET_INFO；HTTP MJPEG** |
 
 ---
 
-## 10. ESP32（Camera Master）任务清单
+## 10. 联调后续
 
-> MCU 侧 L2/L3 已按本文实现。ESP 保持 Mode1 / 1 MHz / 20 ms / 32B / CRC。
+### 10.1 NET_INFO / 图传入口
 
-### 10.1 必须保持（勿回退）
+1. MCU 发 `GET_NET_INFO (0x21)`  
+2. ESP：`CTRL_ACK`（`detail` 可含 ipv4）→ 随后 `NET_INFO (0x03)`，`stream_path_id=0`  
+3. 上位机打开：`http://IP:port/api/camera/stream.mjpg`  
 
-1. SPI **Mode1**，脚位 SCK=21 / MOSI=**45** / MISO=**47** / CS=14  
-2. 每拍固定 32B；CRC 自检 `123456789→0x29B1`、空 HB 头→`0x6EB9`  
-3. 持续轮询约 20 ms；合法帧 `magic=0xA55A`  
-4. L1：发 `HEARTBEAT role=1`；认 MCU `role=2`；`link=OK`
-
-### 10.2 L2 — 业务上报
-
-按 §4.5 优先级，在 HEARTBEAT 之外插发（实现：`camera_spi_host.c`）：
-
-| 优先级 | 条件 | 动作 |
-|--------|------|------|
-| 0 | 有待发 `CTRL_ACK` | 本拍发 `CTRL_ACK`（对账优先） |
-| 1 | 上拍 MISO `flags` 含 `SLAVE_HAS_CMD` | **本拍只发 HEARTBEAT** |
-| 2 | 有新检测（或到期重发） | 发 `DETECT_RESULT (0x10)`（`camera_model` 真框，最多 2） |
-| 3 | 舵机遥测到期（约 20 Hz） | 发 `SERVO_TELEMETRY (0x20)`（读真实舵机） |
-| 4 | 否则 | `HEARTBEAT (0x01)` |
-
-MCU 验收（UART7）：`cam_spi DETECT` / `cam_spi SERVO`；厂测 `cam detect` / `cam servo`。
-
-### 10.3 L3 — 控制闭环
-
-1. 解析 MISO `CTRL_CMD (0x30)`  
-2. 首版支持：`DETECT_ENABLE` / `SERVO_SET_ANGLE` / `SERVO_NUDGE` / `SERVO_CENTER` / `SERVO_SET_LIMITS` / `SERVO_RESET_LIMITS`；`FOLLOW`/`STREAM`→`UNSUPPORTED`  
-3. **后续拍**发 `CTRL_ACK (0x31)`（Master 发）  
-
-MCU 联调：`cam status` / `cam detect_on` / `cam center` / `cam angle 0 18000` / `cam nudge 1 -500`。
-
-### 10.4 联调顺序（强制）
+### 10.2 MCU 现场确认（厂测 UART7）
 
 ```text
-HEARTBEAT 稳定 (L1)
-  → ESP 发假 DETECT + 真 SERVO (L2)
-  → MCU 日志 / cam detect|servo 有值
-  → ESP 解析 CTRL_CMD + 回 CTRL_ACK (L3)
-  → cam center / detect_on 得 ACK=OK
-  → 再接真实检测
+cam detect
+cam status
+```
+
+### 10.3 建议再抽检 CTRL
+
+```text
+cam detect_on
+cam detect_off
+cam angle 0 18000
+cam nudge 1 -500
+cam center
+cam status
 ```
 
 ---
@@ -554,7 +568,9 @@ HEARTBEAT 稳定 (L1)
 |------|------|------|
 | 2026-07-25 | 1.0～1.2 | 草案、Mode1 联调确认 |
 | 2026-07-26 | 1.3 | 与可通信固件对齐（Mode1、MOSI=45/MISO=47）；修正 CTRL_ACK 归属；明确 L1 已通 |
-| 2026-07-26 | 1.4 | 改为 **ESP↔TM4C 双方公共协议**；迁入 `camera/plan/camera-spi-protocol.md`；里程碑与确认表双边化 |
-| 2026-07-26 | 1.5 | MCU 落地 L2/L3；ESP 落地 L2/L3（`spi_link` 字典扩展 + `camera_spi_host`）；新增 §10 |
-| 2026-07-26 | 1.6～**1.7** | L2/L3 联调通过；ESP 假 DETECT→真 `camera_model`；`DETECT_ENABLE` 开关推理；SERVO/CTRL 驱动真实云台 |
-| 2026-07-26 | **1.8** | `spi_link` 迁入 `camera/main/source/`；DOWN/DEGRADED 仅 HEARTBEAT 探测，连续 ≥8 帧 HB(role=2) 后再开 L2（修 TM4C 需重启才恢复） |
+| 2026-07-26 | 1.4 | 改为 **ESP↔MCU 双方公共协议**；文件名 `camera-spi-protocol.md`；里程碑与确认表双边化 |
+| 2026-07-26 | 1.5 | MCU 落地 L2/L3；新增 §10 ESP 任务清单 |
+| 2026-07-26 | 1.6 | L2 双方联调通过；§10 改为 L3 联调焦点 |
+| 2026-07-26 | 1.7 | L3 双方通过（`cam center` → ack_ok=1）；§10 改为联调后续 |
+| 2026-07-26 | 1.8 | ESP 真实钢珠 DETECT 已通；文档同步 MCU 验收要点 |
+| 2026-07-26 | **1.9** | 定稿 `NET_INFO(0x03)` / `GET_NET_INFO(0x21)`；path_id=0→`/api/camera/stream.mjpg`；ESP 实现落地 |

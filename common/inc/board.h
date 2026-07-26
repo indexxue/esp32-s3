@@ -220,6 +220,11 @@
 #define BOARD_CAMERA_WS2812_PIN (48)
 #define BOARD_CAMERA_WS2812_COUNT (1U)
 
+/** 1=初始化 ST7789 + 本地预览/顶栏；0=跳过 LCD（SPI2/背光不占用，网页预览仍可用）。 */
+#ifndef CAMERA_ENABLE_LCD
+#define CAMERA_ENABLE_LCD 0
+#endif
+
 /*
  * MG996R 双舵机（LEDC 50 Hz）。
  * 画面坐标：原点左上，x 右、y 下。

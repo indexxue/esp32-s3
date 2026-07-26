@@ -5,6 +5,7 @@
 
 #include "camera_spi_host.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -14,10 +15,14 @@
 
 #include "board.h"
 #include "camera_model.h"
+#include "camera_sensor.h"
 #include "log.h"
+#include "net_wifi.h"
+#include "nvs.h"
 #include "servo_ctrl.h"
 #include "spi.h"
 #include "spi_link.h"
+#include "web_server.h"
 
 #if defined(BOARD_PROFILE_CAMERA) && BOARD_SPI1_ENABLE
 
@@ -69,6 +74,7 @@ typedef struct {
     uint8_t peer_role;
     uint32_t detect_tx;
     uint32_t servo_tx;
+    uint32_t net_info_tx;
     uint32_t ctrl_rx;
     uint32_t ctrl_ack_tx;
 } camera_spi_stats_t;
@@ -90,6 +96,12 @@ static uint32_t s_last_detect_gen;
 static bool_t s_had_detect_boxes = FALSE;
 static bool_t s_force_servo_tel = FALSE;
 static bool_t s_ctrl_rejected_recent = FALSE;
+/** GET_NET_INFO 或 IP 变化后待发 NET_INFO。 */
+static bool_t s_net_info_pending = FALSE;
+/** 上次已发出的 ipv4（用于变化检测；未发过为 0xFFFFFFFF）。 */
+static uint32_t s_last_net_ipv4_sent = 0xFFFFFFFFU;
+static uint16_t s_last_net_port_sent = 0U;
+static uint8_t s_last_net_flags_sent = 0U;
 /** 连续合法 HB(role=2) 计数；达标后置位，允许 L2。 */
 static uint32_t s_l1_ok_streak;
 static bool_t s_l2_armed = FALSE;
@@ -407,6 +419,83 @@ static bool_t camera_spi_fill_servo_tel(spi_link_servo_telemetry_t *tel)
     return TRUE;
 }
 
+/**
+ * 组装 NET_INFO：IPv4 按 a|(b<<8)|(c<<16)|(d<<24)；path_id=0 → stream.mjpg。
+ */
+static void camera_spi_fill_net_info(spi_link_net_info_t *info)
+{
+    char ipbuf[20];
+    unsigned a = 0U;
+    unsigned b = 0U;
+    unsigned c = 0U;
+    unsigned d = 0U;
+    nvs_web_ctrl_settings_t wc;
+    net_wifi_mode_t mode;
+    uint8_t flags = 0U;
+
+    if (info == NULL) {
+        return;
+    }
+
+    (void)memset(info, 0, sizeof(*info));
+    info->http_port = 80U;
+    info->stream_path_id = SPI_LINK_STREAM_PATH_MJPG;
+
+    if (nvs_web_ctrl_settings_get(&wc) != false) {
+        if (wc.http_port != 0U) {
+            info->http_port = wc.http_port;
+        }
+    }
+
+    mode = net_wifi_get_mode();
+    if (mode == NET_WIFI_MODE_STA) {
+        info->wifi_mode = SPI_LINK_NET_WIFI_STA;
+    } else if (mode == NET_WIFI_MODE_SOFTAP) {
+        info->wifi_mode = SPI_LINK_NET_WIFI_SOFTAP;
+    } else {
+        info->wifi_mode = SPI_LINK_NET_WIFI_OFF;
+    }
+
+    if (net_wifi_format_ipv4_for_display(ipbuf, sizeof(ipbuf)) &&
+        (sscanf(ipbuf, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) &&
+        (a <= 255U) && (b <= 255U) && (c <= 255U) && (d <= 255U)) {
+        info->ipv4 = (uint32_t)a | ((uint32_t)b << 8) | ((uint32_t)c << 16) |
+                     ((uint32_t)d << 24);
+        flags |= SPI_LINK_NET_FLAG_HAS_IP;
+    }
+
+    if (web_server_get_handle() != NULL) {
+        flags |= SPI_LINK_NET_FLAG_HTTP_UP;
+    }
+    if (camera_sensor_is_ready() != FALSE) {
+        flags |= SPI_LINK_NET_FLAG_STREAM_READY;
+    }
+    info->flags = flags;
+}
+
+static void camera_spi_note_net_info_needed(void)
+{
+    s_net_info_pending = TRUE;
+}
+
+/** IP/端口/关键 flags 变化时主动上报。 */
+static void camera_spi_poll_net_info_change(void)
+{
+    spi_link_net_info_t cur;
+
+    camera_spi_fill_net_info(&cur);
+    if ((cur.ipv4 != s_last_net_ipv4_sent) || (cur.http_port != s_last_net_port_sent) ||
+        (((cur.flags ^ s_last_net_flags_sent) &
+          (SPI_LINK_NET_FLAG_HAS_IP | SPI_LINK_NET_FLAG_HTTP_UP |
+           SPI_LINK_NET_FLAG_STREAM_READY)) != 0U)) {
+        /* 尚未发过：仅在已有 IP 或已被查询时主动推，避免开机狂刷空 NET_INFO。 */
+        if ((s_last_net_ipv4_sent != 0xFFFFFFFFU) || (cur.ipv4 != 0U) ||
+            (s_net_info_pending != FALSE)) {
+            s_net_info_pending = TRUE;
+        }
+    }
+}
+
 static int16_t camera_spi_read_i16_le(const uint8_t *p)
 {
     return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
@@ -494,6 +583,17 @@ static void camera_spi_handle_ctrl_cmd(const spi_link_ctrl_cmd_t *cmd)
     case SPI_LINK_CTRL_SUB_FOLLOW_ENABLE:
     case SPI_LINK_CTRL_SUB_SET_STREAM_MODE:
         result = SPI_LINK_CTRL_RESULT_UNSUPPORTED;
+        break;
+
+    case SPI_LINK_CTRL_SUB_GET_NET_INFO:
+        {
+            spi_link_net_info_t ni;
+
+            camera_spi_fill_net_info(&ni);
+            camera_spi_note_net_info_needed();
+            result = SPI_LINK_CTRL_RESULT_OK;
+            detail = ni.ipv4; /* 可选：ACK 内先带 IPv4 */
+        }
         break;
 
     case SPI_LINK_CTRL_SUB_SERVO_SET_ANGLE:
@@ -599,6 +699,7 @@ static void camera_spi_build_tx(uint32_t now_ms)
 {
     spi_link_detect_result_t det;
     spi_link_servo_telemetry_t tel;
+    spi_link_net_info_t net;
 
     /*
      * CTRL_ACK 先于 HAS_CMD yield：MCU 若在 CTRL_CMD 帧仍带 HAS_CMD，
@@ -619,7 +720,7 @@ static void camera_spi_build_tx(uint32_t now_ms)
     }
 
     /*
-     * L1 未稳定 / 链路非 OK：只发 HEARTBEAT 探测，禁止 L2 SERVO/DETECT。
+     * L1 未稳定 / 链路非 OK：只发 HEARTBEAT 探测，禁止 L2 SERVO/DETECT/NET_INFO。
      * 否则 DOWN 时仍灌 SERVO，易导致 TM4C SSI 预装卡住，只能重启 MCU 恢复。
      */
     if (camera_spi_l2_tx_allowed() == FALSE) {
@@ -632,6 +733,8 @@ static void camera_spi_build_tx(uint32_t now_ms)
         return;
     }
 
+    camera_spi_poll_net_info_change();
+
     /* §4.5：上拍 HAS_CMD → 本拍只发 HEARTBEAT，便于 MCU 吐 CTRL_CMD。 */
     if (s_slave_has_cmd != FALSE) {
         spi_link_build_heartbeat(s_tx_frame,
@@ -643,7 +746,7 @@ static void camera_spi_build_tx(uint32_t now_ms)
         return;
     }
 
-    /* CTRL 刚改过角度：优先推一帧真实 SERVO，再走常规 DETECT/周期遥测。 */
+    /* CTRL 刚改过角度：优先推一帧真实 SERVO，再走 NET_INFO/DETECT/周期遥测。 */
     if (s_force_servo_tel != FALSE) {
         if (camera_spi_fill_servo_tel(&tel) != FALSE) {
             spi_link_build_servo_telemetry(s_tx_frame, s_tx_seq, &tel);
@@ -657,6 +760,28 @@ static void camera_spi_build_tx(uint32_t now_ms)
             return;
         }
         s_force_servo_tel = FALSE;
+    }
+
+    /* GET_NET_INFO / IP 变化：插发 NET_INFO（低于 ACK/HAS_CMD/forced SERVO）。 */
+    if (s_net_info_pending != FALSE) {
+        camera_spi_fill_net_info(&net);
+        spi_link_build_net_info(s_tx_frame, s_tx_seq, &net);
+        s_tx_seq++;
+        s_net_info_pending = FALSE;
+        s_last_net_ipv4_sent = net.ipv4;
+        s_last_net_port_sent = net.http_port;
+        s_last_net_flags_sent = net.flags;
+        s_stats.net_info_tx++;
+        LOG_INFO("spi1: NET_INFO tx ip=%u.%u.%u.%u port=%u mode=%u flags=0x%02X path=%u",
+                 (unsigned)(net.ipv4 & 0xFFU),
+                 (unsigned)((net.ipv4 >> 8) & 0xFFU),
+                 (unsigned)((net.ipv4 >> 16) & 0xFFU),
+                 (unsigned)((net.ipv4 >> 24) & 0xFFU),
+                 (unsigned)net.http_port,
+                 (unsigned)net.wifi_mode,
+                 (unsigned)net.flags,
+                 (unsigned)net.stream_path_id);
+        return;
     }
 
     if (s_detect_enabled != FALSE) {
@@ -922,7 +1047,7 @@ static void camera_spi_host_task(void *arg)
 #endif
             LOG_INFO(
                 "spi1: link=%s l2=%s rx_ok=%lu magic_err=%lu crc_err=%lu xfer_err=%lu "
-                "peer_role=%u det_tx=%lu servo_tx=%lu ctrl_rx=%lu ack_tx=%lu",
+                "peer_role=%u det_tx=%lu servo_tx=%lu net_tx=%lu ctrl_rx=%lu ack_tx=%lu",
                 (s_stats.link == SPI_LINK_STATE_OK)         ? "OK"
                 : (s_stats.link == SPI_LINK_STATE_DEGRADED) ? "DEGRADED"
                                                             : "DOWN",
@@ -934,6 +1059,7 @@ static void camera_spi_host_task(void *arg)
                 (unsigned)s_stats.peer_role,
                 (unsigned long)s_stats.detect_tx,
                 (unsigned long)s_stats.servo_tx,
+                (unsigned long)s_stats.net_info_tx,
                 (unsigned long)s_stats.ctrl_rx,
                 (unsigned long)s_stats.ctrl_ack_tx);
 #endif
@@ -973,6 +1099,10 @@ status_t camera_spi_host_start(void)
     s_had_detect_boxes = FALSE;
     s_force_servo_tel = FALSE;
     s_ctrl_rejected_recent = FALSE;
+    s_net_info_pending = FALSE;
+    s_last_net_ipv4_sent = 0xFFFFFFFFU;
+    s_last_net_port_sent = 0U;
+    s_last_net_flags_sent = 0U;
     s_l1_ok_streak = 0U;
     s_l2_armed = FALSE;
     (void)memset(&s_pending_ack, 0, sizeof(s_pending_ack));

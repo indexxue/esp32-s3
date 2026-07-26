@@ -666,10 +666,16 @@ status_t BoardInit(void)
     }
 
     if (device_profile_board_wants(DEVICE_BOARD_MASK_LCD)) {
+#if defined(BOARD_PROFILE_CAMERA) && !CAMERA_ENABLE_LCD
+        LOG_INFO("LCD skipped (CAMERA_ENABLE_LCD=0)");
+#elif defined(BOARD_PROFILE_VOICE_HUB) && !VOICE_HUB_ENABLE_LCD
+        LOG_INFO("LCD skipped (VOICE_HUB_ENABLE_LCD=0)");
+#else
         if (board_st7789_init() != STATUS_OK) {
             return STATUS_FAIL;
         }
         s_board_ready_mask |= DEVICE_BOARD_MASK_LCD;
+#endif
     }
 
     if (device_profile_board_wants(DEVICE_BOARD_MASK_BATTERY)) {

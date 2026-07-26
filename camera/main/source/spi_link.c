@@ -205,6 +205,28 @@ static void spi_link_frame_begin(uint8_t frame[SPI_LINK_FRAME_SIZE],
     frame[7] = 0U;
 }
 
+void spi_link_build_net_info(uint8_t frame[SPI_LINK_FRAME_SIZE],
+                             uint8_t seq,
+                             const spi_link_net_info_t *info)
+{
+    uint8_t *p;
+
+    if ((frame == NULL) || (info == NULL)) {
+        return;
+    }
+
+    spi_link_frame_begin(frame, seq, SPI_LINK_MSG_NET_INFO, 12U);
+    p = &frame[8];
+    spi_link_put_u32_le(&p[0], info->ipv4);
+    spi_link_put_u16_le(&p[4], info->http_port);
+    p[6] = info->wifi_mode;
+    p[7] = info->flags;
+    p[8] = info->stream_path_id;
+    p[9] = info->rsv;
+    spi_link_put_u16_le(&p[10], info->rsv2);
+    spi_link_frame_set_crc(frame);
+}
+
 void spi_link_build_detect_result(uint8_t frame[SPI_LINK_FRAME_SIZE],
                                   uint8_t seq,
                                   const spi_link_detect_result_t *det)

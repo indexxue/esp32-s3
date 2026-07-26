@@ -22,10 +22,22 @@
 
 #define SPI_LINK_MSG_HEARTBEAT (0x01U)
 #define SPI_LINK_MSG_STATUS (0x02U)
+#define SPI_LINK_MSG_NET_INFO (0x03U)
 #define SPI_LINK_MSG_DETECT_RESULT (0x10U)
 #define SPI_LINK_MSG_SERVO_TELEMETRY (0x20U)
 #define SPI_LINK_MSG_CTRL_CMD (0x30U)
 #define SPI_LINK_MSG_CTRL_ACK (0x31U)
+
+#define SPI_LINK_NET_WIFI_OFF (0U)
+#define SPI_LINK_NET_WIFI_STA (1U)
+#define SPI_LINK_NET_WIFI_SOFTAP (2U)
+
+#define SPI_LINK_NET_FLAG_HAS_IP (1U << 0)
+#define SPI_LINK_NET_FLAG_HTTP_UP (1U << 1)
+#define SPI_LINK_NET_FLAG_STREAM_READY (1U << 2)
+
+/** stream_path_id=0 → /api/camera/stream.mjpg */
+#define SPI_LINK_STREAM_PATH_MJPG (0U)
 
 #define SPI_LINK_FLAG_ACK_REQ (1U << 0)
 #define SPI_LINK_FLAG_SLAVE_HAS_CMD (1U << 1)
@@ -51,6 +63,7 @@
 #define SPI_LINK_CTRL_SUB_SERVO_SET_LIMITS (0x13U)
 #define SPI_LINK_CTRL_SUB_SERVO_RESET_LIMITS (0x14U)
 #define SPI_LINK_CTRL_SUB_SET_STREAM_MODE (0x20U)
+#define SPI_LINK_CTRL_SUB_GET_NET_INFO (0x21U)
 
 #define SPI_LINK_CTRL_RESULT_OK (0U)
 #define SPI_LINK_CTRL_RESULT_BAD_PARAM (1U)
@@ -78,6 +91,16 @@ typedef struct {
     uint8_t proto_ver;
     uint16_t err_flags;
 } spi_link_heartbeat_t;
+
+typedef struct {
+    uint32_t ipv4; /* a.b.c.d → a|(b<<8)|(c<<16)|(d<<24)；无效 0 */
+    uint16_t http_port;
+    uint8_t wifi_mode; /* 0=OFF 1=STA 2=SoftAP */
+    uint8_t flags;     /* HAS_IP / HTTP_UP / STREAM_READY */
+    uint8_t stream_path_id;
+    uint8_t rsv;
+    uint16_t rsv2;
+} spi_link_net_info_t;
 
 typedef struct {
     uint16_t x;
@@ -138,6 +161,10 @@ void spi_link_build_heartbeat(uint8_t frame[SPI_LINK_FRAME_SIZE],
 
 bool_t spi_link_parse_heartbeat(const uint8_t frame[SPI_LINK_FRAME_SIZE],
                                 spi_link_heartbeat_t *out);
+
+void spi_link_build_net_info(uint8_t frame[SPI_LINK_FRAME_SIZE],
+                             uint8_t seq,
+                             const spi_link_net_info_t *info);
 
 void spi_link_build_detect_result(uint8_t frame[SPI_LINK_FRAME_SIZE],
                                   uint8_t seq,
