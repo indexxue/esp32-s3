@@ -36,6 +36,8 @@ static camera_model_result_t s_latest;
 static uint8_t *s_frame_buf;
 static uint32_t s_frame_cap;
 static bool_t s_ready;
+static bool_t s_enabled = TRUE;
+static uint32_t s_result_gen;
 
 static status_t camera_model_result_lock(TickType_t ticks)
 {
@@ -86,6 +88,7 @@ static void camera_model_store_results(const std::list<dl::detect::result_t> &re
         return;
     }
     s_latest = tmp;
+    s_result_gen++;
     camera_model_result_unlock();
 }
 
@@ -102,7 +105,7 @@ static void camera_model_task(void *arg)
         int64_t t0;
         int64_t t1;
 
-        if ((s_detect == NULL) || (s_frame_buf == NULL)) {
+        if ((s_detect == NULL) || (s_frame_buf == NULL) || (s_enabled == FALSE)) {
             vTaskDelay(interval);
             continue;
         }
@@ -204,7 +207,32 @@ extern "C" bool_t camera_model_is_ready(void)
     return s_ready;
 }
 
-extern "C" status_t camera_model_get_latest(camera_model_result_t *out)
+extern "C" status_t camera_model_set_enabled(bool_t on)
+{
+    s_enabled = (on != FALSE) ? TRUE : FALSE;
+
+    /* SPI 可能早于 model_init 启动；无 mutex 时只记开关。 */
+    if (s_result_mtx != NULL) {
+        if (camera_model_result_lock(pdMS_TO_TICKS(50)) != STATUS_OK) {
+            return STATUS_TIMEOUT;
+        }
+        if (s_enabled == FALSE) {
+            (void)memset(&s_latest, 0, sizeof(s_latest));
+            s_result_gen++;
+        }
+        camera_model_result_unlock();
+    }
+
+    LOG_INFO("%s detect %s", TAG, (s_enabled != FALSE) ? "ON" : "OFF");
+    return STATUS_OK;
+}
+
+extern "C" bool_t camera_model_is_enabled(void)
+{
+    return s_enabled;
+}
+
+extern "C" status_t camera_model_get_latest_ex(camera_model_result_t *out, uint32_t *gen)
 {
     if (out == NULL) {
         return STATUS_INVALID_ARG;
@@ -213,8 +241,16 @@ extern "C" status_t camera_model_get_latest(camera_model_result_t *out)
         return STATUS_TIMEOUT;
     }
     *out = s_latest;
+    if (gen != NULL) {
+        *gen = s_result_gen;
+    }
     camera_model_result_unlock();
     return STATUS_OK;
+}
+
+extern "C" status_t camera_model_get_latest(camera_model_result_t *out)
+{
+    return camera_model_get_latest_ex(out, NULL);
 }
 
 extern "C" status_t camera_model_fill_ui_boxes(uint16_t *out_flat,

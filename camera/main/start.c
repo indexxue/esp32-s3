@@ -5,8 +5,11 @@
 
 #include "start.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "esp_system.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -35,6 +38,7 @@
 #define CAMERA_WIFI_WAIT_MS (8000U)
 
 static SemaphoreHandle_t s_cam_boot_done;
+static bool s_cam_wifi_gate_opened;
 
 #if CONFIG_WEB_CTRL_AUTO_START
 #include "esp_err.h"
@@ -50,7 +54,7 @@ static void web_ctrl_boot_task(void *arg)
 
     (void)arg;
 
-    /* 等摄像头 SCCB 写完再启 WiFi，避免 set_format 与射频并发。 */
+    /* 等摄像头 SCCB 写完再启 WiFi，避免 set_format 与射频并发（不等 ball 模型）。 */
     if (s_cam_boot_done != NULL) {
         if (xSemaphoreTake(s_cam_boot_done, pdMS_TO_TICKS(CAMERA_WIFI_WAIT_MS)) != pdTRUE) {
             LOG_WARN("camera boot wait timeout, start WiFi anyway");
@@ -80,10 +84,15 @@ static void web_ctrl_boot_task(void *arg)
 #define BUTTON_SCAN_PERIOD_MS (1000 / FLEX_BTN_SCAN_FREQ_HZ)
 #define BTN_SCAN_TASK_STACK_WORDS (3072U)
 #define BTN_SCAN_TASK_PRIORITY (5U)
+#define WIFI_REPROV_REBOOT_DELAY_MS (500U)
+#define WIFI_REPROV_REBOOT_TASK_STACK_WORDS (2048U)
+#define WIFI_REPROV_REBOOT_TASK_PRIORITY (5U)
 
 #define CAMERA_MODULES_TASK_STACK_WORDS (4096U)
 #define CAMERA_MODULES_TASK_PRIORITY (4U)
 #define CAMERA_STATUS_REFRESH_MS (1000U)
+
+static volatile bool s_wifi_reprov_pending;
 
 static void app_idle_default(void)
 {
@@ -118,12 +127,62 @@ status_t app_start(const app_lifecycle_t *lifecycle)
     return STATUS_OK;
 }
 
+static void wifi_reprov_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(WIFI_REPROV_REBOOT_DELAY_MS));
+    esp_restart();
+}
+
+/**
+ * 双击 GPIO0：清除已存 STA 凭据并重启进入 SoftAP 配网。
+ * 用于 STA 已连上但无法访问网页、或配网信息错误时的本地恢复。
+ */
+static void app_wifi_reprovision_from_button(st7789_t *lcd)
+{
+    if (s_wifi_reprov_pending) {
+        return;
+    }
+    s_wifi_reprov_pending = true;
+
+    LOG_INFO("GPIO0 double-click → clear STA credentials & SoftAP reprovision");
+    if (st7789_is_initialized(lcd)) {
+        camera_ui_set_status_line(lcd, "wifi: reprovision");
+    }
+    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
+        led_scene_run(LED_SCENE_ID_PAIRING);
+    }
+
+    /* 尽力断开；即使 Wi‑Fi 未起或非 STA，仍清 NVS 后重启。 */
+    (void)net_wifi_sta_disconnect();
+    if (!nvs_web_ctrl_settings_clear_sta_credentials()) {
+        LOG_ERROR("clear STA credentials failed");
+        s_wifi_reprov_pending = false;
+        if (st7789_is_initialized(lcd)) {
+            camera_ui_set_status_line(lcd, "wifi: clear fail");
+        }
+        return;
+    }
+
+    camera_sensor_prepare_for_reboot();
+    if (xTaskCreate(wifi_reprov_reboot_task, "wifi_rb", WIFI_REPROV_REBOOT_TASK_STACK_WORDS, NULL,
+                    WIFI_REPROV_REBOOT_TASK_PRIORITY, NULL) != pdPASS) {
+        esp_restart();
+    }
+}
+
 static void app_button_notify(btn_id_e id, const char *name, btn_permission_e permission, btn_event_e event)
 {
     st7789_t *lcd = BoardSt7789();
 
-    (void)permission;
     LOG_INFO("key %s (%s): %s", button_id_to_str(id), (name != NULL) ? name : "?", button_event_to_str(event));
+
+    if (event == BTN_EVENT_DOUBLE_CLICK) {
+        if ((permission & BTN_PERMISSION_PAIR) != 0) {
+            app_wifi_reprovision_from_button(lcd);
+        }
+        return;
+    }
 
     if (event == BTN_EVENT_LONG_PRESS) {
         LOG_INFO("button long press → servo center");
@@ -160,6 +219,38 @@ static void button_scan_task(void *arg)
     }
 }
 
+static void camera_signal_wifi_may_start(void)
+{
+    if (s_cam_wifi_gate_opened) {
+        return;
+    }
+    s_cam_wifi_gate_opened = true;
+    if (s_cam_boot_done != NULL) {
+        (void)xSemaphoreGive(s_cam_boot_done);
+    }
+}
+
+static void camera_wait_wifi_started(void)
+{
+#if !CONFIG_WEB_CTRL_AUTO_START
+    return;
+#else
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(CAMERA_WIFI_WAIT_MS);
+
+    if (!device_profile_platform_wants(DEVICE_PLATFORM_MASK_WEB)) {
+        return;
+    }
+
+    while (!net_wifi_is_started()) {
+        if (xTaskGetTickCount() >= deadline) {
+            LOG_WARN("WiFi start wait timeout, load model anyway");
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+#endif
+}
+
 static void camera_modules_task(void *arg)
 {
     st7789_t *lcd = BoardSt7789();
@@ -183,6 +274,14 @@ static void camera_modules_task(void *arg)
         } else if (st7789_is_initialized(lcd)) {
             camera_ui_set_status_line(lcd, "cam: preview");
         }
+
+        /*
+         * SoftAP beacon 必须走内部 DRAM；先放行 WiFi，等其启动后再加载 ball 模型，
+         * 避免 alloc eb fail → hostap 空指针崩溃重启环。
+         */
+        camera_signal_wifi_may_start();
+        camera_wait_wifi_started();
+
         if (camera_model_start() != STATUS_OK) {
             LOG_WARN("camera_model_start failed");
             if (st7789_is_initialized(lcd)) {
@@ -196,10 +295,7 @@ static void camera_modules_task(void *arg)
             camera_ui_set_status_line(lcd, "cam: init fail");
         }
         LOG_WARN("camera_sensor_init failed");
-    }
-
-    if (s_cam_boot_done != NULL) {
-        (void)xSemaphoreGive(s_cam_boot_done);
+        camera_signal_wifi_may_start();
     }
 
     /* 轻量状态刷新：顶栏显示 IP，不抢 LCD 预览主路径。 */
@@ -252,7 +348,7 @@ static status_t app_init_platform(void)
 
     /*
      * 摄像头 SCCB 长寄存器表写入对总线抖动敏感。
-     * 先拉起 camera 任务；WiFi 等 cam 给出 boot_done 后再启。
+     * 先拉起 camera 任务；WiFi 等 SCCB/预览就绪后再启（不等 ball 模型）。
      */
     s_cam_boot_done = xSemaphoreCreateBinary();
     if (s_cam_boot_done == NULL) {
@@ -261,9 +357,7 @@ static status_t app_init_platform(void)
 
     if (camera_start_modules_task() != STATUS_OK) {
         LOG_WARN("camera_start_modules_task failed");
-        if (s_cam_boot_done != NULL) {
-            (void)xSemaphoreGive(s_cam_boot_done);
-        }
+        camera_signal_wifi_may_start();
     }
 
 #if CONFIG_WEB_CTRL_AUTO_START
@@ -288,7 +382,8 @@ static status_t app_init_button_io(void)
         return STATUS_FAIL;
     }
 
-    LOG_INFO("camera: 1 button GPIO0, scan %d Hz", FLEX_BTN_SCAN_FREQ_HZ);
+    LOG_INFO("camera: GPIO0 long=servo center, double=WiFi SoftAP reprovision, scan %d Hz",
+             FLEX_BTN_SCAN_FREQ_HZ);
     return STATUS_OK;
 }
 

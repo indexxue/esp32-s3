@@ -91,16 +91,23 @@ camera — ESP32-S3 摄像头预览 + 钢珠检测 + 云台
 
 验收：
   串口 `cam_model init ok (espdet ball stamp=YYYYMMDD_HHMMSS note=...)`
-  以及 `infer ... boxes=N`；LCD 绿框。
+  以及 `infer ... boxes=N`；LCD / 网页 MJPEG 绿框（由宏开关）。
   若板上仍像旧模型：删 camera\build 后重编。
 
 详情：`camera/tools/esp-detection/过程文档.md` §5（本地训练树内；本 README 为准入门）。
 
 关键源码：
   components/ball_detect/     ESPDet 封装 + models/s3/*.espdl
-  main/source/camera_model.*  检测任务与结果缓存
-  main/source/camera_ui.*     LCD 画框
-  main/source/camera_sensor.* 预览；blit 后叠框
+  main/source/camera_model.*  检测任务与结果缓存；叠框宏 CAMERA_DETECT_OVERLAY_LCD/WEB
+  main/source/camera_ui.*     LCD 画框 / RGB565 叠框 / lcd_close·open
+  main/source/camera_sensor.* 预览；blit 后叠框；JPEG 编码前叠框
+
+叠框宏（camera_model.h，改后重编）：
+  CAMERA_DETECT_OVERLAY_LCD  1=LCD 画框，0=关
+  CAMERA_DETECT_OVERLAY_WEB  1=网页 MJPEG/JPEG 画框，0=关
+  可单独开、全开或全关。
+
+LCD 关闭：`camera_ui_lcd_close()` 黑屏+关背光+停 blit；`camera_ui_lcd_open()` 恢复。
 
 sdkconfig（见 sdkconfig.defaults）：
   CONFIG_FLASH_ESPDET_PICO_224_224_BALL=y
@@ -108,12 +115,12 @@ sdkconfig（见 sdkconfig.defaults）：
 
 ---- 5. 当前能力与后续 ----
 
-已完成：SoftAP 采数标注、ESPDet 训量化、固件推理、LCD 绿框。
-后续可选：`/api/detect/latest` 网页客户端叠框、云台按框中心粗跟、补困难样本再训。
-SPI 主机对外通信（与小车 TM4C）：协议正文 `plan/camera_spi_host_protocol_plan.md`（v1.2）；
-  MCU 评审结论 + ESP 实施清单 `plan/camera-spi-host-protocol-review.md`（v2.0）。
-  固件：SPI3 Master Mode1 / 1 MHz / 20 ms HEARTBEAT（`camera_spi_host`）；
+已完成：SoftAP 采数标注、ESPDet 训量化、固件推理、LCD/网页绿框（宏开关）、LCD 关闭接口。
+后续可选：云台按框中心粗跟、补困难样本再训。
+SPI 主机对外通信（与小车 TM4C）：双方公共协议 `camera/plan/camera-spi-protocol.md`（v1.8）。
+  固件：SPI3 Master Mode1 / 1 MHz / 20 ms HEARTBEAT（`camera_spi_host` + `spi_link`）；
   引脚 SCK=21 逻辑MOSI=45 逻辑MISO=47 CS=14（软件对调）。
+  链路 DOWN/抖动时只发 HEARTBEAT；连续 8 帧合法 HB 后才开 SERVO/DETECT。
 
 舵机轴：PWM1=GPIO46 Pan；PWM2=GPIO3 Tilt。画面 err_x>0 → pan 右；err_y>0 → tilt 下。
 装反时改 `BOARD_SERVO_PAN_SIGN` / `BOARD_SERVO_TILT_SIGN`（`common/inc/board.h`）。
@@ -146,7 +153,7 @@ Web（加入 SoftAP ESP32-WebCtrl / esp32web1 后）:
         {"pan":0} / {"tilt":300}                                 测极限角
         {"pan_pulse":500} / {"tilt_pulse":2500}                  原始脉宽（绕过角度软限位）
   网页 D-pad：点按一步、长按连续；可改限位并一键到 min/max。
-  长按期间暂停 MJPEG，松手约 0.7s 后恢复。板键 GPIO0 长按回中。无 USB 串口舵机命令。
+  长按期间暂停 MJPEG，松手约 0.7s 后恢复。板键 GPIO0：长按回中；双击清除已存 Wi‑Fi 并重启进 SoftAP 配网。无 USB 串口舵机命令。
 
 Pins: see common/inc/board.h #if defined(BOARD_PROFILE_CAMERA)
   - I2C GPIO4/5: OV2640 SCCB

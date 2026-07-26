@@ -31,8 +31,32 @@ void camera_ui_draw_detection_boxes(st7789_t *lcd,
                                      uint16_t cam_w,
                                      uint16_t cam_h);
 
+/**
+ * 在 RGB565 大端缓冲上画空心检测框（供网页 JPEG/MJPEG 叠框）。
+ * @param rgb565_be 行优先 RGB565 BE
+ * @param width/height 缓冲宽高
+ * @param boxes/count 同 LCD：每框 [x,y,w,h,color]
+ * @param cam_w/cam_h 框所在帧尺寸（可与缓冲不同，会等比缩放）
+ */
+void camera_ui_draw_boxes_rgb565(uint8_t *rgb565_be,
+                                 uint16_t width,
+                                 uint16_t height,
+                                 const uint16_t *boxes,
+                                 uint8_t count,
+                                 uint16_t cam_w,
+                                 uint16_t cam_h);
+
 /** 刷新顶部状态栏（无需整屏重绘）。 */
 void camera_ui_draw_status_band(st7789_t *lcd);
+
+/**
+ * 关闭 LCD：停预览 blit、黑屏、关背光。可用 camera_ui_lcd_open() 恢复。
+ * 不影响摄像头采集与网页流。
+ */
+status_t camera_ui_lcd_close(void);
+/** 重新开背光并允许预览 blit。 */
+status_t camera_ui_lcd_open(void);
+bool_t camera_ui_lcd_is_open(void);
 
 /** 串行化 ST7789 SPI（预览 blit 与 UI 叠加共用）。 */
 bool_t camera_ui_lcd_lock(uint32_t timeout_ms);

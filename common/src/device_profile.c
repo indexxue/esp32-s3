@@ -26,9 +26,10 @@ static const device_button_spec_t s_buttons_voice_hub[] = {
     {0, BTN_ID_CONFIRM, "功能", 0, (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET)},
 };
 
-/** camera 单键：GPIO0 功能键。 */
+/** camera 单键：GPIO0 功能键（双击 PAIR → 清 STA 重回 SoftAP 配网）。 */
 static const device_button_spec_t s_buttons_camera[] = {
-    {0, BTN_ID_CONFIRM, "功能", 0, (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET)},
+    {0, BTN_ID_CONFIRM, "功能", 0,
+     (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR)},
 };
 
 static const device_product_profile_t s_product_profiles[] = {

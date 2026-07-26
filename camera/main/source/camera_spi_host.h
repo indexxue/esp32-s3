@@ -1,6 +1,6 @@
 /**
  * @file camera_spi_host.h
- * @brief Camera SPI Master：与小车 MCU（Slave）32B 轮询；L1 HEARTBEAT。
+ * @brief Camera SPI Master：与小车 MCU（Slave）32B 轮询；L1 HEARTBEAT + L2/L3。
  *        CAMERA_SPI_WIRE_TEST=0 为正式协议；仅 L0 联调时临时置 1。
  */
 

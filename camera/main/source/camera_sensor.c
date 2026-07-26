@@ -509,6 +509,41 @@ static status_t camera_sensor_jpeg_cache_ensure(void)
     return STATUS_OK;
 }
 
+#if CAMERA_DETECT_OVERLAY_WEB
+/** 在 JPEG 编码前的 RGB565 拷贝上叠检测框（不改 snapshot 主缓冲）。 */
+static void camera_sensor_overlay_detect_on_rgb565(uint8_t *rgb565, uint16_t width, uint16_t height)
+{
+    uint16_t box_flat[CAMERA_MODEL_MAX_BOXES * CAMERA_MODEL_UI_BOX_STRIDE];
+    uint8_t  box_count = 0U;
+    uint16_t box_w = width;
+    uint16_t box_h = height;
+
+    if ((rgb565 == NULL) || (width == 0U) || (height == 0U)) {
+        return;
+    }
+    if (camera_model_is_ready() == FALSE) {
+        return;
+    }
+    if (camera_model_fill_ui_boxes(box_flat,
+                                   (uint8_t)CAMERA_MODEL_MAX_BOXES,
+                                   &box_count,
+                                   &box_w,
+                                   &box_h) != STATUS_OK) {
+        return;
+    }
+    if (box_count == 0U) {
+        return;
+    }
+    if (box_w == 0U) {
+        box_w = width;
+    }
+    if (box_h == 0U) {
+        box_h = height;
+    }
+    camera_ui_draw_boxes_rgb565(rgb565, width, height, box_flat, box_count, box_w, box_h);
+}
+#endif
+
 /** 将当前 snapshot 预编码进 cache，供网页快速取帧。 */
 static void camera_sensor_refresh_jpeg_cache(void)
 {
@@ -538,6 +573,10 @@ static void camera_sensor_refresh_jpeg_cache(void)
     }
     (void)memcpy(s_snapshot_copy, s_snapshot_buf, (size_t)frame_bytes);
     (void)xSemaphoreGive(s_snapshot_mtx);
+
+#if CAMERA_DETECT_OVERLAY_WEB
+    camera_sensor_overlay_detect_on_rgb565(s_snapshot_copy, width, height);
+#endif
 
     if (camera_sensor_jpeg_enc_open() != STATUS_OK) {
         return;
@@ -697,15 +736,17 @@ static void camera_sensor_preview_task(void *arg)
             s_last_snapshot_tick = xTaskGetTickCount();
         }
 
-        if ((do_lcd != FALSE) && (lcd != NULL) && st7789_is_initialized(lcd) && (s_snapshot_buf != NULL) &&
+        if ((do_lcd != FALSE) && (lcd != NULL) && st7789_is_initialized(lcd) &&
+            (camera_ui_lcd_is_open() != FALSE) && (s_snapshot_buf != NULL) &&
             (s_snapshot_w > 0U) && (s_snapshot_h > 0U)) {
-            uint16_t box_flat[CAMERA_MODEL_MAX_BOXES * CAMERA_MODEL_UI_BOX_STRIDE];
-            uint8_t box_count = 0U;
-            uint16_t box_w = s_snapshot_w;
-            uint16_t box_h = s_snapshot_h;
-
             camera_sensor_blit_rgb565(lcd, s_snapshot_buf, s_snapshot_w, s_snapshot_h);
+#if CAMERA_DETECT_OVERLAY_LCD
             if (camera_model_is_ready() != FALSE) {
+                uint16_t box_flat[CAMERA_MODEL_MAX_BOXES * CAMERA_MODEL_UI_BOX_STRIDE];
+                uint8_t box_count = 0U;
+                uint16_t box_w = s_snapshot_w;
+                uint16_t box_h = s_snapshot_h;
+
                 if (camera_model_fill_ui_boxes(box_flat,
                                                (uint8_t)CAMERA_MODEL_MAX_BOXES,
                                                &box_count,
@@ -722,6 +763,7 @@ static void camera_sensor_preview_task(void *arg)
                     }
                 }
             }
+#endif
             s_last_lcd_blit_tick = xTaskGetTickCount();
             s_lcd_blit_count++;
             if ((s_lcd_blit_count == 1U) || ((s_lcd_blit_count % 50U) == 0U)) {
@@ -1201,6 +1243,10 @@ status_t camera_sensor_snapshot_jpeg(uint8_t *out, uint32_t out_cap, uint32_t *o
 
     (void)memcpy(s_snapshot_copy, s_snapshot_buf, (size_t)frame_bytes);
     (void)xSemaphoreGive(s_snapshot_mtx);
+
+#if CAMERA_DETECT_OVERLAY_WEB
+    camera_sensor_overlay_detect_on_rgb565(s_snapshot_copy, width, height);
+#endif
 
     if (camera_sensor_jpeg_enc_open() != STATUS_OK) {
         return STATUS_FAIL;

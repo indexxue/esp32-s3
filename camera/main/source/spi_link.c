@@ -169,3 +169,159 @@ bool_t spi_link_parse_heartbeat(const uint8_t frame[SPI_LINK_FRAME_SIZE],
     out->err_flags = (uint16_t)frame[14] | ((uint16_t)frame[15] << 8);
     return TRUE;
 }
+
+static void spi_link_put_u16_le(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v & 0xFFU);
+    p[1] = (uint8_t)((v >> 8) & 0xFFU);
+}
+
+static void spi_link_put_i16_le(uint8_t *p, int16_t v)
+{
+    spi_link_put_u16_le(p, (uint16_t)v);
+}
+
+static void spi_link_put_u32_le(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v & 0xFFU);
+    p[1] = (uint8_t)((v >> 8) & 0xFFU);
+    p[2] = (uint8_t)((v >> 16) & 0xFFU);
+    p[3] = (uint8_t)((v >> 24) & 0xFFU);
+}
+
+static void spi_link_frame_begin(uint8_t frame[SPI_LINK_FRAME_SIZE],
+                                 uint8_t seq,
+                                 uint8_t msg_id,
+                                 uint8_t len)
+{
+    spi_link_frame_clear(frame);
+    frame[0] = (uint8_t)(SPI_LINK_MAGIC & 0xFFU);
+    frame[1] = (uint8_t)((SPI_LINK_MAGIC >> 8) & 0xFFU);
+    frame[2] = SPI_LINK_VER;
+    frame[3] = seq;
+    frame[4] = msg_id;
+    frame[5] = 0U;
+    frame[6] = len;
+    frame[7] = 0U;
+}
+
+void spi_link_build_detect_result(uint8_t frame[SPI_LINK_FRAME_SIZE],
+                                  uint8_t seq,
+                                  const spi_link_detect_result_t *det)
+{
+    uint8_t count;
+    uint8_t i;
+    uint8_t len;
+    uint8_t *p;
+
+    if ((frame == NULL) || (det == NULL)) {
+        return;
+    }
+
+    count = det->count;
+    if (count > SPI_LINK_DETECT_BOX_MAX) {
+        count = SPI_LINK_DETECT_BOX_MAX;
+    }
+    len = (uint8_t)(6U + (8U * count));
+
+    spi_link_frame_begin(frame, seq, SPI_LINK_MSG_DETECT_RESULT, len);
+    p = &frame[8];
+    spi_link_put_u16_le(&p[0], det->frame_w);
+    spi_link_put_u16_le(&p[2], det->frame_h);
+    p[4] = count;
+    p[5] = (count == 0U) ? 0xFFU : det->best_index;
+
+    for (i = 0U; i < count; i++) {
+        uint8_t *b = &p[6U + (8U * i)];
+        spi_link_put_u16_le(&b[0], det->box[i].x);
+        spi_link_put_u16_le(&b[2], det->box[i].y);
+        spi_link_put_u16_le(&b[4], det->box[i].w);
+        b[6] = det->box[i].score_u8;
+        b[7] = det->box[i].class_id;
+    }
+
+    spi_link_frame_set_crc(frame);
+}
+
+void spi_link_build_servo_telemetry(uint8_t frame[SPI_LINK_FRAME_SIZE],
+                                    uint8_t seq,
+                                    const spi_link_servo_telemetry_t *tel)
+{
+    uint8_t *p;
+
+    if ((frame == NULL) || (tel == NULL)) {
+        return;
+    }
+
+    spi_link_frame_begin(frame, seq, SPI_LINK_MSG_SERVO_TELEMETRY, 16U);
+    p = &frame[8];
+    spi_link_put_i16_le(&p[0], tel->pan_deg_x100);
+    spi_link_put_i16_le(&p[2], tel->tilt_deg_x100);
+    spi_link_put_u16_le(&p[4], tel->pan_pulse_us);
+    spi_link_put_u16_le(&p[6], tel->tilt_pulse_us);
+    spi_link_put_i16_le(&p[8], tel->pan_min_x100);
+    spi_link_put_i16_le(&p[10], tel->pan_max_x100);
+    spi_link_put_i16_le(&p[12], tel->tilt_min_x100);
+    spi_link_put_i16_le(&p[14], tel->tilt_max_x100);
+    spi_link_frame_set_crc(frame);
+}
+
+void spi_link_build_ctrl_ack(uint8_t frame[SPI_LINK_FRAME_SIZE],
+                             uint8_t seq,
+                             const spi_link_ctrl_ack_t *ack)
+{
+    uint8_t *p;
+
+    if ((frame == NULL) || (ack == NULL)) {
+        return;
+    }
+
+    spi_link_frame_begin(frame, seq, SPI_LINK_MSG_CTRL_ACK, 8U);
+    p = &frame[8];
+    p[0] = ack->sub_cmd;
+    p[1] = ack->req_id;
+    p[2] = ack->result;
+    p[3] = 0U;
+    spi_link_put_u32_le(&p[4], ack->detail);
+    spi_link_frame_set_crc(frame);
+}
+
+bool_t spi_link_parse_ctrl_cmd(const uint8_t frame[SPI_LINK_FRAME_SIZE],
+                               spi_link_ctrl_cmd_t *out)
+{
+    spi_link_hdr_t hdr;
+    uint8_t argc;
+    uint8_t i;
+
+    if ((frame == NULL) || (out == NULL)) {
+        return FALSE;
+    }
+    if (spi_link_frame_parse_hdr(frame, &hdr) == FALSE) {
+        return FALSE;
+    }
+    if (hdr.msg_id != SPI_LINK_MSG_CTRL_CMD) {
+        return FALSE;
+    }
+    if (hdr.len < 4U) {
+        return FALSE;
+    }
+
+    argc = frame[10];
+    if ((uint16_t)argc > (uint16_t)(hdr.len - 4U)) {
+        return FALSE;
+    }
+    if (argc > (uint8_t)sizeof(out->args)) {
+        return FALSE;
+    }
+
+    out->sub_cmd = frame[8];
+    out->req_id = frame[9];
+    out->argc = argc;
+    for (i = 0U; i < argc; i++) {
+        out->args[i] = frame[12U + i];
+    }
+    for (; i < (uint8_t)sizeof(out->args); i++) {
+        out->args[i] = 0U;
+    }
+    return TRUE;
+}

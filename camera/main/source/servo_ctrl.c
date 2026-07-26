@@ -1,7 +1,7 @@
 /**
  * @file servo_ctrl.c
  * @brief MG996R 双舵机：50 Hz LEDC，脉宽 ↔ 0–360°，运行时软限位。
- *        控制入口：网页 REST / 板端按键；不走串口命令。
+ *        控制入口：网页 REST / SPI CTRL_CMD（TM4C）/ 板端按键。
  */
 
 #include "servo_ctrl.h"

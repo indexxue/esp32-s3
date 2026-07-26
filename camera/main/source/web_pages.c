@@ -37,9 +37,25 @@ static uint8_t            *s_web_jpeg_buf;
 static SemaphoreHandle_t   s_web_jpeg_mtx;
 static volatile bool       s_mjpeg_busy;
 
+/** 停 MJPEG 长连接并最多等 ~1s，释放 SoftAP httpd 槽。 */
+static void web_pages_pause_stream(void)
+{
+    unsigned i;
+
+    s_web_camera_paused = true;
+    for (i = 0U; (i < 40U) && s_mjpeg_busy; i++) {
+        vTaskDelay(pdMS_TO_TICKS(25));
+    }
+}
+
+static void web_pages_wifi_pause_hook(void)
+{
+    web_pages_pause_stream();
+}
+
 static void web_pages_wifi_prepare_hook(void)
 {
-    s_web_camera_paused = true;
+    web_pages_pause_stream();
     camera_sensor_prepare_for_reboot();
 }
 
@@ -236,8 +252,8 @@ static esp_err_t web_api_camera_mjpeg_get(httpd_req_t *req)
         uint32_t jpeg_len = 0U;
         int      hdr_len;
 
-        if (camera_sensor_wait_jpeg_seq(&seq, 1000U) != STATUS_OK) {
-            /* 无新帧：发空闲探测，避免中间代理/浏览器以为挂死。 */
+        /* 短超时轮询，便于 camera_pause 后尽快退出占槽。 */
+        if (camera_sensor_wait_jpeg_seq(&seq, 200U) != STATUS_OK) {
             continue;
         }
         if (xSemaphoreTake(s_web_jpeg_mtx, pdMS_TO_TICKS(200)) != pdTRUE) {
@@ -291,13 +307,32 @@ static esp_err_t web_api_camera_mjpeg_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t web_api_camera_pause_post(httpd_req_t *req)
+{
+    char json[96];
+    int  n;
+
+    if (!web_local_peer_allowed(req)) {
+        return web_sensitive_forbidden(req);
+    }
+    web_pages_pause_stream();
+    n = snprintf(json,
+                 sizeof(json),
+                 "{\"ok\":true,\"paused\":true,\"mjpeg_busy\":%s}",
+                 s_mjpeg_busy ? "true" : "false");
+    if ((n <= 0) || ((size_t)n >= sizeof(json))) {
+        return web_send_json(req, "{\"ok\":true,\"paused\":true}");
+    }
+    return web_send_json(req, json);
+}
+
 static esp_err_t web_api_camera_resume_post(httpd_req_t *req)
 {
     if (!web_local_peer_allowed(req)) {
         return web_sensitive_forbidden(req);
     }
     s_web_camera_paused = false;
-    return web_send_json(req, "{\"ok\":true}");
+    return web_send_json(req, "{\"ok\":true,\"paused\":false}");
 }
 
 static bool web_parse_u16_after_key(const char *body, const char *key, uint16_t *out)
@@ -656,6 +691,11 @@ esp_err_t web_pages_register(httpd_handle_t server)
         .method  = HTTP_POST,
         .handler = web_api_camera_resume_post,
     };
+    httpd_uri_t camera_pause = {
+        .uri     = "/api/camera/camera_pause",
+        .method  = HTTP_POST,
+        .handler = web_api_camera_pause_post,
+    };
     httpd_uri_t camera_cfg = {
         .uri     = "/api/camera/config",
         .method  = HTTP_POST,
@@ -678,6 +718,7 @@ esp_err_t web_pages_register(httpd_handle_t server)
     }
 
     web_ctrl_wifi_set_prepare_hook(web_pages_wifi_prepare_hook);
+    web_ctrl_wifi_set_pause_hook(web_pages_wifi_pause_hook);
     (void)web_jpeg_buf_ensure();
 
     err = web_pages_register_uri(server, &favicon);
@@ -697,6 +738,10 @@ esp_err_t web_pages_register(httpd_handle_t server)
         return err;
     }
     err = web_pages_register_uri(server, &camera_resume);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = web_pages_register_uri(server, &camera_pause);
     if (err != ESP_OK) {
         return err;
     }

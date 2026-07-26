@@ -16,6 +16,7 @@
 
 #include "sdkconfig.h"
 
+#include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -43,16 +44,47 @@ static uint32_t        s_scan_generation;
 static wifi_ap_record_t s_ap_buf[WEB_CTRL_WIFI_SCAN_MAX];
 static uint16_t        s_ap_count;
 static web_ctrl_wifi_prepare_fn s_prepare_hook;
+static web_ctrl_wifi_prepare_fn s_pause_hook;
+static EventGroupHandle_t       s_scan_evt;
+static esp_event_handler_instance_t s_scan_evt_inst;
+
+#define WEB_CTRL_WIFI_SCAN_DONE_BIT BIT0
 
 void web_ctrl_wifi_set_prepare_hook(web_ctrl_wifi_prepare_fn fn)
 {
     s_prepare_hook = fn;
 }
 
+void web_ctrl_wifi_set_pause_hook(web_ctrl_wifi_prepare_fn fn)
+{
+    s_pause_hook = fn;
+}
+
 static void wifi_invoke_prepare_hook(void)
 {
     if (s_prepare_hook != NULL) {
         s_prepare_hook();
+    }
+}
+
+static void wifi_invoke_pause_hook(void)
+{
+    if (s_pause_hook != NULL) {
+        s_pause_hook();
+    } else if (s_prepare_hook != NULL) {
+        /* 兼容旧应用：仅注册了 prepare 时扫描也先停流。 */
+        s_prepare_hook();
+    }
+}
+
+static void wifi_scan_done_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg;
+    (void)base;
+    (void)id;
+    (void)data;
+    if (s_scan_evt != NULL) {
+        (void)xEventGroupSetBits(s_scan_evt, WEB_CTRL_WIFI_SCAN_DONE_BIT);
     }
 }
 
@@ -105,22 +137,70 @@ static void scan_worker(void *arg)
 
         {
             wifi_scan_config_t sc = {0};
+            esp_err_t          start_err;
 
             sc.scan_type   = WIFI_SCAN_TYPE_ACTIVE;
-            sc.show_hidden = true;
-            /* 非阻塞扫描 + 任务内等待，避免 `block=true` 长时间霸占 Wi-Fi 栈导致网页/MJPEG 卡顿。 */
-            if (esp_wifi_scan_start(&sc, false) == ESP_OK) {
-                vTaskDelay(pdMS_TO_TICKS(3500));
+            sc.show_hidden = false;
+            /* 缩短主动扫描驻留，减轻 SoftAP 卡顿。 */
+            sc.scan_time.active.min = 80;
+            sc.scan_time.active.max = 120;
+
+            if (s_scan_evt != NULL) {
+                (void)xEventGroupClearBits(s_scan_evt, WEB_CTRL_WIFI_SCAN_DONE_BIT);
+            }
+
+            start_err = esp_wifi_scan_start(&sc, false);
+            if (start_err == ESP_OK) {
+                if (s_scan_evt != NULL) {
+                    (void)xEventGroupWaitBits(s_scan_evt,
+                                              WEB_CTRL_WIFI_SCAN_DONE_BIT,
+                                              pdTRUE,
+                                              pdFALSE,
+                                              pdMS_TO_TICKS(8000));
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(3000));
+                }
+            } else {
+                ESP_LOGW(TAG, "esp_wifi_scan_start: %s", esp_err_to_name(start_err));
             }
         }
 
         {
-            uint16_t            num = WEB_CTRL_WIFI_SCAN_MAX;
-            const esp_err_t     er  = esp_wifi_scan_get_ap_records(&num, s_ap_buf);
+            uint16_t        num = WEB_CTRL_WIFI_SCAN_MAX;
+            const esp_err_t er  = esp_wifi_scan_get_ap_records(&num, s_ap_buf);
 
             if (xSemaphoreTake(s_mtx, portMAX_DELAY) == pdTRUE) {
                 if (er == ESP_OK) {
-                    s_ap_count = num;
+                    /* 同 SSID 去重，保留更强 RSSI，缩小 JSON、减轻网页渲染。 */
+                    uint16_t uniq = 0U;
+                    uint16_t i;
+
+                    for (i = 0U; i < num; i++) {
+                        uint16_t j;
+                        bool     merged = false;
+
+                        if (s_ap_buf[i].ssid[0] == '\0') {
+                            continue;
+                        }
+                        for (j = 0U; j < uniq; j++) {
+                            if (strncmp((const char *)s_ap_buf[i].ssid,
+                                        (const char *)s_ap_buf[j].ssid,
+                                        sizeof(s_ap_buf[i].ssid)) == 0) {
+                                if (s_ap_buf[i].rssi > s_ap_buf[j].rssi) {
+                                    s_ap_buf[j] = s_ap_buf[i];
+                                }
+                                merged = true;
+                                break;
+                            }
+                        }
+                        if (!merged) {
+                            if (uniq != i) {
+                                s_ap_buf[uniq] = s_ap_buf[i];
+                            }
+                            uniq++;
+                        }
+                    }
+                    s_ap_count = uniq;
                 } else {
                     s_ap_count = 0U;
                 }
@@ -276,6 +356,9 @@ static esp_err_t wifi_scan_post_handler(httpd_req_t *req)
         (void)httpd_resp_set_type(req, "application/json");
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"wifi_down\"}", HTTPD_RESP_USE_STRLEN);
     }
+
+    /* 先停 MJPEG 等长连接，释放 SoftAP 下有限的 httpd 槽位。 */
+    wifi_invoke_pause_hook();
 
     if (xSemaphoreTake(s_mtx, pdMS_TO_TICKS(2000)) != pdTRUE) {
         (void)httpd_resp_set_status(req, "503 Service Unavailable");
@@ -462,6 +545,9 @@ static esp_err_t wifi_save_post_handler(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"error\":\"forbidden\"}", HTTPD_RESP_USE_STRLEN);
     }
 
+    /* 尽早停流，避免读 body / 写 NVS 时 MJPEG 仍占槽。 */
+    wifi_invoke_pause_hook();
+
     rbody = wifi_http_read_post_body(req, body, sizeof(body), &body_len);
     if (rbody == ESP_ERR_INVALID_SIZE) {
         (void)httpd_resp_set_status(req, "411 Length Required");
@@ -597,6 +683,26 @@ esp_err_t web_ctrl_wifi_api_register(httpd_handle_t server)
         if (s_mtx == NULL) {
             ESP_LOGE(TAG, "mutex create failed");
             return ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (s_scan_evt == NULL) {
+        s_scan_evt = xEventGroupCreate();
+        if (s_scan_evt == NULL) {
+            ESP_LOGE(TAG, "scan event group create failed");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (s_scan_evt_inst == NULL) {
+        const esp_err_t e =
+            esp_event_handler_instance_register(WIFI_EVENT,
+                                                WIFI_EVENT_SCAN_DONE,
+                                                wifi_scan_done_event,
+                                                NULL,
+                                                &s_scan_evt_inst);
+        if (e != ESP_OK) {
+            ESP_LOGW(TAG, "SCAN_DONE register: %s (fallback delay)", esp_err_to_name(e));
         }
     }
 

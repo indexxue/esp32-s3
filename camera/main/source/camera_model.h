@@ -1,6 +1,6 @@
 /**
  * @file camera_model.h
- * @brief 钢珠 ESPDet 检测封装：结果缓存 + LCD 画框数据。
+ * @brief 钢珠 ESPDet 检测封装：结果缓存 + 画框数据。
  */
 
 #pragma once
@@ -17,6 +17,17 @@ extern "C" {
 
 /** UI 扁平框：每框 5×uint16 = [x, y, w, h, color_565] */
 #define CAMERA_MODEL_UI_BOX_STRIDE (5U)
+
+/**
+ * 检测框叠加目标（编译期宏，可单独开/关；也可全开或全关）。
+ * 1 = 开，0 = 关。改后需重编固件。
+ */
+#ifndef CAMERA_DETECT_OVERLAY_LCD
+#define CAMERA_DETECT_OVERLAY_LCD 1
+#endif
+#ifndef CAMERA_DETECT_OVERLAY_WEB
+#define CAMERA_DETECT_OVERLAY_WEB 1
+#endif
 
 typedef struct {
     uint16_t x;
@@ -38,11 +49,16 @@ status_t camera_model_init(void);
 status_t camera_model_start(void);
 bool_t camera_model_is_ready(void);
 
-/** 拷贝最近一次检测结果。 */
+/** CTRL DETECT_ENABLE：关则停推理并清空缓存；开则恢复。默认开。 */
+status_t camera_model_set_enabled(bool_t on);
+bool_t camera_model_is_enabled(void);
+
+/** 拷贝最近一次检测结果；可选带回结果代数（每次 store/clear +1）。 */
 status_t camera_model_get_latest(camera_model_result_t *out);
+status_t camera_model_get_latest_ex(camera_model_result_t *out, uint32_t *gen);
 
 /**
- * 填充 LCD 画框用扁平数组。
+ * 填充画框用扁平数组（LCD / 网页共用）。
  * @param out_flat  长度至少 max_count * 5
  * @param max_count 最多框数
  * @param out_count 实际框数
