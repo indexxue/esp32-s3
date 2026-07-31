@@ -1,14 +1,16 @@
 steel_ball_annotate — SoftAP 采数 + YOLO 标注（PC 上位机）
 
 用途
-  连接 ESP32-S3 camera SoftAP，轮询 JPEG 预览，抓帧落盘，
-  画框导出 YOLO 归一化标签（单类阶段只标 class 0 = ball）。
+  连接 ESP32-S3 camera SoftAP，独占 MJPEG 预览（板端关 LCD），
+  抓帧落盘，画框导出 YOLO 归一化标签（单类阶段只标 class 0 = ball）。
   完整采数→ESPDet 训练→上板流程见：camera/README.txt
 
 前置
   1. 板端 camera 固件已启动 SoftAP + 网页图传
+     建议采数固件：CAMERA_APP_COLLECT_MODE=1（关检测）
   2. PC 连上设备热点（默认入口 http://192.168.4.1/）
-  3. Python 3 + Tkinter（Windows 官方安装包通常已含）
+  3. 关闭浏览器 /preview.html（独占流只能一路）
+  4. Python 3 + Tkinter（Windows 官方安装包通常已含）
 
 安装
   cd camera\tools\steel_ball_annotate
@@ -38,8 +40,9 @@ steel_ball_annotate — SoftAP 采数 + YOLO 标注（PC 上位机）
   顶栏           Delete image — 删当前图与 labels 同名 txt
 
 预览优化说明
-  HTTP Session 复用；解码与缩放到后台线程；UI 只换 PhotoImage；
-  窗口缩放防抖；状态栏显示约略 fps 与 RTT。
+  独占 /api/camera/stream.mjpg（与网页 preview 同通道，板端关 LCD）；
+  完整 JPEG 边界解析；UI 限约 15fps；抓帧用最新完整帧；
+  显示最多 2× 最近邻放大（源图始终 240×240）。
 
 坐标约定（与板端一致）
   原点左上，x 右、y 下
@@ -62,8 +65,16 @@ steel_ball_annotate — SoftAP 采数 + YOLO 标注（PC 上位机）
 故障提示
   连接失败     — PC 未连 SoftAP 或 Base URL 错误
   403          — 非 SoftAP/同子网，板端拒绝摄像头接口
-  503          — 相机未就绪 / WiFi 暂停 / 无帧
-  fps 低/rtt 高 — SoftAP 忙（网页也在拉流）或信号差；可先关浏览器预览
+  503 / 超时   — 浏览器开着 /preview.html 独占流，或固件在跑检测抢 CPU
+                 Connect 会尝试 pause/resume 释放通道；仍失败则：
+                 1) 关掉独占预览页
+                 2) 采数固件：CAMERA_APP_COLLECT_MODE=1 重编烧录
+  fps 低/rtt 高 — SoftAP 忙或信号差；识别固件下请改采数模式再采
+
+板端模式（camera/main/CMakeLists.txt）
+  CAMERA_APP_COLLECT_MODE=1  采数：关 ESPDet，专供本工具 JPEG 抓帧
+  CAMERA_APP_COLLECT_MODE=0  识别：开检测（默认）；不要同时开独占预览+本工具
+  改宏后：idf -Project camera build 并烧录
 
 验证工具（validate.py）
   可视化选模型（.pt/.onnx）与图片目录/单张图，YOLO 推理叠框+中心点。

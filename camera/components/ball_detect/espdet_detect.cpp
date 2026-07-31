@@ -17,10 +17,18 @@ ESPDet::ESPDet(const char *model_name, float score_thr, float nms_thr)
 #if CONFIG_BALL_DETECT_MODEL_IN_SDCARD
 #error "ball_detect SDCARD model path is not supported in camera firmware"
 #else
-    bool param_copy = true;
-    if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) < (1024 * 1024 * 9)) {
-        param_copy = false;
-    }
+    /*
+     * 强制权重进 PSRAM。Flash 直读 + 并发 JPEG 时 infer ~500ms+，叠框严重滞后。
+     * 若 largest block 太小仍尝试 true（loader 内会按对齐等再判）。
+     */
+    const size_t spiram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const size_t spiram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    const bool param_copy = true;
+    ESP_LOGI("ball_detect",
+             "param_copy=%d spiram_free=%u largest=%u",
+             (int)param_copy,
+             (unsigned)spiram_free,
+             (unsigned)spiram_largest);
     m_model = new dl::Model(s_model_rodata,
                             model_name,
                             static_cast<fbs::model_location_type_t>(CONFIG_BALL_DETECT_MODEL_LOCATION),

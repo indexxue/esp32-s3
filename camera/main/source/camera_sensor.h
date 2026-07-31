@@ -1,6 +1,6 @@
 /**
  * @file camera_sensor.h
- * @brief OV2640 低帧率预览（LCD 本地显示 + Web JPEG 快照）。
+ * @brief OV2640 预览（LCD + Web JPEG/MJPEG；拉流时独占关 LCD）。
  */
 
 #pragma once
@@ -14,20 +14,21 @@ extern "C" {
 #endif
 
 /**
- * 传感器采集分辨率。640×480 SVGA，避免 240 直出 CIF 开窗的四周偏紫。
- * 网页/LCD：zoom=1 整幅缩小；zoom>1 中心取更小窗口再缩放。
+ * 传感器采集：240×240 RGB565 @ ~25fps（与 voice_hub 同格式）。
+ * 相对 640×480@6fps 更跟手；CIF 开窗偶发四周偏紫，以实机为准。
  */
-#define CAMERA_SENSOR_CAPTURE_WIDTH (640U)
-#define CAMERA_SENSOR_CAPTURE_HEIGHT (480U)
-#define CAMERA_SENSOR_SENSOR_FORMAT "DVP_8bit_20Minput_RGB565_BE_640x480_6fps"
+#define CAMERA_SENSOR_CAPTURE_WIDTH (240U)
+#define CAMERA_SENSOR_CAPTURE_HEIGHT (240U)
+#define CAMERA_SENSOR_SENSOR_FORMAT "DVP_8bit_20Minput_RGB565_BE_240x240_25fps"
 
-#define CAMERA_SENSOR_WEB_DEFAULT_WIDTH (320U)
+#define CAMERA_SENSOR_WEB_DEFAULT_WIDTH (240U)
 #define CAMERA_SENSOR_WEB_DEFAULT_HEIGHT (240U)
 
 #define CAMERA_SENSOR_PREVIEW_WIDTH CAMERA_SENSOR_WEB_DEFAULT_WIDTH
 #define CAMERA_SENSOR_PREVIEW_HEIGHT CAMERA_SENSOR_WEB_DEFAULT_HEIGHT
 
-#define CAMERA_SENSOR_WEB_FRAME_MS (120U)
+/** 与 ~25fps 采集对齐的网页帧间隔提示。 */
+#define CAMERA_SENSOR_WEB_FRAME_MS (40U)
 #define CAMERA_SENSOR_WEB_JPEG_QUALITY (55U)
 
 #ifndef CAMERA_SENSOR_LCD_MIN_INTERVAL_MS
@@ -40,7 +41,21 @@ extern "C" {
 #endif
 
 #ifndef CAMERA_SENSOR_SNAPSHOT_MIN_INTERVAL_MS
-#define CAMERA_SENSOR_SNAPSHOT_MIN_INTERVAL_MS (50U)
+#define CAMERA_SENSOR_SNAPSHOT_MIN_INTERVAL_MS (40U)
+#endif
+
+/** MJPEG 在线时 snapshot/JPEG 目标约 10fps，把 PSRAM/CPU 让给检测减叠框滞后。 */
+#ifndef CAMERA_SENSOR_SNAPSHOT_STREAM_INTERVAL_MS
+#define CAMERA_SENSOR_SNAPSHOT_STREAM_INTERVAL_MS (100U)
+#endif
+
+/** 无 MJPEG 时 JPEG cache 刷新间隔（snapshot 仍按 SNAPSHOT_MIN 供检测）。 */
+#ifndef CAMERA_SENSOR_JPEG_IDLE_INTERVAL_MS
+#define CAMERA_SENSOR_JPEG_IDLE_INTERVAL_MS (200U)
+#endif
+
+#ifndef CAMERA_SENSOR_JPEG_CACHE_CAP
+#define CAMERA_SENSOR_JPEG_CACHE_CAP (49152U)
 #endif
 
 #ifndef CAMERA_SENSOR_BLIT_STRIP_BYTES_MAX
@@ -83,9 +98,15 @@ uint8_t camera_sensor_get_flip_v(void);
 uint8_t camera_sensor_get_flip_h(void);
 uint32_t camera_sensor_get_jpeg_seq(void);
 
-/** MJPEG 客户端进入/离开：用于降低 LCD 刷新优先级。 */
+/**
+ * MJPEG 客户端进入/离开：进入独占预览（关 LCD blit/背光，跳过 WEB 叠框），
+ * 末个客户端离开后恢复 LCD。
+ */
 void camera_sensor_web_stream_enter(void);
 void camera_sensor_web_stream_leave(void);
+
+/** 是否有网页 MJPEG 独占预览在线。 */
+bool_t camera_sensor_web_stream_active(void);
 
 /**
  * 等待 JPEG cache 序号变化（新帧就绪）。
@@ -113,6 +134,13 @@ status_t camera_sensor_snapshot_jpeg(uint8_t *out, uint32_t out_cap, uint32_t *o
  * @param out_w/h  输出宽高
  */
 status_t camera_sensor_copy_rgb565(uint8_t *out, uint32_t out_cap, uint16_t *out_w, uint16_t *out_h);
+
+/**
+ * 零拷贝借用已发布 snapshot 槽（双槽：检测持有期间预览写另一槽）。
+ * 用完必须 camera_sensor_release_rgb565()。
+ */
+status_t camera_sensor_acquire_rgb565(const uint8_t **out, uint16_t *out_w, uint16_t *out_h, uint32_t *gen);
+void camera_sensor_release_rgb565(void);
 
 #ifdef __cplusplus
 }

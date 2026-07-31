@@ -195,6 +195,44 @@ bool nvs_camera_settings_validate(const nvs_camera_settings_t *cfg);
 bool nvs_camera_settings_get(nvs_camera_settings_t *out);
 bool nvs_camera_settings_set(const nvs_camera_settings_t *cfg);
 
+/* -------------------------------------------------------------------------- */
+/* 单舵机平衡杠校准（左 / 中 / 右 × pulse + angle + offset）                    */
+/* -------------------------------------------------------------------------- */
+
+#define NVS_SERVO_CALIB_MAGIC 0x53434131u /* "SCA1" LE */
+
+#define NVS_SERVO_CALIB_CH_PAN  (0U)
+#define NVS_SERVO_CALIB_CH_TILT (1U)
+
+#define NVS_SERVO_CALIB_VALID_LEFT   (1U << 0)
+#define NVS_SERVO_CALIB_VALID_CENTER (1U << 1)
+#define NVS_SERVO_CALIB_VALID_RIGHT  (1U << 2)
+#define NVS_SERVO_CALIB_VALID_ALL                                                                                      \
+    (NVS_SERVO_CALIB_VALID_LEFT | NVS_SERVO_CALIB_VALID_CENTER | NVS_SERVO_CALIB_VALID_RIGHT)
+
+typedef struct __attribute__((packed)) {
+    float    angle_deg;  /* 捕获时逻辑角 */
+    float    offset_deg; /* 微调（°）；应用时叠到 pulse */
+    uint16_t pulse_us;   /* 捕获时实测脉宽（主真相） */
+    uint16_t _pad;
+} nvs_servo_pose_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t         magic;
+    uint8_t          channel;    /* NVS_SERVO_CALIB_CH_PAN / TILT */
+    uint8_t          valid_mask; /* bit0=L bit1=C bit2=R */
+    uint8_t          reserved[2];
+    nvs_servo_pose_t left;
+    nvs_servo_pose_t center;
+    nvs_servo_pose_t right;
+} nvs_servo_calib_t;
+
+void nvs_servo_calib_default(nvs_servo_calib_t *out);
+bool nvs_servo_calib_validate(const nvs_servo_calib_t *cfg);
+bool nvs_servo_calib_get(nvs_servo_calib_t *out);
+bool nvs_servo_calib_set(const nvs_servo_calib_t *cfg);
+bool nvs_servo_calib_delete(void);
+
 #ifdef __cplusplus
 }
 #endif

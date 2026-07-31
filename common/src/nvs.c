@@ -84,6 +84,15 @@ static const char *const TAG = "nvs";
 #define NVS_KEY_WEB_CTRL "web_ctrl"
 #define NVS_KEY_LCD_GAL_BOOT "lcd_gal_boot"
 #define NVS_KEY_CAMERA_CFG "cam_cfg"
+#define NVS_KEY_SERVO_CAL "servo_cal"
+
+/** 与 board.h 舵机映射一致；nvs 不依赖 board，避免层倒挂。 */
+#define NVS_SERVO_CALIB_PULSE_MIN_US (500U)
+#define NVS_SERVO_CALIB_PULSE_MAX_US (2500U)
+#define NVS_SERVO_CALIB_CENTER_PULSE_US (1500U)
+#define NVS_SERVO_CALIB_ANGLE_MAX_DEG (360.0f)
+#define NVS_SERVO_CALIB_CENTER_DEG (180.0f)
+#define NVS_SERVO_CALIB_OFFSET_ABS_MAX (180.0f)
 
 static const uint8_t s_default_mac[NVS_MAC_SIZE] = NVS_DEFAULT_MAC;
 
@@ -1003,7 +1012,7 @@ void nvs_camera_settings_default(nvs_camera_settings_t *out)
     }
     (void)memset(out, 0, sizeof(*out));
     out->magic        = NVS_CAMERA_SETTINGS_MAGIC;
-    out->web_width    = 320U;
+    out->web_width    = 240U;
     out->web_height   = 240U;
     out->quality      = 55U;
     out->grayscale    = 0U;
@@ -1073,4 +1082,110 @@ bool nvs_camera_settings_set(const nvs_camera_settings_t *cfg)
         return false;
     }
     return (blob_set(NVS_KEY_CAMERA_CFG, cfg, sizeof(*cfg)) == NVS_OK);
+}
+
+static void nvs_servo_pose_default(nvs_servo_pose_t *pose)
+{
+    if (pose == NULL) {
+        return;
+    }
+    pose->angle_deg  = NVS_SERVO_CALIB_CENTER_DEG;
+    pose->offset_deg = 0.0f;
+    pose->pulse_us   = (uint16_t)NVS_SERVO_CALIB_CENTER_PULSE_US;
+    pose->_pad       = 0U;
+}
+
+static bool nvs_servo_pose_validate(const nvs_servo_pose_t *pose)
+{
+    if (pose == NULL) {
+        return false;
+    }
+    if ((pose->angle_deg < 0.0f) || (pose->angle_deg > NVS_SERVO_CALIB_ANGLE_MAX_DEG)) {
+        return false;
+    }
+    if ((pose->offset_deg < -NVS_SERVO_CALIB_OFFSET_ABS_MAX) ||
+        (pose->offset_deg > NVS_SERVO_CALIB_OFFSET_ABS_MAX)) {
+        return false;
+    }
+    if ((pose->pulse_us < NVS_SERVO_CALIB_PULSE_MIN_US) || (pose->pulse_us > NVS_SERVO_CALIB_PULSE_MAX_US)) {
+        return false;
+    }
+    return true;
+}
+
+void nvs_servo_calib_default(nvs_servo_calib_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    (void)memset(out, 0, sizeof(*out));
+    out->magic       = NVS_SERVO_CALIB_MAGIC;
+    out->channel     = NVS_SERVO_CALIB_CH_PAN; /* 平衡杠默认 Pan(GPIO46) */
+    out->valid_mask  = 0U;
+    nvs_servo_pose_default(&out->left);
+    nvs_servo_pose_default(&out->center);
+    nvs_servo_pose_default(&out->right);
+}
+
+bool nvs_servo_calib_validate(const nvs_servo_calib_t *cfg)
+{
+    if (cfg == NULL) {
+        return false;
+    }
+    if (cfg->magic != NVS_SERVO_CALIB_MAGIC) {
+        return false;
+    }
+    if ((cfg->channel != NVS_SERVO_CALIB_CH_PAN) && (cfg->channel != NVS_SERVO_CALIB_CH_TILT)) {
+        return false;
+    }
+    if ((cfg->valid_mask & (uint8_t)~NVS_SERVO_CALIB_VALID_ALL) != 0U) {
+        return false;
+    }
+    if (!nvs_servo_pose_validate(&cfg->left) || !nvs_servo_pose_validate(&cfg->center) ||
+        !nvs_servo_pose_validate(&cfg->right)) {
+        return false;
+    }
+    return true;
+}
+
+_Static_assert(sizeof(nvs_servo_calib_t) <= NVS_KEY_VALUE_MAX, "servo calib blob must fit NVS_KEY_VALUE_MAX");
+
+bool nvs_servo_calib_get(nvs_servo_calib_t *out)
+{
+    nvs_servo_calib_t tmp;
+    size_t            len = sizeof(tmp);
+
+    if (out == NULL) {
+        return false;
+    }
+    if (blob_get(NVS_KEY_SERVO_CAL, &tmp, &len) != NVS_OK) {
+        return false;
+    }
+    if (len != sizeof(tmp) || !nvs_servo_calib_validate(&tmp)) {
+        return false;
+    }
+    *out = tmp;
+    return true;
+}
+
+bool nvs_servo_calib_set(const nvs_servo_calib_t *cfg)
+{
+    if (!s_ready || (cfg == NULL)) {
+        return false;
+    }
+    if (!nvs_servo_calib_validate(cfg)) {
+        return false;
+    }
+    return (blob_set(NVS_KEY_SERVO_CAL, cfg, sizeof(*cfg)) == NVS_OK);
+}
+
+bool nvs_servo_calib_delete(void)
+{
+    nvs_err_t st;
+
+    if (!s_ready) {
+        return false;
+    }
+    st = blob_del(NVS_KEY_SERVO_CAL);
+    return (st == NVS_OK) || (st == NVS_ERR_NOT_FOUND);
 }

@@ -31,6 +31,26 @@
 #include "servo_ctrl.h"
 #include "web_pages.h"
 
+#ifndef CAMERA_APP_COLLECT_MODE
+#define CAMERA_APP_COLLECT_MODE 0
+#endif
+#ifndef CAMERA_APP_CALIB_MODE
+#define CAMERA_APP_CALIB_MODE 0
+#endif
+
+#if (CAMERA_APP_CALIB_MODE) && (CAMERA_APP_COLLECT_MODE)
+#error "CAMERA_APP_CALIB_MODE and CAMERA_APP_COLLECT_MODE are mutually exclusive"
+#endif
+
+#if CAMERA_APP_CALIB_MODE
+#include "cmd.h"
+#include "servo_calib_cmd.h"
+#endif
+
+#if !CAMERA_APP_CALIB_MODE && !CAMERA_APP_COLLECT_MODE
+#include "servo_ball_follow.h"
+#endif
+
 #if CAMERA_ENABLE_LCD
 #include "camera_ui.h"
 #endif
@@ -222,6 +242,10 @@ static void web_ctrl_boot_task(void *arg)
     web_ctrl_config_init_defaults(&wcfg);
     web_ctrl_config_merge_nvs(&wcfg);
     wcfg.root_get_handler = web_pages_root_get_handler;
+#if CAMERA_APP_CALIB_MODE
+    /* 校准：新 HTTP 请求可踢掉占槽长连接，避免图传占满后舵机 API 无响应。 */
+    web_server_prefer_lru_purge(true);
+#endif
     const esp_err_t werr = web_ctrl_start(&wcfg);
     if (werr != ESP_OK) {
         LOG_WARN("web_ctrl_start failed: %s", esp_err_to_name(werr));
@@ -234,6 +258,17 @@ static void web_ctrl_boot_task(void *arg)
         if (ota_st != STATUS_OK) {
             LOG_WARN("ota_confirm_running_image: %s", status_to_str(ota_st));
         }
+#if CAMERA_APP_CALIB_MODE
+        {
+            char ipbuf[20];
+
+            if (net_wifi_format_ipv4_for_display(ipbuf, sizeof(ipbuf))) {
+                LOG_INFO("calib web open: http://%s/  (NOT 192.168.4.1 if STA)", ipbuf);
+            } else {
+                LOG_INFO("calib web: waiting IP; SoftAP fallback http://192.168.4.1/");
+            }
+        }
+#endif
     }
     vTaskDelete(NULL);
 }
@@ -295,12 +330,37 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
     }
 
     if (event == BTN_EVENT_LONG_PRESS) {
+#if CAMERA_APP_CALIB_MODE
+        {
+            nvs_servo_calib_t cal;
+            status_t          st;
+            servo_ch_t        ch = SERVO_CH_PAN;
+
+            LOG_INFO("button long press → calib center pose");
+            if (nvs_servo_calib_get(&cal)) {
+                ch = (cal.channel == NVS_SERVO_CALIB_CH_TILT) ? SERVO_CH_TILT : SERVO_CH_PAN;
+                if ((cal.valid_mask & NVS_SERVO_CALIB_VALID_CENTER) != 0U) {
+                    st = servo_apply_pose(ch, cal.center.angle_deg, cal.center.offset_deg, cal.center.pulse_us);
+                } else {
+                    st = servo_set_angle(ch, (float)BOARD_SERVO_CENTER_DEG);
+                }
+            } else {
+                st = servo_set_angle(ch, (float)BOARD_SERVO_CENTER_DEG);
+            }
+            if (st != STATUS_OK) {
+                LOG_WARN("calib center pose failed");
+            } else {
+                camera_status_set("calib: center");
+            }
+        }
+#else
         LOG_INFO("button long press → servo center");
         if (servo_center_all() != STATUS_OK) {
             LOG_WARN("servo_center_all failed");
         } else {
             camera_status_set("servo: center");
         }
+#endif
         return;
     }
 
@@ -352,12 +412,24 @@ static void camera_modules_boot(void)
     camera_signal_wifi_may_start();
     camera_wait_wifi_started();
 
+#if CAMERA_APP_CALIB_MODE
+    LOG_INFO("CAMERA_APP_CALIB_MODE=1: detect skipped (servo calib)");
+    camera_status_set("calib: servo");
+#elif CAMERA_APP_COLLECT_MODE
+    /* 采数固件：不加载/不跑 ESPDet，把 CPU 与内存留给 SoftAP JPEG 抓帧。 */
+    LOG_INFO("CAMERA_APP_COLLECT_MODE=1: detect skipped (JPEG collect)");
+    camera_status_set("collect: jpeg");
+#else
     if (camera_model_start() != STATUS_OK) {
         LOG_WARN("camera_model_start failed");
         camera_status_set("detect: fail");
     } else {
         camera_status_set("detect: ball");
+        if (servo_ball_follow_start() != STATUS_OK) {
+            LOG_WARN("servo_ball_follow_start skipped (need NVS L/C/R)");
+        }
     }
+#endif
 }
 
 static void camera_modules_task(void *arg)
@@ -396,10 +468,39 @@ static status_t app_init_platform(void)
     if (servo_init() != STATUS_OK) {
         LOG_WARN("servo_init failed (gimbal unavailable)");
     }
+#if CAMERA_APP_CALIB_MODE
+    else {
+        nvs_servo_calib_t cal;
+        float             lo = 0.0f;
+        float             hi = (float)BOARD_SERVO_ANGLE_MAX_DEG;
+        servo_ch_t        ch = SERVO_CH_PAN;
 
+        /* 校准固件放开双轴软限位，避免 set_angle 被 Tilt 默认 60–300 卡住。 */
+        if (servo_set_limits(&lo, &hi, &lo, &hi) != STATUS_OK) {
+            LOG_WARN("calib: open soft limits failed");
+        }
+        if (nvs_servo_calib_get(&cal)) {
+            ch = (cal.channel == NVS_SERVO_CALIB_CH_TILT) ? SERVO_CH_TILT : SERVO_CH_PAN;
+            if ((cal.valid_mask & NVS_SERVO_CALIB_VALID_CENTER) != 0U) {
+                if (servo_apply_pose(ch, cal.center.angle_deg, cal.center.offset_deg, cal.center.pulse_us) !=
+                    STATUS_OK) {
+                    LOG_WARN("calib: apply NVS center pose failed");
+                } else {
+                    LOG_INFO("calib: ch=%u parked at NVS center", (unsigned)cal.channel);
+                }
+            }
+        }
+    }
+#endif
+
+#if CAMERA_APP_CALIB_MODE
+    /* 校准固件不启 SPI：MCU 未接时刷屏干扰串口舵机调试。 */
+    LOG_INFO("calib: SPI host skipped");
+#else
     if (camera_spi_host_start() != STATUS_OK) {
         LOG_WARN("camera_spi_host_start failed (MCU link unavailable)");
     }
+#endif
 
     /*
      * 摄像头 SCCB 长寄存器表写入对总线抖动敏感。
@@ -437,8 +538,13 @@ static status_t app_init_button_io(void)
         return STATUS_FAIL;
     }
 
+#if CAMERA_APP_CALIB_MODE
+    LOG_INFO("camera: GPIO0 long=calib center pose, double=WiFi SoftAP reprovision, scan %d Hz",
+             FLEX_BTN_SCAN_FREQ_HZ);
+#else
     LOG_INFO("camera: GPIO0 long=servo center, double=WiFi SoftAP reprovision, scan %d Hz",
              FLEX_BTN_SCAN_FREQ_HZ);
+#endif
     return STATUS_OK;
 }
 
@@ -483,6 +589,16 @@ static status_t app_init(void)
             return err;
         }
     }
+
+#if CAMERA_APP_CALIB_MODE
+    /* USB 串口舵机命令，不依赖网页（monitor 里直接敲 servo）。 */
+    cmd_set_project_register_fn(servo_calib_cmd_register);
+    if (cmd_usb_line_service_start() != STATUS_OK) {
+        LOG_WARN("cmd_usb_line_service_start failed (use web only)");
+    } else {
+        LOG_INFO("calib USB cmd ready: type 'help' then 'servo pan 180'");
+    }
+#endif
 
     LOG_INFO("%s ready (platform_mask=0x%02lX)", product->name, (unsigned long)device_profile_platform_mask());
     return STATUS_OK;

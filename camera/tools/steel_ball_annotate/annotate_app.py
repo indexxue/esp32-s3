@@ -2,8 +2,9 @@
 """
 Steel-ball SoftAP capture + YOLO annotate tool (PC host).
 
-Connects to ESP32-S3 camera SoftAP, polls /api/camera/camera.jpg,
-saves frames, and writes YOLO-normalized labels (cls cx cy w h).
+Connects to ESP32-S3 camera SoftAP, takes exclusive MJPEG
+(/api/camera/stream.mjpg, LCD off on device), freezes frames for labeling,
+writes YOLO-normalized labels (cls cx cy w h).
 
 Coordinate: origin top-left, x right, y down — same as board camera_detection.
 """
@@ -46,8 +47,16 @@ DATA_YAML_PATH = DATASET_DIR / "data.yaml"
 CONFIG_PATH = APP_DIR / "config.json"
 
 DEFAULT_BASE_URL = "http://192.168.4.1"
-POLL_MS = 120
-HTTP_TIMEOUT_S = 1.5
+STREAM_PATH = "/api/camera/stream.mjpg"
+HTTP_TIMEOUT_S = 2.0
+HTTP_CTRL_TIMEOUT_S = 3.0
+STREAM_CONNECT_TIMEOUT_S = 3.0
+STREAM_READ_TIMEOUT_S = 60.0
+# UI 刷新上限；抓帧始终用最新完整 JPEG。
+UI_MAX_FPS = 15.0
+# 板端原生 240×240；实时预览最多 2× 整数放大。
+PREVIEW_NATIVE = 240
+PREVIEW_MAX_SCALE = 2
 CLASS_COUNT = 10
 MIN_BOX_PX = 3
 HANDLE_HIT_PX = 8
@@ -385,11 +394,11 @@ def http_error_hint(status: Optional[int], exc: Optional[BaseException]) -> str:
     if isinstance(exc, requests.exceptions.ConnectionError):
         return "无法连接设备：请确认 PC 已连 SoftAP，且 Base URL 正确"
     if isinstance(exc, requests.exceptions.Timeout):
-        return "请求超时：设备忙或网络不通"
+        return "请求超时：请关闭浏览器独占预览(/preview.html)，并确认固件为采数模式"
     if status == 403:
         return "403 Forbidden：须在 SoftAP/同子网访问摄像头接口"
     if status == 503:
-        return "503：相机未就绪 / 已暂停 / 无帧"
+        return "503：相机忙/已暂停/无帧 — 请关独占预览后 Connect；采数请烧 CAMERA_APP_COLLECT_MODE=1"
     if status is not None:
         return f"HTTP {status}"
     if exc is not None:
@@ -402,6 +411,39 @@ def decode_jpeg(jpeg: bytes) -> Image.Image:
     if img.mode != "RGB":
         img = img.convert("RGB")
     return img
+
+
+def live_disp_size(iw: int, ih: int, cw: int, ch: int) -> Tuple[int, int]:
+    """Live preview size: prefer native 240, integer upscale ≤ PREVIEW_MAX_SCALE."""
+    if iw <= 0 or ih <= 0:
+        return (1, 1)
+    fit = min(max(1, cw) / float(iw), max(1, ch) / float(ih))
+    if fit < 1.0:
+        dw = max(1, int(round(iw * fit)))
+        dh = max(1, int(round(ih * fit)))
+        return (dw, dh)
+    scale = min(PREVIEW_MAX_SCALE, max(1, int(fit)))
+    return (iw * scale, ih * scale)
+
+
+def extract_complete_jpegs(buf: bytearray) -> List[bytes]:
+    """Pull SOI..EOI JPEGs from an MJPEG byte buffer; leave a partial frame in buf."""
+    out: List[bytes] = []
+    while True:
+        start = buf.find(b"\xff\xd8")
+        if start < 0:
+            buf.clear()
+            break
+        if start > 0:
+            del buf[:start]
+        end = buf.find(b"\xff\xd9", 2)
+        if end < 0:
+            if len(buf) > 256 * 1024:
+                buf.clear()
+            break
+        out.append(bytes(buf[: end + 2]))
+        del buf[: end + 2]
+    return out
 
 
 class AnnotateApp:
@@ -417,23 +459,24 @@ class AnnotateApp:
         self.base_url = tk.StringVar(value=cfg.get("base_url", DEFAULT_BASE_URL))
         self.status_text = tk.StringVar(value="未连接")
         self.hint_text = tk.StringVar(
-            value="Space 抓帧 | Esc 回预览 | Ctrl+S 保存 | Ctrl+Del 删图 | Del 删框 | 0-9 选类"
+            value="独占 MJPEG 预览 | Space 抓帧 | Esc 回预览 | 请关闭浏览器 /preview.html"
         )
         self.class_var = tk.IntVar(value=0)
 
         self.connected = False
-        self.device_w = 0
-        self.device_h = 0
+        self.device_w = PREVIEW_NATIVE
+        self.device_h = PREVIEW_NATIVE
         self.preview_on = False
-        self._poll_after_id: Optional[str] = None
         self._resize_after_id: Optional[str] = None
         self._session = requests.Session()
-        self._fetch_lock = threading.Lock()
-        self._fetch_generation = 0
+        self._stream_lock = threading.Lock()
+        self._stream_resp: Optional[requests.Response] = None
+        self._stream_thread: Optional[threading.Thread] = None
+        self._stream_generation = 0
         self._pending_apply = False
-        self._latest_frame: Optional[Tuple[int, bytes, Image.Image, Image.Image, Tuple[int, int], float]] = None
+        self._latest_frame: Optional[Tuple[int, bytes, Image.Image, Image.Image, Tuple[int, int]]] = None
         self._fps_times: List[float] = []
-        self._last_rtt_ms = 0.0
+        self._last_frame_ms = 0.0
 
         self.mode = "preview"  # preview | annotate
         self.raw_jpeg: Optional[bytes] = None
@@ -586,7 +629,7 @@ class AnnotateApp:
                 fps = (len(self._fps_times) - 1) / dt
         live = ""
         if self.mode == "preview" and self.preview_on:
-            live = f"  fps~{fps:.1f}  rtt={self._last_rtt_ms:.0f}ms"
+            live = f"  exclusive-MJPEG  fps~{fps:.1f}  frame={self._last_frame_ms:.0f}ms"
         stem = self.current_stem or "—"
         self.status_text.set(
             f"[{self.mode}{dirty}] {stem}  images={n} ({cur}/{n})  "
@@ -618,6 +661,66 @@ class AnnotateApp:
             self._redraw_overlays()
             self._refresh_status()
 
+    def _post_camera_ctrl(self, url: str, path: str) -> None:
+        try:
+            self._session.post(f"{url}{path}", timeout=HTTP_CTRL_TIMEOUT_S)
+        except requests.RequestException:
+            pass
+
+    def _kick_other_stream(self, url: str, data: dict) -> None:
+        """踢掉浏览器独占预览，再 resume，供本工具独占 MJPEG。"""
+        exclusive = bool(data.get("exclusive")) or bool(data.get("mjpeg_busy"))
+        paused = bool(data.get("paused"))
+        if exclusive:
+            self._post_camera_ctrl(url, "/api/camera/camera_pause")
+            time.sleep(0.4)
+            paused = True
+        if paused or exclusive:
+            self._post_camera_ctrl(url, "/api/camera/camera_resume")
+            time.sleep(0.15)
+
+    def _force_native_240(self, url: str) -> None:
+        """Ensure board outputs 240×240 JPEG (persist to NVS)."""
+        try:
+            self._session.post(
+                f"{url}/api/camera/config",
+                data='{"size":"240x240","quality":55,"persist":1}',
+                headers={"Content-Type": "application/json"},
+                timeout=HTTP_CTRL_TIMEOUT_S,
+            )
+        except requests.RequestException:
+            pass
+
+    def _stop_exclusive_stream(self) -> None:
+        """关闭 MJPEG 连接 → 板端 web_stream_leave，恢复 LCD。"""
+        self.preview_on = False
+        self._stream_generation += 1
+        with self._stream_lock:
+            resp = self._stream_resp
+            self._stream_resp = None
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _start_exclusive_stream(self) -> None:
+        if not self.connected:
+            return
+        url = self.base_url.get().strip().rstrip("/")
+        self._stop_exclusive_stream()
+        self._post_camera_ctrl(url, "/api/camera/camera_resume")
+        self.preview_on = True
+        gen = self._stream_generation
+        t = threading.Thread(
+            target=self._mjpeg_worker,
+            args=(url, gen),
+            daemon=True,
+            name="mjpeg-exclusive",
+        )
+        self._stream_thread = t
+        t.start()
+
     def connect(self) -> None:
         url = self.base_url.get().strip().rstrip("/")
         if not url:
@@ -638,11 +741,23 @@ class AnnotateApp:
             return
         if data.get("camera") is not True:
             messagebox.showwarning("Connect", "设备回报 camera=false（未就绪）")
+
+        self._kick_other_stream(url, data)
+        self._force_native_240(url)
+
+        if data.get("collect_mode") is False:
+            messagebox.showwarning(
+                "Connect",
+                "当前固件为识别模式（CAMERA_APP_COLLECT_MODE=0）。\n"
+                "采数请在 camera/main/CMakeLists.txt 设 CAMERA_APP_COLLECT_MODE=1 后重编烧录。\n"
+                "并关闭浏览器 /preview.html。",
+            )
+
         self.base_url.set(url)
         save_config(url)
         self.connected = True
-        self.device_w = int(data.get("width") or 0)
-        self.device_h = int(data.get("height") or 0)
+        self.device_w = int(data.get("width") or 0) or PREVIEW_NATIVE
+        self.device_h = int(data.get("height") or 0) or PREVIEW_NATIVE
         if not self._maybe_leave_annotate(save_prompt=True):
             return
         self.mode = "preview"
@@ -651,23 +766,14 @@ class AnnotateApp:
         self.selected_idx = None
         self.dirty = False
         self._undo_stack.clear()
-        self.preview_on = True
-        self._fetch_generation += 1
-        self._schedule_poll(0)
         self._refresh_box_list()
+        self._start_exclusive_stream()
         self._refresh_status()
 
     def disconnect(self) -> None:
-        self.preview_on = False
+        self._stop_exclusive_stream()
         self.connected = False
-        self._fetch_generation += 1
-        if self._poll_after_id is not None:
-            try:
-                self.root.after_cancel(self._poll_after_id)
-            except tk.TclError:
-                pass
-            self._poll_after_id = None
-        self.status_text.set("已断开")
+        self.status_text.set("已断开（独占流已释放）")
 
     def back_to_preview(self) -> None:
         if not self.connected:
@@ -681,124 +787,121 @@ class AnnotateApp:
         self.selected_idx = None
         self.dirty = False
         self._undo_stack.clear()
-        self.preview_on = True
         self._refresh_box_list()
-        self._schedule_poll(0)
+        self._start_exclusive_stream()
         self._refresh_status()
 
-    def _schedule_poll(self, delay_ms: int) -> None:
-        if self._poll_after_id is not None:
-            try:
-                self.root.after_cancel(self._poll_after_id)
-            except tk.TclError:
-                pass
-            self._poll_after_id = None
-        if not self.preview_on or self.mode != "preview":
-            return
-        self._poll_after_id = self.root.after(delay_ms, self._poll_tick)
-
-    def _poll_tick(self) -> None:
-        self._poll_after_id = None
-        if not self.preview_on or self.mode != "preview":
-            return
-        # One in-flight fetch; drop extra ticks until it finishes.
-        if not self._fetch_lock.acquire(blocking=False):
-            self._schedule_poll(POLL_MS)
-            return
-        gen = self._fetch_generation
-        url = self.base_url.get().strip().rstrip("/")
-        # Snapshot canvas size for worker-side scale (avoid UI resize every frame).
-        cw = max(1, self.canvas.winfo_width())
-        ch = max(1, self.canvas.winfo_height())
-        threading.Thread(
-            target=self._fetch_jpeg_worker,
-            args=(url, gen, cw, ch),
-            daemon=True,
-        ).start()
-
-    def _fetch_jpeg_worker(self, url: str, gen: int, cw: int, ch: int) -> None:
+    def _mjpeg_worker(self, url: str, gen: int) -> None:
         err_msg: Optional[str] = None
-        jpeg: Optional[bytes] = None
-        pil: Optional[Image.Image] = None
-        disp: Optional[Image.Image] = None
-        disp_size = (0, 0)
-        rtt_ms = 0.0
+        resp: Optional[requests.Response] = None
         try:
-            t0 = time.perf_counter()
-            r = self._session.get(
-                f"{url}/api/camera/camera.jpg",
+            resp = self._session.get(
+                f"{url}{STREAM_PATH}",
                 params={"t": int(time.time() * 1000)},
-                timeout=HTTP_TIMEOUT_S,
+                stream=True,
+                timeout=(STREAM_CONNECT_TIMEOUT_S, STREAM_READ_TIMEOUT_S),
             )
-            rtt_ms = (time.perf_counter() - t0) * 1000.0
-            if r.status_code == 200 and r.content:
-                jpeg = r.content
-                pil = decode_jpeg(jpeg)
+            if gen != self._stream_generation:
+                return
+            with self._stream_lock:
+                self._stream_resp = resp
+            if resp.status_code != 200:
+                err_msg = http_error_hint(resp.status_code, None)
+                if resp.status_code == 503:
+                    err_msg = "503 stream_busy：请关闭浏览器独占预览后再 Connect"
+                raise RuntimeError(err_msg)
+
+            buf = bytearray()
+            last_ui = 0.0
+            t_frame0 = time.perf_counter()
+            for chunk in resp.iter_content(chunk_size=8192):
+                if gen != self._stream_generation or not self.preview_on:
+                    break
+                if not chunk:
+                    continue
+                buf.extend(chunk)
+                frames = extract_complete_jpegs(buf)
+                if not frames:
+                    continue
+                jpeg = frames[-1]
+                now = time.perf_counter()
+                frame_ms = (now - t_frame0) * 1000.0
+                t_frame0 = now
+                # 始终保留最新完整帧供 Capture；UI 限帧以免 Tk 卡顿。
+                if (now - last_ui) < (1.0 / UI_MAX_FPS) and self.raw_jpeg is not None:
+                    self.raw_jpeg = jpeg
+                    self._last_frame_ms = frame_ms
+                    continue
+                last_ui = now
+                try:
+                    pil = decode_jpeg(jpeg)
+                except Exception as exc:  # noqa: BLE001
+                    err_msg = f"JPEG 解码失败: {exc}"
+                    continue
+                cw = 480
+                ch = 480
+                try:
+                    cw = max(1, self.canvas.winfo_width())
+                    ch = max(1, self.canvas.winfo_height())
+                except tk.TclError:
+                    pass
                 iw, ih = pil.width, pil.height
-                scale = min(max(1, cw) / iw, max(1, ch) / ih)
-                dw = max(1, int(round(iw * scale)))
-                dh = max(1, int(round(ih * scale)))
-                disp_size = (dw, dh)
-                resample = (
-                    Image.Resampling.NEAREST
-                    if max(dw / iw, 1.0) >= 1.5
-                    else Image.Resampling.BILINEAR
-                )
-                disp = pil.resize((dw, dh), resample)
-            else:
-                err_msg = http_error_hint(r.status_code, None)
+                dw, dh = live_disp_size(iw, ih, cw, ch)
+                disp = pil if (dw == iw and dh == ih) else pil.resize((dw, dh), Image.Resampling.NEAREST)
+                self._last_frame_ms = frame_ms
+                self._latest_frame = (gen, jpeg, pil, disp, (dw, dh))
+                if self._pending_apply:
+                    continue
+                self._pending_apply = True
+                self.root.after(0, self._drain_stream_frame)
         except requests.RequestException as exc:
             err_msg = http_error_hint(None, exc)
+        except RuntimeError as exc:
+            err_msg = str(exc)
         except Exception as exc:  # noqa: BLE001
-            err_msg = f"JPEG 解码失败: {exc}"
+            err_msg = f"独占流异常: {exc}"
         finally:
-            self._fetch_lock.release()
+            with self._stream_lock:
+                if self._stream_resp is resp:
+                    self._stream_resp = None
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
-        if gen != self._fetch_generation:
-            return
+        if err_msg and gen == self._stream_generation:
 
-        if pil is not None and jpeg is not None and disp is not None:
-            self._latest_frame = (gen, jpeg, pil, disp, disp_size, rtt_ms)
-        elif err_msg:
             def show_err(msg: str = err_msg) -> None:
-                if gen != self._fetch_generation or self.mode != "preview":
+                if gen != self._stream_generation:
                     return
                 self.status_text.set(msg)
-                self._schedule_poll(POLL_MS)
+                self.preview_on = False
 
-            self.root.after(0, show_err)
+            try:
+                self.root.after(0, show_err)
+            except tk.TclError:
+                pass
+
+    def _drain_stream_frame(self) -> None:
+        self._pending_apply = False
+        frame = self._latest_frame
+        self._latest_frame = None
+        if frame is None:
             return
-
-        if self._pending_apply:
+        fgen, fjpeg, fpil, fdisp, fsize = frame
+        if fgen != self._stream_generation or not self.preview_on or self.mode != "preview":
             return
-        self._pending_apply = True
-
-        def drain() -> None:
-            self._pending_apply = False
-            frame = self._latest_frame
-            self._latest_frame = None
-            if frame is None:
-                self._schedule_poll(POLL_MS)
-                return
-            fgen, fjpeg, fpil, fdisp, fsize, frtt = frame
-            if fgen != self._fetch_generation or not self.preview_on or self.mode != "preview":
-                return
-            self._last_rtt_ms = frtt
-            self.raw_jpeg = fjpeg
-            self.pil_image = fpil
-            self._preview_disp = fdisp
-            if self.device_w <= 0:
-                self.device_w = fpil.width
-            if self.device_h <= 0:
-                self.device_h = fpil.height
-            now = time.perf_counter()
-            self._fps_times.append(now)
-            self._fps_times = [t for t in self._fps_times if now - t < 2.0]
-            self._apply_preview_frame(fdisp, fsize)
-            self._refresh_status()
-            self._schedule_poll(POLL_MS)
-
-        self.root.after(0, drain)
+        self.raw_jpeg = fjpeg
+        self.pil_image = fpil
+        self._preview_disp = fdisp
+        self.device_w = fpil.width
+        self.device_h = fpil.height
+        now = time.perf_counter()
+        self._fps_times.append(now)
+        self._fps_times = [t for t in self._fps_times if now - t < 2.0]
+        self._apply_preview_frame(fdisp, fsize)
+        self._refresh_status()
 
     def _apply_preview_frame(self, disp: Image.Image, disp_size: Tuple[int, int]) -> None:
         """UI-thread: install worker-scaled frame without re-resize."""
@@ -807,13 +910,14 @@ class AnnotateApp:
         cw = max(1, self.canvas.winfo_width())
         ch = max(1, self.canvas.winfo_height())
         iw, ih = self.pil_image.width, self.pil_image.height
-        # If window size drifted vs worker snapshot, fall back to local path.
-        scale = min(cw / iw, ch / ih)
-        dw = max(1, int(round(iw * scale)))
-        dh = max(1, int(round(ih * scale)))
+        dw, dh = live_disp_size(iw, ih, cw, ch)
         if abs(dw - disp_size[0]) > 2 or abs(dh - disp_size[1]) > 2:
-            self._update_preview_image(force_geom=True)
-            return
+            # Window changed; reuse worker frame only if size still matches intent.
+            if dw == iw and dh == ih:
+                disp = self.pil_image
+            else:
+                disp = self.pil_image.resize((dw, dh), Image.Resampling.NEAREST)
+            disp_size = (dw, dh)
         ox = (cw - dw) // 2
         oy = (ch - dh) // 2
         self.display_scale = dw / float(iw)
@@ -998,8 +1102,7 @@ class AnnotateApp:
         path = IMAGES_DIR / f"{stem}.jpg"
         path.write_bytes(self.raw_jpeg)
         self._invalidate_stems()
-        self.preview_on = False
-        self._fetch_generation += 1
+        self._stop_exclusive_stream()
         self.mode = "annotate"
         self.current_stem = stem
         self.boxes = []
@@ -1062,8 +1165,7 @@ class AnnotateApp:
         path = image_path_for(stem)
         if path is None:
             return
-        self.preview_on = False
-        self._fetch_generation += 1
+        self._stop_exclusive_stream()
         self.mode = "annotate"
         self.current_stem = stem
         jpeg = path.read_bytes()
@@ -1146,8 +1248,7 @@ class AnnotateApp:
         self._refresh_box_list()
         if self.connected:
             self.mode = "preview"
-            self.preview_on = True
-            self._schedule_poll(0)
+            self._start_exclusive_stream()
             self.status_text.set(f"已删除 {', '.join(removed)}；已回实时预览")
         else:
             self.mode = "preview"

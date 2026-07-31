@@ -334,6 +334,33 @@ status_t servo_nudge(servo_ch_t ch, float delta_deg)
     return servo_set_angle(ch, cur + delta_deg);
 }
 
+status_t servo_apply_pose(servo_ch_t ch, float angle_deg, float offset_deg, uint16_t pulse_us)
+{
+    float    us_per_deg;
+    float    us;
+    uint16_t out_us;
+
+    (void)angle_deg;
+
+    if (servo_state(ch) == NULL) {
+        return STATUS_INVALID_ARG;
+    }
+    if (s_inited == FALSE) {
+        return STATUS_INVALID_STATE;
+    }
+
+    us_per_deg = (float)(BOARD_SERVO_PULSE_MAX_US - BOARD_SERVO_PULSE_MIN_US) / SERVO_ANGLE_MAX_ABS;
+    us         = (float)pulse_us + (offset_deg * us_per_deg);
+    if (us < (float)BOARD_SERVO_PULSE_MIN_US) {
+        us = (float)BOARD_SERVO_PULSE_MIN_US;
+    }
+    if (us > (float)BOARD_SERVO_PULSE_MAX_US) {
+        us = (float)BOARD_SERVO_PULSE_MAX_US;
+    }
+    out_us = (uint16_t)(us + 0.5f);
+    return servo_apply_pulse(ch, out_us);
+}
+
 status_t servo_get_limits(servo_limits_t *out)
 {
     if (out == NULL) {

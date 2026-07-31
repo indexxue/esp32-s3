@@ -30,6 +30,12 @@ static const char *TAG = "web_server";
 #define WEB_CMD_JSON_OUT (1024U)
 
 static httpd_handle_t s_server;
+static bool           s_prefer_lru_purge;
+
+void web_server_prefer_lru_purge(bool enable)
+{
+    s_prefer_lru_purge = enable;
+}
 
 static esp_err_t health_get_handler(httpd_req_t *req)
 {
@@ -253,9 +259,17 @@ esp_err_t web_server_start(uint16_t port, web_root_handler_fn root_get_handler)
     config.max_uri_handlers = 32U;
     /* httpd 允许 max_open_sockets 最大 7（另 3 个 socket 为内部占用）；勿超过否则 httpd_start 失败并连带停 Wi-Fi。 */
     config.max_open_sockets = 7U;
-    config.lru_purge_enable = true;
+    /*
+     * LRU purge 会把「只发不收」的 MJPEG 长连接当成最久未用而踢掉，
+     * 表现为预览突然断流（send 104/128）。图传场景关闭 purge。
+     * 校准固件经 web_server_prefer_lru_purge(true) 打开，避免图传占满槽导致舵机 API 无响应。
+     */
+    config.lru_purge_enable = s_prefer_lru_purge;
     /* 默认栈 4096：`wifi_scan_result_get_handler` 等单帧 JSON 约 4KB，会栈溢出破坏 httpd 会话表。 */
     config.stack_size = 12288U;
+    /* MJPEG / 大包发送：默认 5s 在 Wi‑Fi 抖动时易断，统一拉长。 */
+    config.recv_wait_timeout = 30;
+    config.send_wait_timeout = 30;
 #if CONFIG_WEB_CTRL_OTA
     /* OTA 上传 ~8MB 时 Flash 写入耗时长，默认 5s recv 超时易断连。 */
     config.recv_wait_timeout = 120;

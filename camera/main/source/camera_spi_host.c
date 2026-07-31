@@ -46,7 +46,7 @@
 #endif
 #define CAMERA_SPI_HOST_LOG_PERIOD_MS (5000U)
 #ifndef CAMERA_SPI_HOST_LOG_VERBOSE
-#define CAMERA_SPI_HOST_LOG_VERBOSE (1)
+#define CAMERA_SPI_HOST_LOG_VERBOSE (0)
 #endif
 /** 舵机遥测周期（约 20 Hz）。 */
 #ifndef CAMERA_SPI_SERVO_TEL_MS
@@ -1044,7 +1044,6 @@ static void camera_spi_host_task(void *arg)
                     LOG_WARN("spi1: MISO float/idle HIGH (RX all FF) — check CS/wire/MCU running");
                 }
             }
-#endif
             LOG_INFO(
                 "spi1: link=%s l2=%s rx_ok=%lu magic_err=%lu crc_err=%lu xfer_err=%lu "
                 "peer_role=%u det_tx=%lu servo_tx=%lu net_tx=%lu ctrl_rx=%lu ack_tx=%lu",
@@ -1062,6 +1061,7 @@ static void camera_spi_host_task(void *arg)
                 (unsigned long)s_stats.net_info_tx,
                 (unsigned long)s_stats.ctrl_rx,
                 (unsigned long)s_stats.ctrl_ack_tx);
+#endif /* CAMERA_SPI_HOST_LOG_VERBOSE */
 #endif
         }
 

@@ -107,6 +107,49 @@ camera — ESP32-S3 摄像头预览 + 钢珠检测 + 云台
   CAMERA_DETECT_OVERLAY_WEB  1=网页 MJPEG/JPEG 画框，0=关
   可单独开、全开或全关。
 
+应用模式（camera/main/CMakeLists.txt，改后重编；COLLECT 与 CALIB 不可同时为 1）：
+  CAMERA_APP_COLLECT_MODE=1  采数：不启 ESPDet，SoftAP JPEG 给 steel_ball_annotate
+  CAMERA_APP_CALIB_MODE=1    单舵机校准：不启 ESPDet；网页「平衡杠校准」（已去掉双轴云台 UI）
+  二者均为 0               识别：启检测与叠框
+  当前仓库默认 CALIB=1（校准固件）。量产识别请改回 COLLECT=0、CALIB=0。
+  校准固件：不注册 MJPEG/预览页，默认暂停图传，httpd LRU 可踢长连接，专供舵机网页调试。
+  采数时请关浏览器 /preview.html，再用 annotate 工具 Connect 抓帧。
+
+---- 单舵机校准固件（CAMERA_APP_CALIB_MODE）----
+
+用途：单边平衡杠左-中-右姿态标定（默认通道 Pan/GPIO46，可切 Tilt/GPIO3）；参数落 NVS。
+
+1) CMakeLists.txt：`set(CAMERA_APP_CALIB_MODE 1)`（COLLECT 保持 0），重编烧录：
+     idf -Project camera build
+     idf -Project camera -p PORT flash monitor
+2) 网页：看串口日志 `calib web open: http://x.x.x.x/` —— 已连家里 WiFi 时是 STA IP，
+   不是 192.168.4.1。手机/电脑须与板子同一网段再打开该 URL。
+3) 串口（USB 监视器，可先验证 PWM，不依赖网页）：
+     help
+     servo                 # 查 pan/tilt 状态
+     servo pan 180         # 角度
+     servo pan pulse 1500  # 脉宽 µs
+     servo pan nudge -2    # 相对微调 °
+     servo tilt 90
+     servo center          # 回中位
+4) 网页：按 左 → 中 → 右：调角度/脉宽 →「捕获当前」→ 可选 offset →「写入 NVS」。
+5) 板键 GPIO0 长按：当前校准通道回 NVS 中位（无则 180°）。
+6) 校准完成后改回 `CAMERA_APP_CALIB_MODE 0` 编识别固件；NVS 键 `servo_cal` 保留。
+   识别固件：平衡律（球偏左打右；离中越远纠偏越大）；出画回中等待。
+   方向：`SERVO_BALL_FOLLOW_INVERT`（0=平衡默认，1=取反）。行程用 NVS L/C/R。
+
+   读校准并自检（判断 L/C/R 是否统一）：
+     串口：servo cal
+     网页/脚本：GET /api/servo/calib → check.order / check.hint
+       py -3 camera/tools/dump_servo_cal.py --url http://<板IP>
+     order 期望 L<C<R；non_monotonic 必须重标。
+     标定约定：球在杠物理左端时捕获 Left，中间 Center，右端 Right（勿对调）。
+   量产侧亦可：`nvs_servo_calib_get()` + `servo_apply_pose()`（见 common/inc/nvs.h）。
+
+API：GET /api/app_mode → mode=calib|collect|detect
+     GET/POST /api/servo/calib
+       capture/set_offset/goto/nudge/set_angle/set_pulse/save_pose/save/load/reset/set_channel
+
 LCD 关闭：`camera_ui_lcd_close()` 黑屏+关背光+停 blit；`camera_ui_lcd_open()` 恢复。
 
 sdkconfig（见 sdkconfig.defaults）：
@@ -116,6 +159,8 @@ sdkconfig（见 sdkconfig.defaults）：
 ---- 5. 当前能力与后续 ----
 
 已完成：SoftAP 采数标注、ESPDet 训量化、固件推理、LCD/网页绿框（宏开关）、LCD 关闭接口。
+性能（识别模式）：DVP 双缓冲；JPEG 异步任务；MJPEG 在线约 15fps 图传并关 LCD；
+  检测周期下限 80ms（跑完即下一帧）；权重优先拷入 PSRAM（`param_copy`）。
 后续可选：云台按框中心粗跟、补困难样本再训。
 SPI 主机对外通信（与小车 TM4C）：双方公共协议 `camera/plan/camera-spi-protocol.md`（v1.8）。
   固件：SPI3 Master Mode1 / 1 MHz / 20 ms HEARTBEAT（`camera_spi_host` + `spi_link`）；

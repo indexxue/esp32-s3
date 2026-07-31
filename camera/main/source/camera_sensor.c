@@ -25,15 +25,24 @@ static ov2640_t s_ov2640;
 static bool_t s_camera_ready;
 static st7789_t *s_preview_lcd;
 static TaskHandle_t s_preview_task;
+static TaskHandle_t s_jpeg_task;
 static volatile const uint8_t *s_preview_frame;
 static volatile uint16_t s_preview_frame_w;
 static volatile uint16_t s_preview_frame_h;
 
 #define CAMERA_SENSOR_PREVIEW_TASK_STACK (8192U)
 #define CAMERA_SENSOR_PREVIEW_TASK_PRIO (5U)
+#define CAMERA_SENSOR_JPEG_TASK_STACK (6144U)
+#define CAMERA_SENSOR_JPEG_TASK_PRIO (4U)
 #define CAMERA_SENSOR_LCD_LOCK_MS (200U)
+#define CAMERA_SENSOR_SNAP_SLOT_COUNT (2U)
+#define CAMERA_SENSOR_DETECT_HOLD_NONE (0xFFU)
 
-static uint8_t *s_snapshot_buf;
+/** 双槽 snapshot：预览写一槽，检测可持有另一槽。 */
+static uint8_t *s_snap_slot[CAMERA_SENSOR_SNAP_SLOT_COUNT];
+static uint8_t s_snap_pub;
+static uint8_t s_snap_detect_hold = CAMERA_SENSOR_DETECT_HOLD_NONE;
+static uint32_t s_snap_gen;
 static uint8_t *s_snapshot_copy;
 static uint32_t s_snapshot_bytes;
 static uint16_t s_snapshot_w;
@@ -47,6 +56,7 @@ static volatile uint8_t s_flip_vertical   = (uint8_t)CAMERA_SENSOR_FLIP_VERTICAL
 static volatile uint8_t s_flip_horizontal = (uint8_t)CAMERA_SENSOR_FLIP_HORIZONTAL;
 static volatile uint8_t s_jpeg_busy        = 0U;
 static TickType_t       s_last_snapshot_tick;
+static TickType_t       s_last_jpeg_tick;
 static TickType_t       s_last_lcd_blit_tick;
 static volatile uint32_t s_frame_count;
 static volatile uint32_t s_lcd_blit_count;
@@ -61,14 +71,14 @@ static uint16_t s_jpeg_enc_w;
 static uint16_t s_jpeg_enc_h;
 static uint8_t  s_jpeg_enc_q;
 
-#define CAMERA_SENSOR_JPEG_CACHE_CAP (98304U)
-
 static uint8_t *s_jpeg_cache;
 static uint32_t s_jpeg_cache_len;
 static SemaphoreHandle_t s_jpeg_cache_mtx;
 static volatile uint32_t s_jpeg_seq;
 static SemaphoreHandle_t s_jpeg_seq_sem;
 static volatile uint32_t s_web_stream_clients;
+/** 因独占预览主动关过 LCD，leave 到 0 时需 open 回来。 */
+static bool_t s_lcd_held_for_stream;
 
 static void *camera_sensor_buf_alloc(uint32_t size)
 {
@@ -221,40 +231,67 @@ static status_t camera_sensor_snapshot_mtx_init(void)
 
 static status_t camera_sensor_snapshot_buf_ensure(uint32_t nbytes)
 {
-    if ((s_snapshot_buf != NULL) && (s_snapshot_copy != NULL) && (s_snapshot_bytes >= nbytes)) {
+    uint8_t i;
+
+    if ((s_snap_slot[0] != NULL) && (s_snap_slot[1] != NULL) && (s_snapshot_copy != NULL) &&
+        (s_snapshot_bytes >= nbytes)) {
         return STATUS_OK;
     }
 
-    if (s_snapshot_buf != NULL) {
-        camera_sensor_buf_free(s_snapshot_buf);
-        s_snapshot_buf   = NULL;
-        s_snapshot_bytes = 0U;
+    for (i = 0U; i < CAMERA_SENSOR_SNAP_SLOT_COUNT; i++) {
+        if (s_snap_slot[i] != NULL) {
+            camera_sensor_buf_free(s_snap_slot[i]);
+            s_snap_slot[i] = NULL;
+        }
     }
     if (s_snapshot_copy != NULL) {
         camera_sensor_buf_free(s_snapshot_copy);
         s_snapshot_copy = NULL;
     }
+    s_snapshot_bytes = 0U;
 
-    s_snapshot_buf = (uint8_t *)camera_sensor_buf_alloc(nbytes);
-    if (s_snapshot_buf == NULL) {
-        LOG_ERROR("camera sensor snapshot alloc %u failed", (unsigned)nbytes);
-        return STATUS_FAIL;
+    for (i = 0U; i < CAMERA_SENSOR_SNAP_SLOT_COUNT; i++) {
+        s_snap_slot[i] = (uint8_t *)camera_sensor_buf_alloc(nbytes);
+        if (s_snap_slot[i] == NULL) {
+            LOG_ERROR("camera sensor snapshot slot%u alloc %u failed", (unsigned)i, (unsigned)nbytes);
+            for (uint8_t j = 0U; j < i; j++) {
+                camera_sensor_buf_free(s_snap_slot[j]);
+                s_snap_slot[j] = NULL;
+            }
+            return STATUS_FAIL;
+        }
     }
 
     s_snapshot_copy = (uint8_t *)camera_sensor_buf_alloc(nbytes);
     if (s_snapshot_copy == NULL) {
-        camera_sensor_buf_free(s_snapshot_buf);
-        s_snapshot_buf   = NULL;
-        s_snapshot_bytes = 0U;
+        for (i = 0U; i < CAMERA_SENSOR_SNAP_SLOT_COUNT; i++) {
+            camera_sensor_buf_free(s_snap_slot[i]);
+            s_snap_slot[i] = NULL;
+        }
         LOG_ERROR("camera sensor snapshot copy alloc %u failed", (unsigned)nbytes);
         return STATUS_FAIL;
     }
 
     s_snapshot_bytes = nbytes;
+    s_snap_pub = 0U;
+    s_snap_detect_hold = CAMERA_SENSOR_DETECT_HOLD_NONE;
     return STATUS_OK;
 }
 
-/** 按运行时 flip/zoom/rotate/灰度，从采集帧写入 s_snapshot_buf。 */
+static uint8_t camera_sensor_pick_write_slot(void)
+{
+    if (s_snap_detect_hold < CAMERA_SENSOR_SNAP_SLOT_COUNT) {
+        return (uint8_t)(s_snap_detect_hold ^ 1U);
+    }
+    return (uint8_t)(s_snap_pub ^ 1U);
+}
+
+static uint8_t *camera_sensor_pub_buf(void)
+{
+    return s_snap_slot[s_snap_pub & 1U];
+}
+
+/** 按运行时 flip/zoom/rotate/灰度，从采集帧写入双槽之一并发布。 */
 static void camera_sensor_build_snapshot(const uint8_t *rgb565, uint16_t width, uint16_t height)
 {
     uint16_t pre_w;
@@ -271,6 +308,8 @@ static void camera_sensor_build_snapshot(const uint8_t *rgb565, uint16_t width, 
     uint32_t fin_bytes;
     uint16_t py;
     uint16_t px;
+    uint8_t  write_slot;
+    uint8_t *write_buf;
 
     pre_w = s_web_w;
     pre_h = s_web_h;
@@ -284,7 +323,7 @@ static void camera_sensor_build_snapshot(const uint8_t *rgb565, uint16_t width, 
 
     /*
      * 变焦：从采集帧中心取 (W/zoom)×(H/zoom)，再按预览宽高比裁切后缩放到 pre_w×pre_h。
-     * zoom=1 → 整幅 640×480 缩小（不“放大”）；zoom=2 → 半幅视野，以此类推。
+     * zoom=1 → 整幅缩小/等比例；zoom=2 → 半幅视野，以此类推。
      */
     {
         uint16_t max_w = (uint16_t)(width / zoom);
@@ -327,12 +366,61 @@ static void camera_sensor_build_snapshot(const uint8_t *rgb565, uint16_t width, 
         return;
     }
 
+    write_slot = camera_sensor_pick_write_slot();
+    write_buf  = s_snap_slot[write_slot];
+    if (write_buf == NULL) {
+        (void)xSemaphoreGive(s_snapshot_mtx);
+        return;
+    }
+
+    /* 快路径：1:1、无旋转/灰度时只做翻转 memcpy。 */
+    if ((s_img_rotate == 0U) && (s_grayscale == 0U) && (zoom == 1U) && (src_cw == pre_w) &&
+        (src_ch == pre_h) && (width == pre_w) && (height == pre_h)) {
+        if ((s_flip_vertical == 0U) && (s_flip_horizontal == 0U)) {
+            (void)memcpy(write_buf, rgb565, (size_t)fin_bytes);
+        } else if ((s_flip_vertical != 0U) && (s_flip_horizontal == 0U)) {
+            for (py = 0U; py < pre_h; py++) {
+                const uint8_t *sp = rgb565 + ((uint32_t)(pre_h - 1U - py) * src_row_bytes);
+                uint8_t *dp = write_buf + ((uint32_t)py * (uint32_t)pre_w * 2U);
+                (void)memcpy(dp, sp, (size_t)((uint32_t)pre_w * 2U));
+            }
+        } else if ((s_flip_vertical == 0U) && (s_flip_horizontal != 0U)) {
+            for (py = 0U; py < pre_h; py++) {
+                const uint8_t *sp = rgb565 + ((uint32_t)py * src_row_bytes);
+                uint8_t *dp = write_buf + ((uint32_t)py * (uint32_t)pre_w * 2U);
+                for (px = 0U; px < pre_w; px++) {
+                    const uint8_t *s = sp + ((uint32_t)(pre_w - 1U - px) * 2U);
+                    uint8_t *d = dp + ((uint32_t)px * 2U);
+                    d[0] = s[0];
+                    d[1] = s[1];
+                }
+            }
+        } else {
+            for (py = 0U; py < pre_h; py++) {
+                const uint8_t *sp = rgb565 + ((uint32_t)(pre_h - 1U - py) * src_row_bytes);
+                uint8_t *dp = write_buf + ((uint32_t)py * (uint32_t)pre_w * 2U);
+                for (px = 0U; px < pre_w; px++) {
+                    const uint8_t *s = sp + ((uint32_t)(pre_w - 1U - px) * 2U);
+                    uint8_t *d = dp + ((uint32_t)px * 2U);
+                    d[0] = s[0];
+                    d[1] = s[1];
+                }
+            }
+        }
+        s_snapshot_w = fin_w;
+        s_snapshot_h = fin_h;
+        s_snap_pub   = write_slot;
+        s_snap_gen++;
+        (void)xSemaphoreGive(s_snapshot_mtx);
+        return;
+    }
+
     /*
-     * rotate=0：缩放+翻转直接写入 snapshot_buf，跳过二次拷贝。
-     * rotate≠0：先写入 copy，再旋转到 buf。
+     * rotate=0：缩放+翻转直接写入 write 槽。
+     * rotate≠0：先写入 copy，再旋转到 write 槽。
      */
     {
-        uint8_t *scale_dst = (s_img_rotate == 0U) ? s_snapshot_buf : s_snapshot_copy;
+        uint8_t *scale_dst = (s_img_rotate == 0U) ? write_buf : s_snapshot_copy;
         bool_t   int_step =
             (((src_cw % pre_w) == 0U) && ((src_ch % pre_h) == 0U)) ? TRUE : FALSE;
         uint16_t step_x = int_step ? (uint16_t)(src_cw / pre_w) : 0U;
@@ -387,7 +475,7 @@ static void camera_sensor_build_snapshot(const uint8_t *rgb565, uint16_t width, 
                     break;
                 }
                 sp = s_snapshot_copy + ((uint32_t)sy * (uint32_t)pre_w * 2U) + ((uint32_t)sx * 2U);
-                dp = s_snapshot_buf + ((uint32_t)py * (uint32_t)fin_w * 2U) + ((uint32_t)px * 2U);
+                dp = write_buf + ((uint32_t)py * (uint32_t)fin_w * 2U) + ((uint32_t)px * 2U);
                 dp[0] = sp[0];
                 dp[1] = sp[1];
             }
@@ -398,20 +486,22 @@ static void camera_sensor_build_snapshot(const uint8_t *rgb565, uint16_t width, 
         uint32_t i;
 
         for (i = 0U; i + 1U < fin_bytes; i += 2U) {
-            uint16_t pxv = (uint16_t)(((uint16_t)s_snapshot_buf[i] << 8) | (uint16_t)s_snapshot_buf[i + 1U]);
+            uint16_t pxv = (uint16_t)(((uint16_t)write_buf[i] << 8) | (uint16_t)write_buf[i + 1U]);
             uint32_t r   = ((uint32_t)(pxv >> 11) & 0x1FU) * 255U / 31U;
             uint32_t g   = ((uint32_t)(pxv >> 5) & 0x3FU) * 255U / 63U;
             uint32_t b   = ((uint32_t)(pxv) & 0x1FU) * 255U / 31U;
             uint32_t y   = (77U * r + 150U * g + 29U * b) >> 8;
             uint16_t out = (uint16_t)(((y >> 3) << 11) | ((y >> 2) << 5) | (y >> 3));
 
-            s_snapshot_buf[i]      = (uint8_t)(out >> 8);
-            s_snapshot_buf[i + 1U] = (uint8_t)(out & 0xFFU);
+            write_buf[i]      = (uint8_t)(out >> 8);
+            write_buf[i + 1U] = (uint8_t)(out & 0xFFU);
         }
     }
 
     s_snapshot_w = fin_w;
     s_snapshot_h = fin_h;
+    s_snap_pub   = write_slot;
+    s_snap_gen++;
     (void)xSemaphoreGive(s_snapshot_mtx);
 }
 
@@ -566,12 +656,16 @@ static void camera_sensor_refresh_jpeg_cache(void)
     width       = s_snapshot_w;
     height      = s_snapshot_h;
     frame_bytes = (uint32_t)width * (uint32_t)height * 2U;
-    if ((s_snapshot_buf == NULL) || (s_snapshot_copy == NULL) || (frame_bytes == 0U) ||
-        (frame_bytes > s_snapshot_bytes) || (width == 0U) || (height == 0U)) {
-        (void)xSemaphoreGive(s_snapshot_mtx);
-        return;
+    {
+        uint8_t *pub = camera_sensor_pub_buf();
+
+        if ((pub == NULL) || (s_snapshot_copy == NULL) || (frame_bytes == 0U) ||
+            (frame_bytes > s_snapshot_bytes) || (width == 0U) || (height == 0U)) {
+            (void)xSemaphoreGive(s_snapshot_mtx);
+            return;
+        }
+        (void)memcpy(s_snapshot_copy, pub, (size_t)frame_bytes);
     }
-    (void)memcpy(s_snapshot_copy, s_snapshot_buf, (size_t)frame_bytes);
     (void)xSemaphoreGive(s_snapshot_mtx);
 
 #if CAMERA_DETECT_OVERLAY_WEB
@@ -693,18 +787,57 @@ static void camera_sensor_on_frame(void *user_ctx, const uint8_t *rgb565, uint16
     }
 }
 
+static void camera_sensor_jpeg_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        camera_sensor_refresh_jpeg_cache();
+    }
+}
+
+static status_t camera_sensor_jpeg_task_start(void)
+{
+    if (s_jpeg_task != NULL) {
+        return STATUS_OK;
+    }
+    if (xTaskCreate(camera_sensor_jpeg_task,
+                    "cam_jpeg",
+                    CAMERA_SENSOR_JPEG_TASK_STACK,
+                    NULL,
+                    CAMERA_SENSOR_JPEG_TASK_PRIO,
+                    &s_jpeg_task) != pdPASS) {
+        s_jpeg_task = NULL;
+        return STATUS_FAIL;
+    }
+    return STATUS_OK;
+}
+
+static void camera_sensor_jpeg_request(void)
+{
+    if (s_jpeg_task != NULL) {
+        (void)xTaskNotifyGive(s_jpeg_task);
+    } else {
+        camera_sensor_refresh_jpeg_cache();
+    }
+}
+
 static void camera_sensor_preview_task(void *arg)
 {
     st7789_t *lcd = (st7789_t *)arg;
-    const TickType_t snap_min = pdMS_TO_TICKS(CAMERA_SENSOR_SNAPSHOT_MIN_INTERVAL_MS);
 
     for (;;) {
         TickType_t now;
         TickType_t since_snap;
         TickType_t since_lcd;
+        TickType_t since_jpeg;
+        TickType_t snap_min;
+        TickType_t jpeg_min;
         TickType_t lcd_min;
         bool_t     do_snap;
         bool_t     do_lcd;
+        bool_t     do_jpeg;
+        uint8_t   *pub;
 
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -712,20 +845,35 @@ static void camera_sensor_preview_task(void *arg)
             continue;
         }
 
-        now       = xTaskGetTickCount();
+        now        = xTaskGetTickCount();
         since_snap = now - s_last_snapshot_tick;
         since_lcd  = now - s_last_lcd_blit_tick;
+        since_jpeg = now - s_last_jpeg_tick;
         lcd_min    = pdMS_TO_TICKS((s_web_stream_clients > 0U) ? CAMERA_SENSOR_LCD_STREAM_INTERVAL_MS
                                                                : CAMERA_SENSOR_LCD_MIN_INTERVAL_MS);
+        /* MJPEG 在线：~15fps 图传；空闲：snapshot 仍 25fps 供检测，JPEG 降到 5fps。 */
+        if (s_web_stream_clients > 0U) {
+            snap_min = pdMS_TO_TICKS(CAMERA_SENSOR_SNAPSHOT_STREAM_INTERVAL_MS);
+            jpeg_min = snap_min;
+        } else {
+            snap_min = pdMS_TO_TICKS(CAMERA_SENSOR_SNAPSHOT_MIN_INTERVAL_MS);
+            jpeg_min = pdMS_TO_TICKS(CAMERA_SENSOR_JPEG_IDLE_INTERVAL_MS);
+        }
         do_snap = ((s_last_snapshot_tick == 0U) || (since_snap >= snap_min)) ? TRUE : FALSE;
         do_lcd  = ((s_last_lcd_blit_tick == 0U) || (since_lcd >= lcd_min)) ? TRUE : FALSE;
+        do_jpeg = ((s_last_jpeg_tick == 0U) || (since_jpeg >= jpeg_min)) ? TRUE : FALSE;
+
+        /* 独占预览：彻底停 LCD blit（stream_enter 已关背光；此处双保险）。 */
+        if (s_web_stream_clients > 0U) {
+            do_lcd = FALSE;
+        }
 
         /* JPEG 编码期间跳过本轮 LCD blit，避免 SPI 与编码叠加重导致锁超时丢帧。 */
         if (s_jpeg_busy != 0U) {
             do_lcd = FALSE;
         }
 
-        if ((do_snap == FALSE) && (do_lcd == FALSE)) {
+        if ((do_snap == FALSE) && (do_lcd == FALSE) && (do_jpeg == FALSE)) {
             continue;
         }
 
@@ -736,10 +884,11 @@ static void camera_sensor_preview_task(void *arg)
             s_last_snapshot_tick = xTaskGetTickCount();
         }
 
+        pub = camera_sensor_pub_buf();
         if ((do_lcd != FALSE) && (lcd != NULL) && st7789_is_initialized(lcd) &&
-            (camera_ui_lcd_is_open() != FALSE) && (s_snapshot_buf != NULL) &&
+            (camera_ui_lcd_is_open() != FALSE) && (pub != NULL) &&
             (s_snapshot_w > 0U) && (s_snapshot_h > 0U)) {
-            camera_sensor_blit_rgb565(lcd, s_snapshot_buf, s_snapshot_w, s_snapshot_h);
+            camera_sensor_blit_rgb565(lcd, pub, s_snapshot_w, s_snapshot_h);
 #if CAMERA_DETECT_OVERLAY_LCD
             if (camera_model_is_ready() != FALSE) {
                 uint16_t box_flat[CAMERA_MODEL_MAX_BOXES * CAMERA_MODEL_UI_BOX_STRIDE];
@@ -775,8 +924,9 @@ static void camera_sensor_preview_task(void *arg)
             }
         }
 
-        if (do_snap != FALSE) {
-            camera_sensor_refresh_jpeg_cache();
+        if ((do_jpeg != FALSE) && ((do_snap != FALSE) || (s_snapshot_w > 0U))) {
+            camera_sensor_jpeg_request();
+            s_last_jpeg_tick = xTaskGetTickCount();
         }
     }
 }
@@ -793,6 +943,10 @@ static status_t camera_sensor_preview_task_start(st7789_t *lcd)
             LOG_ERROR("camera sensor preview task create failed");
             return STATUS_FAIL;
         }
+    }
+
+    if (camera_sensor_jpeg_task_start() != STATUS_OK) {
+        LOG_WARN("cam jpeg task start failed; sync encode fallback");
     }
 
     s_preview_lcd = lcd;
@@ -956,6 +1110,7 @@ status_t camera_sensor_copy_rgb565(uint8_t *out, uint32_t out_cap, uint16_t *out
     uint32_t frame_bytes;
     uint16_t width;
     uint16_t height;
+    uint8_t *pub;
 
     if ((out == NULL) || (out_w == NULL) || (out_h == NULL)) {
         return STATUS_INVALID_ARG;
@@ -970,17 +1125,64 @@ status_t camera_sensor_copy_rgb565(uint8_t *out, uint32_t out_cap, uint16_t *out
     width = s_snapshot_w;
     height = s_snapshot_h;
     frame_bytes = (uint32_t)width * (uint32_t)height * 2U;
-    if ((s_snapshot_buf == NULL) || (width == 0U) || (height == 0U) || (frame_bytes == 0U) ||
+    pub = camera_sensor_pub_buf();
+    if ((pub == NULL) || (width == 0U) || (height == 0U) || (frame_bytes == 0U) ||
         (frame_bytes > s_snapshot_bytes) || (out_cap < frame_bytes)) {
         (void)xSemaphoreGive(s_snapshot_mtx);
         return STATUS_FAIL;
     }
 
-    (void)memcpy(out, s_snapshot_buf, (size_t)frame_bytes);
+    (void)memcpy(out, pub, (size_t)frame_bytes);
     *out_w = width;
     *out_h = height;
     (void)xSemaphoreGive(s_snapshot_mtx);
     return STATUS_OK;
+}
+
+status_t camera_sensor_acquire_rgb565(const uint8_t **out, uint16_t *out_w, uint16_t *out_h, uint32_t *gen)
+{
+    uint8_t *pub;
+
+    if ((out == NULL) || (out_w == NULL) || (out_h == NULL)) {
+        return STATUS_INVALID_ARG;
+    }
+    if (camera_sensor_snapshot_mtx_init() != STATUS_OK) {
+        return STATUS_FAIL;
+    }
+    if (xSemaphoreTake(s_snapshot_mtx, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return STATUS_TIMEOUT;
+    }
+
+    pub = camera_sensor_pub_buf();
+    if ((pub == NULL) || (s_snapshot_w == 0U) || (s_snapshot_h == 0U)) {
+        (void)xSemaphoreGive(s_snapshot_mtx);
+        return STATUS_FAIL;
+    }
+    if (s_snap_detect_hold < CAMERA_SENSOR_SNAP_SLOT_COUNT) {
+        (void)xSemaphoreGive(s_snapshot_mtx);
+        return STATUS_FAIL;
+    }
+
+    s_snap_detect_hold = s_snap_pub;
+    *out = pub;
+    *out_w = s_snapshot_w;
+    *out_h = s_snapshot_h;
+    if (gen != NULL) {
+        *gen = s_snap_gen;
+    }
+    (void)xSemaphoreGive(s_snapshot_mtx);
+    return STATUS_OK;
+}
+
+void camera_sensor_release_rgb565(void)
+{
+    if (s_snapshot_mtx == NULL) {
+        return;
+    }
+    if (xSemaphoreTake(s_snapshot_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
+        s_snap_detect_hold = CAMERA_SENSOR_DETECT_HOLD_NONE;
+        (void)xSemaphoreGive(s_snapshot_mtx);
+    }
 }
 
 uint16_t camera_sensor_get_web_width(void)
@@ -1031,6 +1233,17 @@ uint32_t camera_sensor_get_jpeg_seq(void)
 void camera_sensor_web_stream_enter(void)
 {
     s_web_stream_clients++;
+    if (s_web_stream_clients == 1U) {
+        if (camera_ui_lcd_is_open() != FALSE) {
+            s_lcd_held_for_stream = TRUE;
+            if (camera_ui_lcd_close() != STATUS_OK) {
+                s_lcd_held_for_stream = FALSE;
+                LOG_WARN("cam exclusive: lcd_close failed");
+            } else {
+                LOG_INFO("cam exclusive: LCD off (MJPEG)");
+            }
+        }
+    }
 }
 
 void camera_sensor_web_stream_leave(void)
@@ -1038,6 +1251,19 @@ void camera_sensor_web_stream_leave(void)
     if (s_web_stream_clients > 0U) {
         s_web_stream_clients--;
     }
+    if ((s_web_stream_clients == 0U) && (s_lcd_held_for_stream != FALSE)) {
+        s_lcd_held_for_stream = FALSE;
+        if (camera_ui_lcd_open() != STATUS_OK) {
+            LOG_WARN("cam exclusive: lcd_open failed");
+        } else {
+            LOG_INFO("cam exclusive: LCD on (MJPEG end)");
+        }
+    }
+}
+
+bool_t camera_sensor_web_stream_active(void)
+{
+    return (s_web_stream_clients > 0U) ? TRUE : FALSE;
 }
 
 status_t camera_sensor_wait_jpeg_seq(uint32_t *inout_seq, uint32_t timeout_ms)
@@ -1107,6 +1333,13 @@ status_t camera_sensor_apply_settings(const nvs_camera_settings_t *cfg, bool_t p
     st.magic = NVS_CAMERA_SETTINGS_MAGIC;
     if (!nvs_camera_settings_validate(&st)) {
         return STATUS_INVALID_ARG;
+    }
+
+    /* 采集为 240×240：更大预览尺寸只会放大，钳到原生分辨率。 */
+    if ((st.web_width > CAMERA_SENSOR_CAPTURE_WIDTH) ||
+        (st.web_height > CAMERA_SENSOR_CAPTURE_HEIGHT)) {
+        st.web_width  = CAMERA_SENSOR_CAPTURE_WIDTH;
+        st.web_height = CAMERA_SENSOR_CAPTURE_HEIGHT;
     }
 
     s_web_w            = st.web_width;
@@ -1235,13 +1468,16 @@ status_t camera_sensor_snapshot_jpeg(uint8_t *out, uint32_t out_cap, uint32_t *o
     width       = s_snapshot_w;
     height      = s_snapshot_h;
     frame_bytes = (uint32_t)width * (uint32_t)height * 2U;
-    if ((s_snapshot_buf == NULL) || (s_snapshot_copy == NULL) || (frame_bytes == 0U) ||
-        (frame_bytes > s_snapshot_bytes)) {
-        (void)xSemaphoreGive(s_snapshot_mtx);
-        return STATUS_FAIL;
-    }
+    {
+        uint8_t *pub = camera_sensor_pub_buf();
 
-    (void)memcpy(s_snapshot_copy, s_snapshot_buf, (size_t)frame_bytes);
+        if ((pub == NULL) || (s_snapshot_copy == NULL) || (frame_bytes == 0U) ||
+            (frame_bytes > s_snapshot_bytes)) {
+            (void)xSemaphoreGive(s_snapshot_mtx);
+            return STATUS_FAIL;
+        }
+        (void)memcpy(s_snapshot_copy, pub, (size_t)frame_bytes);
+    }
     (void)xSemaphoreGive(s_snapshot_mtx);
 
 #if CAMERA_DETECT_OVERLAY_WEB

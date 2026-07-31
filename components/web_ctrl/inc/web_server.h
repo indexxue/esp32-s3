@@ -23,6 +23,12 @@ typedef esp_err_t (*web_root_handler_fn)(httpd_req_t *req);
  */
 esp_err_t web_server_start(uint16_t port, web_root_handler_fn root_get_handler);
 
+/**
+ * @brief 在下次 `web_server_start` 前设置是否启用 LRU 踢连接。
+ * @note 校准固件打开：新请求可挤掉占槽的 MJPEG 长连接；图传固件保持关闭以免预览被误踢。
+ */
+void web_server_prefer_lru_purge(bool enable);
+
 esp_err_t web_server_stop(void);
 
 bool web_server_is_running(void);

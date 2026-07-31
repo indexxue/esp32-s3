@@ -67,6 +67,7 @@
       font: inherit;
       font-weight: 500;
       cursor: pointer;
+      text-decoration: none;
       transition: background 0.15s, transform 0.1s;
     }
     .btn:active { transform: scale(0.98); }
@@ -238,37 +239,22 @@
     }
     .cam-ctrl input[type="number"] { width: 5.5em; }
     .cam-ctrl .qval { font-variant-numeric: tabular-nums; min-width: 1.8em; display: inline-block; }
-    .gimbal-pad {
-      display: grid;
-      grid-template-columns: repeat(3, 64px);
-      grid-template-rows: repeat(3, 48px);
-      gap: 8px;
-      justify-content: center;
-      margin: 12px auto;
-      touch-action: none;
-      user-select: none;
-      -webkit-user-select: none;
-    }
-    .gimbal-pad .btn {
-      width: 100%;
-      height: 100%;
-      padding: 0;
-      font-size: 1.1rem;
-      touch-action: none;
-      -webkit-user-select: none;
-      user-select: none;
-    }
-    .gimbal-pad .btn.holding {
-      background: var(--accent-dim);
-      color: #fff;
-      border-color: var(--accent);
-    }
-    .gimbal-pad .g-up { grid-column: 2; grid-row: 1; }
-    .gimbal-pad .g-left { grid-column: 1; grid-row: 2; }
-    .gimbal-pad .g-center { grid-column: 2; grid-row: 2; }
-    .gimbal-pad .g-right { grid-column: 3; grid-row: 2; }
-    .gimbal-pad .g-down { grid-column: 2; grid-row: 3; }
     .gimbal-meta { text-align: center; font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .calib-log {
+      margin-top: 12px;
+      max-height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      color: #c5d4e8;
+      background: #0d1218;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -276,7 +262,7 @@
   <div class="wrap">
     <header class="top">
       <h1>camera</h1>
-      <p>Wi‑Fi 配网、摄像头预览与云台手动控制。SoftAP 下连设备热点后访问 <code>http://192.168.4.1/</code>。</p>
+      <p>Wi‑Fi 配网、摄像头参数与平衡杠校准。实时画面请打开「独占预览」。SoftAP 下连设备热点后访问 <code>http://192.168.4.1/</code>。</p>
     </header>
 
     <section class="card" id="card-wifi">
@@ -302,7 +288,7 @@
         <div class="row">
           <button type="button" class="btn btn-primary busy" id="btn-save" onclick="doSave()">保存并重启设备</button>
         </div>
-        <p class="hint">配网写入 NVS 后自动重启。SoftAP 下默认不开预览；扫描/保存前会自动暂停 MJPEG，避免 HTTP 槽被占满卡死。</p>
+        <p class="hint">配网写入 NVS 后自动重启。扫描/保存/校准操作会自动释放图传通道。实时预览请用「打开独占预览」，勿与配网同开。</p>
         <pre class="log" id="wo" hidden></pre>
         <div class="danger-zone">
           <p class="dz-title">断开并清除已保存的路由器</p>
@@ -312,12 +298,12 @@
       </div>
     </section>
 
-    <section class="card" id="card-camera">
+    <section class="card" id="card-camera" hidden>
       <div class="card-h">
         <h2>摄像头</h2>
         <div class="row">
           <button type="button" class="btn btn-ghost busy" id="btn-refresh" onclick="refreshCameraStatus(true)">刷新状态</button>
-          <button type="button" class="btn btn-ghost busy" id="btn-cam-stream" onclick="toggleCameraStream()">关闭预览</button>
+          <a class="btn btn-primary busy" id="btn-cam-preview" href="/preview.html">打开独占预览</a>
           <button type="button" class="btn btn-primary busy" id="btn-cam-save" onclick="saveCamConfig()">保存配置</button>
           <button type="button" class="btn btn-primary busy" id="btn-capture" onclick="doCapture()">拍照保存</button>
         </div>
@@ -325,16 +311,14 @@
       <div class="card-b">
         <div class="status" id="cam-st"><span class="chip">状态加载中…</span></div>
         <div class="cam-panel">
-          <p class="cam-meta" id="camHint">正在连接摄像头…</p>
+          <p class="cam-meta" id="camHint">本页不占图传通道。需要看实时画面请点「打开独占预览」。</p>
           <div class="cam-wrap" id="camWrap">
-            <img id="camView" alt="camera preview" width="320" height="240" />
+            <img id="camView" alt="camera snapshot" width="240" height="240" />
           </div>
           <div class="cam-ctrl">
             <label>分辨率
               <select id="camSize" class="busy" onchange="previewCamConfig()">
-                <option value="240x240">240×240（更流畅）</option>
-                <option value="320x240" selected>320×240</option>
-                <option value="640x480">640×480（更清晰）</option>
+                <option value="240x240" selected>240×240（~25fps）</option>
               </select>
             </label>
             <label>画质 <span class="qval" id="camQVal">55</span>
@@ -361,54 +345,80 @@
             <label><input type="checkbox" id="camFlipH" class="busy" onchange="previewCamConfig()" /> 左右镜像</label>
           </div>
         </div>
-        <p class="hint">调整参数会立即写入 NVS；也可点「保存配置」（会先停预览再写，更稳）。旋转只改摄像头画面。拍照前会短暂停流。</p>
+        <p class="hint">实时预览请用「打开独占预览」（全屏 MJPEG，板端 LCD 暂停）。本页只做参数/拍照/配网/校准，避免与图传抢 SoftAP 连接。拍照用单帧 JPEG，不占长连接。</p>
         <pre class="log" id="out" hidden></pre>
       </div>
     </section>
 
-    <section class="card" id="card-gimbal">
+    <section class="card" id="card-calib">
       <div class="card-h">
-        <h2>云台（舵机）</h2>
+        <h2>平衡杠校准</h2>
         <div class="row">
-          <button type="button" class="btn btn-ghost busy" id="btn-servo-refresh" onclick="refreshServoStatus()">刷新角度</button>
-          <button type="button" class="btn btn-primary busy" id="btn-servo-center" onclick="servoCenter()">回中</button>
+          <button type="button" class="btn btn-ghost busy" onclick="refreshCalibStatus()">刷新</button>
+          <button type="button" class="btn btn-primary busy" onclick="calibGoto('center')">回中位</button>
         </div>
       </div>
       <div class="card-b">
-        <div class="status" id="servo-st"><span class="chip">状态加载中…</span></div>
-        <p class="gimbal-meta" id="servoAngles">pan=— tilt=—</p>
-        <div class="cam-ctrl" style="margin-bottom:8px">
+        <div class="status" id="calib-st"><span class="chip">状态加载中…</span></div>
+        <p class="gimbal-meta" id="calibAngles">ch=— · —° · —µs</p>
+        <p class="hint" style="margin-top:0">先选舵机通道（平衡杠多在 Pan/GPIO46）。左→中→右：调到位 → 捕获 →「写入该姿态」。各姿态可单独落盘。</p>
+        <div class="cam-ctrl" style="margin-bottom:10px">
+          <label>通道
+            <select id="calibChannel" class="busy" onchange="calibSetChannel()">
+              <option value="pan" selected>Pan GPIO46</option>
+              <option value="tilt">Tilt GPIO3</option>
+            </select>
+          </label>
           <label>步进
-            <select id="servoStep" class="busy">
+            <select id="calibStep" class="busy">
+              <option value="1">1°</option>
               <option value="2">2°</option>
               <option value="5" selected>5°</option>
               <option value="10">10°</option>
             </select>
           </label>
+          <label>角度
+            <input type="number" id="calibAngle" class="busy" step="1" min="0" max="360" value="180" />
+          </label>
+          <label>脉宽 µs
+            <input type="number" id="calibPulse" class="busy" step="10" min="500" max="2500" value="1500" />
+          </label>
         </div>
-        <div class="gimbal-pad" id="gimbalPad">
-          <button type="button" class="btn btn-ghost busy g-up" data-sx="0" data-sy="-1" title="俯仰上仰（点按/长按）">▲</button>
-          <button type="button" class="btn btn-ghost busy g-left" data-sx="-1" data-sy="0" title="偏航左转（点按/长按）">◀</button>
-          <button type="button" class="btn btn-primary busy g-center" id="btn-servo-pad-center" title="回中">中</button>
-          <button type="button" class="btn btn-ghost busy g-right" data-sx="1" data-sy="0" title="偏航右转（点按/长按）">▶</button>
-          <button type="button" class="btn btn-ghost busy g-down" data-sx="0" data-sy="1" title="俯仰下俯（点按/长按）">▼</button>
+        <div class="row" style="margin-bottom:12px">
+          <button type="button" class="btn btn-ghost busy" onclick="calibNudge(-1)">−步进</button>
+          <button type="button" class="btn btn-ghost busy" onclick="calibNudge(1)">+步进</button>
+          <button type="button" class="btn btn-primary busy" onclick="calibSetAngle()">设角度</button>
+          <button type="button" class="btn btn-ghost busy" onclick="calibSetPulse()">设脉宽</button>
         </div>
-        <div class="cam-ctrl" style="margin-top:14px">
-          <label>Pan min <input type="number" id="servoPanMin" class="busy" step="1" min="0" max="360" /></label>
-          <label>max <input type="number" id="servoPanMax" class="busy" step="1" min="0" max="360" /></label>
-          <label>Tilt min <input type="number" id="servoTiltMin" class="busy" step="1" min="0" max="360" /></label>
-          <label>max <input type="number" id="servoTiltMax" class="busy" step="1" min="0" max="360" /></label>
+        <div class="cam-ctrl" style="margin-bottom:8px">
+          <label>当前姿态
+            <select id="calibPose" class="busy">
+              <option value="left">左</option>
+              <option value="center" selected>中</option>
+              <option value="right">右</option>
+            </select>
+          </label>
+          <label>offset °
+            <input type="number" id="calibOffset" class="busy" step="0.5" min="-180" max="180" value="0" />
+          </label>
         </div>
-        <div class="row" style="margin-top:10px">
-          <button type="button" class="btn btn-primary busy" onclick="servoApplyLimits()">应用限位</button>
-          <button type="button" class="btn btn-ghost busy" onclick="servoResetLimits()">恢复默认</button>
-          <button type="button" class="btn btn-ghost busy" onclick="servoGotoLimit('pan','min')">Pan→min</button>
-          <button type="button" class="btn btn-ghost busy" onclick="servoGotoLimit('pan','max')">Pan→max</button>
-          <button type="button" class="btn btn-ghost busy" onclick="servoGotoLimit('tilt','min')">Tilt→min</button>
-          <button type="button" class="btn btn-ghost busy" onclick="servoGotoLimit('tilt','max')">Tilt→max</button>
+        <div class="row" style="margin-bottom:12px">
+          <button type="button" class="btn btn-primary busy" onclick="calibCapture()">捕获当前</button>
+          <button type="button" class="btn btn-primary busy" onclick="calibSavePose()">写入该姿态</button>
+          <button type="button" class="btn btn-ghost busy" onclick="calibSetOffset()">应用 offset</button>
+          <button type="button" class="btn btn-ghost busy" onclick="calibGotoSel()">前往姿态</button>
         </div>
-        <p class="hint">角度 0–360°（中位 180°）。默认俯仰软限位 60–300（约 240°）；可改限位后点「→min/max」测极限。原始脉宽可用 API <code>pan_pulse</code>/<code>tilt_pulse</code>。右/下为正；板端 GPIO0：长按回中，双击清除 Wi‑Fi 并重启进 SoftAP 配网。</p>
-        <pre class="log" id="servo-out" hidden></pre>
+        <div class="status" id="calib-poses"></div>
+        <div class="row" style="margin-top:12px">
+          <button type="button" class="btn btn-ghost busy" onclick="calibSave()">写入全部</button>
+          <button type="button" class="btn btn-ghost busy" onclick="calibLoad()">从 NVS 加载</button>
+          <button type="button" class="btn btn-danger busy" onclick="calibReset(true)">清空草稿+NVS</button>
+        </div>
+        <div class="row" style="margin-top:10px; justify-content:space-between">
+          <span class="hint" style="margin:0">操作日志（无需串口）</span>
+          <button type="button" class="btn btn-ghost" onclick="calibLogClear()">清空日志</button>
+        </div>
+        <pre class="calib-log" id="calib-log">等待操作…</pre>
       </div>
     </section>
   </div>
@@ -470,17 +480,9 @@
 
     /** 停流后写入 NVS，避免与 MJPEG 抢连接导致保存丢失。 */
     async function saveCamConfig() {
-      var wasStreaming = camStreamOn;
-      if (wasStreaming) {
-        stopCameraStream();
-        await delayMs(250);
-      }
-      var ok = await applyCamConfig(true, true);
-      if (wasStreaming) {
-        await delayMs(100);
-        startCameraStream();
-      }
-      return ok;
+      stopCameraStream();
+      await delayMs(200);
+      return applyCamConfig(true, true);
     }
 
     async function waitCamCfgIdle(ms) {
@@ -692,7 +694,7 @@
       stopCameraStream();
       pauseBackgroundPoll();
       var hint = document.getElementById("camHint");
-      if (hint) hint.textContent = "预览已暂停（配网中），完成后点「开启预览」";
+      if (hint) hint.textContent = "图传通道已释放（配网中）。完成后可再「打开独占预览」。";
       try {
         await fetchWithTimeout("/api/camera/camera_pause", { method: "POST" }, 3000);
       } catch (e) {
@@ -704,7 +706,7 @@
     async function refreshWifiStatus() {
       var st = document.getElementById("st");
       try {
-        var r = await fetch("/api/wifi/status");
+        var r = await fetchWithTimeout("/api/wifi/status", null, 5000);
         var j = await r.json();
         if (!j.ok) {
           st.innerHTML = "<span class='chip warn'><strong>错误</strong>无法读取状态</span>";
@@ -716,7 +718,7 @@
           "<span class='chip'><strong>IP</strong>" + esc(j.ip || "—") + "</span>" +
           "<span class='chip " + (ok ? "ok" : "warn") + "'><strong>网络</strong>" + (ok ? "已连接" : "未就绪") + "</span>";
       } catch (e) {
-        st.innerHTML = "<span class='chip warn'><strong>异常</strong>" + esc(String(e)) + "</span>";
+        st.innerHTML = "<span class='chip warn'><strong>异常</strong>" + esc(String(e && e.name === "AbortError" ? "超时" : e)) + "</span>";
       }
     }
 
@@ -750,6 +752,9 @@
         if (j2.paused) {
           chips += "<span class='chip warn'><strong>状态</strong>已暂停</span>";
         }
+        if (j2.exclusive || j2.mjpeg_busy) {
+          chips += "<span class='chip warn'><strong>图传</strong>独占预览中</span>";
+        }
         st.innerHTML = chips;
       } catch (e) {
         st.innerHTML = "<span class='chip warn'><strong>摄像头</strong>异常</span>";
@@ -766,63 +771,67 @@
           URL.revokeObjectURL(camBlobUrl);
           camBlobUrl = null;
         }
-        camView.removeAttribute("src");
+        /* 本页不拉 MJPEG；若残留 src（旧会话）则清掉。 */
+        if (camView.getAttribute("src") && String(camView.getAttribute("src")).indexOf("stream.mjpg") >= 0) {
+          camView.removeAttribute("src");
+        }
       }
-      var btn = document.getElementById("btn-cam-stream");
-      if (btn) btn.textContent = "开启预览";
     }
 
-    function bindMjpegHandlers() {
-      var camView = document.getElementById("camView");
-      var camHint = document.getElementById("camHint");
-      if (!camView) {
-        return;
-      }
-      camView.onload = function () {
-        if (camHint && camStreamOn) {
-          camHint.textContent = "预览中（MJPEG 流）";
-        }
-      };
-      camView.onerror = function () {
-        if (!camStreamOn) {
-          return;
-        }
-        if (camHint) {
-          camHint.textContent = "流中断，正在重连…";
-        }
-        setTimeout(function () {
-          if (camStreamOn && camView) {
-            camView.src = CAM_STREAM_URL + "?t=" + Date.now();
-          }
-        }, 800);
-      };
-    }
-
-    async function startCameraStream() {
-      var btn = document.getElementById("btn-cam-stream");
-      var camView = document.getElementById("camView");
+    async function doCapture() {
+      showLog("out", "拍照中…", true);
+      setBusy(true);
       try {
-        await fetch("/api/camera/camera_resume", { method: "POST" });
-      } catch (e) {
-        /* ignore */
-      }
-      camStreamOn = true;
-      document.getElementById("camWrap").classList.remove("hidden");
-      if (btn) btn.textContent = "关闭预览";
-      document.getElementById("camHint").textContent = "正在连接摄像头流…";
-      bindMjpegHandlers();
-      if (camView) {
-        camView.src = CAM_STREAM_URL + "?t=" + Date.now();
-      }
-    }
-
-    function toggleCameraStream() {
-      if (camStreamOn) {
         stopCameraStream();
-        document.getElementById("camHint").textContent = "预览已关闭";
-        return;
+        try {
+          await fetchWithTimeout("/api/camera/camera_pause", { method: "POST" }, 3000);
+          await delayMs(150);
+          await fetchWithTimeout("/api/camera/camera_resume", { method: "POST" }, 3000);
+        } catch (ignore) { /* SoftAP 忙时仍尝试取帧 */ }
+        var r = await fetchWithTimeout("/api/camera/camera.jpg?t=" + Date.now(), null, 8000);
+        if (!r.ok) {
+          var errText = "";
+          try {
+            errText = await r.text();
+          } catch (ignore2) {
+            errText = "";
+          }
+          throw new Error("HTTP " + r.status + (errText ? (" " + errText) : ""));
+        }
+        var blob = await r.blob();
+        if (!blob || blob.size === 0) {
+          throw new Error("空帧");
+        }
+        var name = captureFileName();
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        var camView = document.getElementById("camView");
+        if (camView) {
+          if (camBlobUrl) {
+            URL.revokeObjectURL(camBlobUrl);
+          }
+          camBlobUrl = url;
+          camView.src = url;
+        } else {
+          setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+        }
+        showLog("out", "已保存 " + name + "（" + blob.size + " 字节）", true);
+        var hint = document.getElementById("camHint");
+        if (hint) hint.textContent = "已显示拍照快照（非实时流）。实时画面请用「打开独占预览」。";
+      } catch (e) {
+        var msg = String(e);
+        if (e && e.name === "AbortError") {
+          msg = "拍照超时：请先关闭独占预览页后重试";
+        }
+        showLog("out", "拍照失败: " + msg, true);
+      } finally {
+        setBusy(false);
       }
-      startCameraStream();
     }
 
     async function doScan() {
@@ -1000,119 +1009,18 @@
              "_" + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds()) + ".jpg";
     }
 
-    async function doCapture() {
-      var wasStreaming = camStreamOn;
-      showLog("out", "拍照中…", true);
-      setBusy(true);
-      try {
-        if (wasStreaming) {
-          stopCameraStream();
-          await delayMs(250);
-        }
-        var r = await fetchWithTimeout("/api/camera/camera.jpg?t=" + Date.now(), null, 8000);
-        if (!r.ok) {
-          var errText = "";
-          try {
-            errText = await r.text();
-          } catch (ignore) {
-            errText = "";
-          }
-          throw new Error("HTTP " + r.status + (errText ? (" " + errText) : ""));
-        }
-        var blob = await r.blob();
-        if (!blob || blob.size === 0) {
-          throw new Error("空帧");
-        }
-        var name = captureFileName();
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement("a");
-        a.href = url;
-        a.download = name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
-        showLog("out", "已保存 " + name + "（" + blob.size + " 字节）", true);
-      } catch (e) {
-        var msg = String(e);
-        if (e && e.name === "AbortError") {
-          msg = "拍照超时：请关闭预览后重试";
-        }
-        showLog("out", "拍照失败: " + msg, true);
-      } finally {
-        setBusy(false);
-        if (wasStreaming) {
-          startCameraStream();
-        }
-      }
-    }
-
-    function fillServoLimitInputs(j) {
-      function setNum(id, v) {
-        var el = document.getElementById(id);
-        if (el && typeof v === "number") {
-          el.value = String(v);
-        }
-      }
-      setNum("servoPanMin", Number(j.pan_min));
-      setNum("servoPanMax", Number(j.pan_max));
-      setNum("servoTiltMin", Number(j.tilt_min));
-      setNum("servoTiltMax", Number(j.tilt_max));
-    }
-
-    function applyServoStatus(j) {
-      var st = document.getElementById("servo-st");
-      var ang = document.getElementById("servoAngles");
-      if (!j || !st) {
-        return;
-      }
-      if (j.ready) {
-        st.innerHTML = "<span class=\"chip ok\">舵机<strong>就绪</strong></span>" +
-          "<span class=\"chip\">限位 pan " + j.pan_min + "–" + j.pan_max +
-          " / tilt " + j.tilt_min + "–" + j.tilt_max + "</span>" +
-          "<span class=\"chip\">满量程 0–" + (j.angle_max != null ? j.angle_max : 360) + "°</span>";
-      } else {
-        st.innerHTML = "<span class=\"chip warn\">舵机<strong>未就绪</strong></span>";
-      }
-      if (ang) {
-        ang.textContent = j.ready
-          ? ("pan=" + Number(j.pan_deg).toFixed(1) + "° (" + (j.pan_us || "—") + "µs)  " +
-             "tilt=" + Number(j.tilt_deg).toFixed(1) + "° (" + (j.tilt_us || "—") + "µs)")
-          : "pan=— tilt=—";
-      }
-      fillServoLimitInputs(j);
-    }
-
-    async function refreshServoStatus() {
-      try {
-        var r = await withCamStreamPaused(function () {
-          return fetchWithTimeout("/api/servo/status", null, 8000);
-        });
-        var j = await r.json();
-        applyServoStatus(j);
-      } catch (e) {
-        var st = document.getElementById("servo-st");
-        if (st) {
-          st.innerHTML = "<span class=\"chip warn\">舵机状态读取失败</span>";
-        }
+    function setNum(id, v) {
+      var el = document.getElementById(id);
+      if (el && typeof v === "number" && isFinite(v)) {
+        el.value = String(v);
       }
     }
 
     /**
-     * MJPEG 长连接会占满 SoftAP httpd worker。
-     * 云台控制：进入时停流；长按期间不恢复；松手后再延迟恢复。
+     * 功能页操作前释放图传通道（若独占预览页仍开着，服务端 pause 会断流）。
+     * 本页不再自动恢复 MJPEG。
      */
     var servoResumeTimer = null;
-    var servoStreamWantResume = false;
-    var servoHold = {
-      active: false,
-      sx: 0,
-      sy: 0,
-      timer: null,
-      inFlight: false,
-      btn: null
-    };
-    var SERVO_HOLD_REPEAT_MS = 200;
 
     function servoClearResumeTimer() {
       if (servoResumeTimer) {
@@ -1123,59 +1031,194 @@
 
     async function servoPauseStream() {
       servoClearResumeTimer();
-      if (camStreamOn) {
-        servoStreamWantResume = true;
-        stopCameraStream();
-        var hint = document.getElementById("camHint");
-        if (hint) {
-          hint.textContent = servoHold.active
-            ? "预览已暂停（长按云台）…"
-            : "预览已暂停（云台控制）…";
-        }
-        await delayMs(250);
+      stopCameraStream();
+      var hint = document.getElementById("camHint");
+      if (hint) {
+        hint.textContent = "图传已释放（校准控制）…";
       }
+      try {
+        await fetchWithTimeout("/api/camera/camera_pause", { method: "POST" }, 3000);
+      } catch (e) { /* ignore */ }
+      await delayMs(150);
     }
 
     function servoMaybeResumeStream(delay) {
-      if (servoHold.active) {
-        return;
-      }
-      if (!servoStreamWantResume) {
-        return;
-      }
       servoClearResumeTimer();
-      servoResumeTimer = setTimeout(function () {
-        servoResumeTimer = null;
-        if (servoHold.active) {
+    }
+
+    document.getElementById("modal-disconnect").addEventListener("click", function (ev) {
+      if (ev.target.id === "modal-disconnect") closeDisconnectModal();
+    });
+
+    var appMode = "detect";
+
+    async function resolveAppMode() {
+      try {
+        var r = await fetchWithTimeout("/api/app_mode", null, 5000);
+        var j = await r.json();
+        if (j && j.mode) {
+          return j.mode;
+        }
+      } catch (e) {
+        calibLog("WARN /api/app_mode 失败 — 请用串口日志里的 STA IP 打开，不是 192.168.4.1");
+      }
+      return null;
+    }
+
+    function applyAppModeUi(mode) {
+      var calib = document.getElementById("card-calib");
+      var cam = document.getElementById("card-camera");
+      var topP = document.querySelector(".top p");
+
+      /* mode==null：API 失败时保持页面默认（校准卡可见），勿误藏。 */
+      if (mode == null) {
+        appMode = "calib";
+        if (calib) {
+          calib.hidden = false;
+        }
+        if (cam) {
+          cam.hidden = true;
+        }
+        pauseBackgroundPoll();
+        return;
+      }
+
+      appMode = mode;
+      if (appMode === "calib") {
+        if (calib) {
+          calib.hidden = false;
+        }
+        if (cam) {
+          cam.hidden = true;
+        }
+        document.title = "camera · 舵机校准";
+        if (topP) {
+          topP.textContent = "校准模式：图传已关闭，专供舵机调试（请关掉其他预览页）";
+        }
+        pauseBackgroundPoll();
+      } else {
+        if (calib) {
+          calib.hidden = true;
+        }
+        if (cam) {
+          cam.hidden = false;
+        }
+      }
+    }
+
+    function calibPoseSelected() {
+      var el = document.getElementById("calibPose");
+      return el ? el.value : "center";
+    }
+
+    function calibStepDeg() {
+      var el = document.getElementById("calibStep");
+      var v = el ? parseFloat(el.value) : 5;
+      return isFinite(v) ? v : 5;
+    }
+
+    function calibLogClear() {
+      var el = document.getElementById("calib-log");
+      if (el) {
+        el.textContent = "";
+      }
+    }
+
+    function calibLog(line) {
+      var el = document.getElementById("calib-log");
+      var t, hh, mm, ss;
+      if (!el || !line) {
+        return;
+      }
+      t = new Date();
+      hh = String(t.getHours()).padStart(2, "0");
+      mm = String(t.getMinutes()).padStart(2, "0");
+      ss = String(t.getSeconds()).padStart(2, "0");
+      if (el.textContent === "等待操作…") {
+        el.textContent = "";
+      }
+      el.textContent += "[" + hh + ":" + mm + ":" + ss + "] " + line + "\n";
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function applyCalibJson(j) {
+      var st = document.getElementById("calib-st");
+      var ang = document.getElementById("calibAngles");
+      var poses = document.getElementById("calib-poses");
+      var chEl = document.getElementById("calibChannel");
+      var d, bits = [], ch;
+      if (!j || !j.ok) {
+        return;
+      }
+      ch = j.channel || "pan";
+      if (chEl && (ch === "pan" || ch === "tilt")) {
+        chEl.value = ch;
+      }
+      if (st) {
+        st.innerHTML =
+          '<span class="chip ' + (j.ready ? "ok" : "warn") + '">舵机 <strong>' +
+          (j.ready ? "就绪" : "未就绪") +
+          "</strong></span>" +
+          '<span class="chip">通道 <strong>' + ch + "</strong></span>" +
+          '<span class="chip">NVS <strong>' + (j.nvs_present ? "有" : "空") + "</strong></span>" +
+          '<span class="chip">mask <strong>' + (j.valid_mask || 0) + "</strong></span>";
+      }
+      if (ang) {
+        ang.textContent =
+          "active " + ch + "=" +
+          (j.angle_deg != null ? Number(j.angle_deg).toFixed(1) : "—") +
+          "° / " + (j.pulse_us != null ? j.pulse_us : "—") + "µs  |  " +
+          "pan=" + (j.pan_deg != null ? Number(j.pan_deg).toFixed(1) : "—") +
+          "°  tilt=" + (j.tilt_deg != null ? Number(j.tilt_deg).toFixed(1) : "—") + "°";
+      }
+      setNum("calibAngle", Number(j.angle_deg));
+      setNum("calibPulse", Number(j.pulse_us));
+      d = j.draft || {};
+      ["left", "center", "right"].forEach(function (name) {
+        var p = d[name];
+        if (!p) {
+          bits.push('<span class="chip warn">' + name + " —</span>");
           return;
         }
-        servoStreamWantResume = false;
-        startCameraStream();
-      }, typeof delay === "number" ? delay : 700);
-    }
-
-    async function withCamStreamPaused(fn) {
-      await servoPauseStream();
-      try {
-        return await fn();
-      } finally {
-        servoMaybeResumeStream(700);
+        bits.push(
+          '<span class="chip ' + (p.valid ? "ok" : "warn") + '">' +
+            name +
+            " <strong>" +
+            Number(p.angle_deg).toFixed(1) +
+            "° / " +
+            p.pulse_us +
+            "µs / off=" +
+            Number(p.offset_deg).toFixed(2) +
+            "</strong></span>"
+        );
+        if (name === calibPoseSelected()) {
+          setNum("calibOffset", Number(p.offset_deg));
+        }
+      });
+      if (poses) {
+        poses.innerHTML = bits.join("");
+      }
+      if (j.msg) {
+        calibLog(j.msg);
       }
     }
 
-    async function servoPost(body, opts) {
-      opts = opts || {};
-      var quiet = !!opts.quiet;
-      if (!quiet) {
-        setBusy(true);
+    function calibSetStatusChip(html) {
+      var st = document.getElementById("calib-st");
+      if (st) {
+        st.innerHTML = html;
       }
+    }
+
+    async function calibPost(body) {
+      /* 校准固件服务端已关 MJPEG；此处不再先 POST camera_pause（槽满时 pause 自己也进不来）。 */
       try {
-        await servoPauseStream();
-        var r = await fetchWithTimeout("/api/servo", {
+        calibLog(">> " + (body && body.action ? body.action : "post"));
+        var r = await fetchWithTimeout("/api/servo/calib", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body)
-        }, 8000);
+        }, 10000);
         var text = await r.text();
         var j = null;
         try {
@@ -1183,266 +1226,146 @@
         } catch (parseErr) {
           j = null;
         }
-        if (!j || !j.ok) {
-          showLog("servo-out", "控制失败: " + ((j && j.error) ? j.error : ("HTTP " + r.status + " " + text)), true);
-          return false;
+        if (!r.ok || !j || !j.ok) {
+          var errTxt = (j && (j.msg || j.error)) ? (j.msg || j.error) : ("HTTP " + r.status + " " + text.slice(0, 80));
+          calibLog("ERR " + errTxt);
+          calibSetStatusChip('<span class="chip warn">请求失败 <strong>' + esc(String(errTxt)) + "</strong></span>");
+          return null;
         }
-        applyServoStatus(j);
-        showLog("servo-out", "", false);
-        return true;
+        applyCalibJson(j);
+        return j;
       } catch (e) {
-        var msg = String(e);
-        if (e && e.name === "AbortError") {
-          msg = "请求超时：请先点「关闭预览」再试云台，或稍后重试";
-        }
-        showLog("servo-out", "控制失败: " + msg, true);
-        return false;
-      } finally {
-        if (!quiet) {
-          setBusy(false);
-        }
-        if (!servoHold.active) {
-          servoMaybeResumeStream(700);
-        }
+        var msg = (e && e.name === "AbortError") ? "超时：强刷本页或检查 IP" : (e && e.message ? e.message : String(e));
+        calibLog("ERR " + msg);
+        calibSetStatusChip('<span class="chip warn">请求异常 <strong>' + esc(msg) + "</strong></span>");
+        return null;
       }
     }
 
-    function servoStepDeg() {
-      var el = document.getElementById("servoStep");
-      var n = el ? parseFloat(el.value) : 5;
-      return isFinite(n) && n > 0 ? n : 5;
-    }
-
-    /** sx/sy: -1/0/1，乘以步进；tilt 上仰为负 delta（减小俯仰角） */
-    async function servoNudge(sx, sy, opts) {
-      var step = servoStepDeg();
-      var body = {};
-      if (sx) {
-        body.pan_delta = sx * step;
-      }
-      if (sy) {
-        body.tilt_delta = sy * step;
-      }
-      return servoPost(body, opts);
-    }
-
-    async function servoCenter() {
-      servoHoldStop();
-      return servoPost({ center: 1 });
-    }
-
-    function servoReadLimitInputs() {
-      function num(id) {
-        var el = document.getElementById(id);
-        var n = el ? parseFloat(el.value) : NaN;
-        return isFinite(n) ? n : null;
-      }
-      return {
-        pan_min: num("servoPanMin"),
-        pan_max: num("servoPanMax"),
-        tilt_min: num("servoTiltMin"),
-        tilt_max: num("servoTiltMax")
-      };
-    }
-
-    async function servoApplyLimits() {
-      var lim = servoReadLimitInputs();
-      var body = {};
-      var k;
-      for (k in lim) {
-        if (lim[k] != null) {
-          body[k] = lim[k];
-        }
-      }
-      if (!Object.keys(body).length) {
-        showLog("servo-out", "限位输入无效", true);
-        return false;
-      }
-      servoHoldStop();
-      return servoPost(body);
-    }
-
-    async function servoResetLimits() {
-      servoHoldStop();
-      return servoPost({ limits_reset: 1 });
-    }
-
-    async function servoGotoLimit(axis, which) {
-      var lim = servoReadLimitInputs();
-      var key = axis + "_" + which;
-      var body = {};
-      if (lim[key] == null) {
-        showLog("servo-out", "限位输入无效", true);
-        return false;
-      }
-      body[axis] = lim[key];
-      servoHoldStop();
-      return servoPost(body);
-    }
-
-    function servoHoldClearBtn() {
-      if (servoHold.btn) {
-        servoHold.btn.classList.remove("holding");
-        servoHold.btn = null;
-      }
-    }
-
-    function servoHoldStop() {
-      if (!servoHold.active && !servoHold.timer) {
-        servoHoldClearBtn();
-        return;
-      }
-      servoHold.active = false;
-      servoHold.sx = 0;
-      servoHold.sy = 0;
-      if (servoHold.timer) {
-        clearTimeout(servoHold.timer);
-        servoHold.timer = null;
-      }
-      servoHoldClearBtn();
-      servoMaybeResumeStream(700);
-    }
-
-    function servoHoldScheduleNext() {
-      if (!servoHold.active) {
-        return;
-      }
-      if (servoHold.timer) {
-        clearTimeout(servoHold.timer);
-      }
-      servoHold.timer = setTimeout(function () {
-        servoHold.timer = null;
-        servoHoldTick();
-      }, SERVO_HOLD_REPEAT_MS);
-    }
-
-    async function servoHoldTick() {
-      if (!servoHold.active) {
-        return;
-      }
-      if (servoHold.inFlight) {
-        servoHoldScheduleNext();
-        return;
-      }
-      servoHold.inFlight = true;
+    async function refreshCalibStatus() {
       try {
-        var ok = await servoNudge(servoHold.sx, servoHold.sy, { quiet: true });
-        if (!ok) {
-          servoHoldStop();
+        calibLog(">> status");
+        var r = await fetchWithTimeout("/api/servo/calib", null, 10000);
+        var text = await r.text();
+        var j = null;
+        try {
+          j = JSON.parse(text);
+        } catch (parseErr) {
+          j = null;
+        }
+        if (!r.ok || !j || !j.ok) {
+          var errTxt = (j && (j.msg || j.error)) ? (j.msg || j.error) : ("HTTP " + r.status + " " + text.slice(0, 80));
+          calibLog("ERR status " + errTxt);
+          calibSetStatusChip('<span class="chip warn">读取失败 <strong>' + esc(String(errTxt)) + "</strong></span>");
           return;
         }
-      } finally {
-        servoHold.inFlight = false;
-      }
-      if (servoHold.active) {
-        servoHoldScheduleNext();
-      }
-    }
-
-    function servoPadDown(ev) {
-      var btn = ev.currentTarget;
-      var sx;
-      var sy;
-
-      if (!btn || btn.disabled) {
-        return;
-      }
-      if (typeof ev.button === "number" && ev.button !== 0) {
-        return;
-      }
-      sx = parseInt(btn.getAttribute("data-sx"), 10);
-      sy = parseInt(btn.getAttribute("data-sy"), 10);
-      if (!isFinite(sx) || !isFinite(sy) || (sx === 0 && sy === 0)) {
-        return;
-      }
-
-      ev.preventDefault();
-      try {
-        btn.setPointerCapture(ev.pointerId);
-      } catch (captureErr) {
-        /* ignore */
-      }
-
-      if (servoHold.active && servoHold.sx === sx && servoHold.sy === sy) {
-        return;
-      }
-      servoHoldStop();
-      servoHold.active = true;
-      servoHold.sx = sx;
-      servoHold.sy = sy;
-      servoHold.btn = btn;
-      btn.classList.add("holding");
-      servoHoldTick();
-    }
-
-    function servoPadUp(ev) {
-      if (ev) {
-        ev.preventDefault();
-      }
-      servoHoldStop();
-    }
-
-    function bindGimbalPad() {
-      var pad = document.getElementById("gimbalPad");
-      var centerBtn = document.getElementById("btn-servo-pad-center");
-      var dirs;
-      var i;
-      var btn;
-
-      if (!pad) {
-        return;
-      }
-      dirs = pad.querySelectorAll("button[data-sx]");
-      for (i = 0; i < dirs.length; i++) {
-        btn = dirs[i];
-        btn.addEventListener("pointerdown", servoPadDown);
-        btn.addEventListener("pointerup", servoPadUp);
-        btn.addEventListener("pointercancel", servoPadUp);
-        btn.addEventListener("lostpointercapture", servoPadUp);
-        btn.addEventListener("contextmenu", function (e) {
-          e.preventDefault();
-        });
-      }
-      if (centerBtn) {
-        centerBtn.addEventListener("click", function () {
-          servoCenter();
-        });
-      }
-      window.addEventListener("blur", servoHoldStop);
-      document.addEventListener("visibilitychange", function () {
-        if (document.hidden) {
-          servoHoldStop();
+        applyCalibJson(j);
+        if (!j.msg) {
+          calibLog("status ok");
         }
-      });
+      } catch (e) {
+        var msg = (e && e.name === "AbortError") ? "超时：检查是否打开 http://板子IP/" : (e && e.message ? e.message : String(e));
+        calibSetStatusChip('<span class="chip warn">读取失败 <strong>' + esc(msg) + "</strong></span>");
+        calibLog("ERR status " + msg);
+      }
     }
 
-    document.getElementById("modal-disconnect").addEventListener("click", function (ev) {
-      if (ev.target.id === "modal-disconnect") closeDisconnectModal();
-    });
+    async function calibSetChannel() {
+      var el = document.getElementById("calibChannel");
+      var ch = el ? el.value : "pan";
+      return calibPost({ action: "set_channel", channel: ch });
+    }
 
-    /* SoftAP 配网优先：不自动开 MJPEG，避免占满 HTTP 槽导致扫描/保存卡死。 */
-    bindGimbalPad();
-    (async function bootUi() {
-      var softapOnly = false;
-      try {
-        var wr = await fetch("/api/wifi/status");
-        var wj = await wr.json();
-        softapOnly = (wj.softap === true) && (wj.sta_has_ip !== true);
-      } catch (e) {
-        softapOnly = true;
+    async function calibNudge(sign) {
+      return calibPost({ action: "nudge", delta: sign * calibStepDeg() });
+    }
+
+    async function calibSetAngle() {
+      var el = document.getElementById("calibAngle");
+      var v = el ? parseFloat(el.value) : NaN;
+      if (!isFinite(v)) {
+        calibLog("ERR 角度无效");
+        return;
       }
-      await refreshWifiStatus();
-      await refreshCameraStatus();
-      await refreshServoStatus();
-      if (softapOnly) {
+      return calibPost({ action: "set_angle", angle: v });
+    }
+
+    async function calibSetPulse() {
+      var el = document.getElementById("calibPulse");
+      var v = el ? parseInt(el.value, 10) : NaN;
+      if (!isFinite(v)) {
+        calibLog("ERR 脉宽无效");
+        return;
+      }
+      return calibPost({ action: "set_pulse", pulse: v });
+    }
+
+    async function calibCapture() {
+      return calibPost({ action: "capture", pose: calibPoseSelected() });
+    }
+
+    async function calibSavePose() {
+      return calibPost({ action: "save_pose", pose: calibPoseSelected() });
+    }
+
+    async function calibSetOffset() {
+      var el = document.getElementById("calibOffset");
+      var v = el ? parseFloat(el.value) : NaN;
+      if (!isFinite(v)) {
+        calibLog("ERR offset 无效");
+        return;
+      }
+      return calibPost({ action: "set_offset", pose: calibPoseSelected(), offset: v });
+    }
+
+    async function calibGoto(pose) {
+      return calibPost({ action: "goto", pose: pose || calibPoseSelected() });
+    }
+
+    async function calibGotoSel() {
+      return calibGoto(calibPoseSelected());
+    }
+
+    async function calibSave() {
+      return calibPost({ action: "save" });
+    }
+
+    async function calibLoad() {
+      return calibPost({ action: "load" });
+    }
+
+    async function calibReset(deleteNvs) {
+      return calibPost({ action: "reset", delete_nvs: deleteNvs ? 1 : 0 });
+    }
+
+    /* 功能页默认不拉 MJPEG；校准模式完全关闭图传 UI。 */
+    (async function bootUi() {
+      /* 先显示校准卡并立刻拉舵机状态，勿被 Wi‑Fi status 无超时请求卡住。 */
+      applyAppModeUi("calib");
+      calibLog("boot: 拉取 /api/servo/calib …");
+      await refreshCalibStatus();
+
+      var mode = null;
+      try {
+        mode = await resolveAppMode();
+      } catch (e) {
+        calibLog("WARN app_mode " + (e && e.message ? e.message : String(e)));
+      }
+      applyAppModeUi(mode);
+
+      /* Wi‑Fi 状态并行，失败不挡校准 */
+      refreshWifiStatus().catch(function () {});
+
+      if (appMode === "calib" || mode === "calib" || mode == null) {
+        calibLog("校准模式：确认地址为串口里的 STA IP；USB: servo pan 180");
+      } else {
+        await refreshCameraStatus();
         var hint = document.getElementById("camHint");
         if (hint) {
-          hint.textContent = "SoftAP 配网模式：请先完成 Wi‑Fi 配置，再点「开启预览」";
+          hint.textContent = "本页不占图传通道。需要看实时画面请点「打开独占预览」。";
         }
-      } else {
-        startCameraStream();
+        resumeBackgroundPoll();
       }
-      resumeBackgroundPoll();
     })();
   </script>
 </body>

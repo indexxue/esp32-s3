@@ -35,6 +35,12 @@ status_t servo_center_all(void);
 /** 相对当前角度步进（度），受软限位裁剪。 */
 status_t servo_nudge(servo_ch_t ch, float delta_deg);
 
+/**
+ * 应用校准姿态：以 pulse_us 为主真相，再叠加 offset_deg 换算的脉宽增量。
+ * angle_deg 仅作文档/回读，本函数不使用（调用方可传捕获值）。
+ */
+status_t servo_apply_pose(servo_ch_t ch, float angle_deg, float offset_deg, uint16_t pulse_us);
+
 status_t servo_get_limits(servo_limits_t *out);
 /**
  * 设置软限位（度）。各指针可为 NULL（该端点不变）；min 必须 < max，

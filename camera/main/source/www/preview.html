@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>camera · 独占预览</title>
+  <style>
+    :root {
+      --bg: #05080c;
+      --text: #e8eef7;
+      --muted: #8b9cb3;
+      --accent: #3d8bfd;
+      --danger: #d64545;
+      --surface: rgba(26, 35, 50, 0.88);
+      --border: #2d3a4d;
+      --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      overflow: hidden;
+    }
+    .bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      padding-top: max(10px, env(safe-area-inset-top));
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+    }
+    .bar h1 {
+      margin: 0;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    .meta {
+      margin: 2px 0 0;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .actions { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      font-weight: 500;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: var(--accent);
+      border-color: transparent;
+      color: #fff;
+    }
+    .btn-record {
+      border-color: var(--danger);
+      color: #ffd0d0;
+    }
+    .btn-record.is-on {
+      background: var(--danger);
+      border-color: transparent;
+      color: #fff;
+      animation: recPulse 1.2s ease-in-out infinite;
+    }
+    @keyframes recPulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.72; }
+    }
+    .stage {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding-top: 56px;
+      background: #000;
+    }
+    #camView {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      background: #000;
+    }
+    #recCanvas {
+      display: none;
+    }
+    .hint {
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: max(12px, env(safe-area-inset-bottom));
+      z-index: 2;
+      margin: 0;
+      padding: 8px 12px;
+      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.8rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div>
+      <h1>独占预览</h1>
+      <p class="meta" id="meta">占用图传通道 · 板端 LCD 已暂停</p>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn btn-record" id="btn-record" onclick="toggleRecord()">开始录制</button>
+      <button type="button" class="btn" id="btn-stop" onclick="stopStreamOnly()">暂停</button>
+      <a class="btn btn-primary" id="btn-back" href="/">返回功能页</a>
+    </div>
+  </header>
+  <main class="stage">
+    <img id="camView" alt="camera preview" width="240" height="240" />
+    <canvas id="recCanvas" width="240" height="240"></canvas>
+  </main>
+  <p class="hint" id="hint">正在连接…</p>
+  <script>
+    var CAM_STREAM_URL = "/api/camera/stream.mjpg";
+    var REC_FPS = 12;
+    var camStreamOn = false;
+    var leaving = false;
+    var recording = false;
+    var mediaRecorder = null;
+    var recChunks = [];
+    var recTimer = null;
+    var recStartedAt = 0;
+    var recMime = "";
+    var recCanvasStream = null;
+
+    function setHint(t) {
+      var h = document.getElementById("hint");
+      if (h) h.textContent = t;
+    }
+
+    function setMeta(t) {
+      var m = document.getElementById("meta");
+      if (m) m.textContent = t;
+    }
+
+    function pad2(n) {
+      return (n < 10 ? "0" : "") + n;
+    }
+
+    function recordFileName(ext) {
+      var d = new Date();
+      return "camera_" +
+        d.getFullYear() +
+        pad2(d.getMonth() + 1) +
+        pad2(d.getDate()) + "_" +
+        pad2(d.getHours()) +
+        pad2(d.getMinutes()) +
+        pad2(d.getSeconds()) +
+        "." + ext;
+    }
+
+    function pickRecorderMime() {
+      if (!window.MediaRecorder || typeof MediaRecorder.isTypeSupported !== "function") {
+        return "";
+      }
+      var types = [
+        "video/webm;codecs=vp9",
+        "video/webm;codecs=vp8",
+        "video/webm",
+        "video/mp4"
+      ];
+      for (var i = 0; i < types.length; i++) {
+        if (MediaRecorder.isTypeSupported(types[i])) {
+          return types[i];
+        }
+      }
+      return "";
+    }
+
+    function updateRecordUi() {
+      var btn = document.getElementById("btn-record");
+      if (!btn) return;
+      if (recording) {
+        btn.classList.add("is-on");
+        btn.textContent = "停止并下载";
+        btn.disabled = false;
+      } else {
+        btn.classList.remove("is-on");
+        btn.textContent = "开始录制";
+        btn.disabled = !camStreamOn;
+      }
+    }
+
+    function clearImg() {
+      var img = document.getElementById("camView");
+      if (!img) return;
+      img.onload = null;
+      img.onerror = null;
+      img.removeAttribute("src");
+    }
+
+    function releaseExclusive(keepalive) {
+      try {
+        fetch("/api/camera/camera_pause", {
+          method: "POST",
+          keepalive: !!keepalive
+        });
+      } catch (e) { /* ignore */ }
+    }
+
+    function drawRecFrame() {
+      var img = document.getElementById("camView");
+      var canvas = document.getElementById("recCanvas");
+      if (!img || !canvas || !img.complete) return;
+      var w = img.naturalWidth || 240;
+      var h = img.naturalHeight || 240;
+      if (w <= 0 || h <= 0) return;
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      try {
+        var ctx = canvas.getContext("2d");
+        if (ctx) ctx.drawImage(img, 0, 0, w, h);
+      } catch (e) { /* ignore tainted / transient */ }
+    }
+
+    function stopRecPump() {
+      if (recTimer !== null) {
+        clearInterval(recTimer);
+        recTimer = null;
+      }
+      if (recCanvasStream) {
+        try {
+          recCanvasStream.getTracks().forEach(function (t) { t.stop(); });
+        } catch (e) { /* ignore */ }
+        recCanvasStream = null;
+      }
+    }
+
+    function downloadBlob(blob, name) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    }
+
+    function finishRecording(blob) {
+      var sec = Math.max(1, Math.round((Date.now() - recStartedAt) / 1000));
+      var ext = (recMime.indexOf("mp4") >= 0) ? "mp4" : "webm";
+      var name = recordFileName(ext);
+      if (!blob || blob.size === 0) {
+        setHint("录制失败：没有有效数据（请用 Chrome/Edge 重试）");
+        return;
+      }
+      downloadBlob(blob, name);
+      setHint("已下载 " + name + "（约 " + sec + "s，" + blob.size + " 字节）");
+    }
+
+    function stopRecording(download) {
+      if (!recording && !mediaRecorder) {
+        stopRecPump();
+        updateRecordUi();
+        return;
+      }
+      recording = false;
+      stopRecPump();
+      var rec = mediaRecorder;
+      mediaRecorder = null;
+      if (!rec) {
+        updateRecordUi();
+        return;
+      }
+      if (rec.state === "inactive") {
+        if (download) {
+          finishRecording(new Blob(recChunks, { type: recMime || "video/webm" }));
+        }
+        recChunks = [];
+        updateRecordUi();
+        return;
+      }
+      rec.onstop = function () {
+        if (download) {
+          finishRecording(new Blob(recChunks, { type: recMime || "video/webm" }));
+        }
+        recChunks = [];
+        updateRecordUi();
+        if (camStreamOn && !leaving) {
+          setMeta("占用图传通道 · 板端 LCD 已暂停");
+        }
+      };
+      try {
+        rec.stop();
+      } catch (e) {
+        recChunks = [];
+        updateRecordUi();
+      }
+    }
+
+    function startRecording() {
+      if (recording) return;
+      if (!camStreamOn) {
+        setHint("请先恢复预览再录制");
+        return;
+      }
+      recMime = pickRecorderMime();
+      if (!recMime && !(window.MediaRecorder)) {
+        setHint("当前浏览器不支持 MediaRecorder，请用 Chrome / Edge");
+        return;
+      }
+      var canvas = document.getElementById("recCanvas");
+      if (!canvas || typeof canvas.captureStream !== "function") {
+        setHint("当前浏览器不支持 canvas 录制，请用 Chrome / Edge");
+        return;
+      }
+
+      drawRecFrame();
+      recChunks = [];
+      recStartedAt = Date.now();
+      try {
+        recCanvasStream = canvas.captureStream(REC_FPS);
+        mediaRecorder = recMime
+          ? new MediaRecorder(recCanvasStream, { mimeType: recMime, videoBitsPerSecond: 800000 })
+          : new MediaRecorder(recCanvasStream, { videoBitsPerSecond: 800000 });
+        if (!recMime && mediaRecorder.mimeType) {
+          recMime = mediaRecorder.mimeType;
+        }
+      } catch (e) {
+        stopRecPump();
+        setHint("无法启动录制: " + e);
+        return;
+      }
+
+      mediaRecorder.ondataavailable = function (ev) {
+        if (ev.data && ev.data.size > 0) {
+          recChunks.push(ev.data);
+        }
+      };
+      mediaRecorder.onerror = function () {
+        setHint("录制出错，已停止");
+        stopRecording(false);
+      };
+
+      try {
+        mediaRecorder.start(500);
+      } catch (e2) {
+        stopRecPump();
+        mediaRecorder = null;
+        setHint("录制启动失败: " + e2);
+        return;
+      }
+
+      recording = true;
+      recTimer = setInterval(drawRecFrame, Math.max(40, Math.floor(1000 / REC_FPS)));
+      updateRecordUi();
+      setMeta("录制中 · 停止后自动下载到本机");
+      setHint("录制中… 点「停止并下载」保存视频（WebM/MP4）");
+    }
+
+    function toggleRecord() {
+      if (recording) {
+        stopRecording(true);
+      } else {
+        startRecording();
+      }
+    }
+
+    function stopStreamOnly() {
+      if (recording) {
+        stopRecording(true);
+      }
+      camStreamOn = false;
+      clearImg();
+      releaseExclusive(false);
+      setHint("预览已暂停。点「返回功能页」去配网/云台，或刷新本页重新开流。");
+      setMeta("通道已释放");
+      updateRecordUi();
+    }
+
+    function goBack(ev) {
+      if (ev) ev.preventDefault();
+      leaving = true;
+      if (recording) {
+        stopRecording(true);
+      }
+      camStreamOn = false;
+      clearImg();
+      releaseExclusive(true);
+      window.location.href = "/";
+    }
+
+    function bindHandlers() {
+      var img = document.getElementById("camView");
+      if (!img) return;
+      img.onload = function () {
+        if (camStreamOn && !recording) {
+          setHint("预览中 · 可点「开始录制」保存到本机 · 离开本页会自动关流");
+        }
+      };
+      img.onerror = function () {
+        if (!camStreamOn || leaving) return;
+        if (recording) {
+          stopRecording(true);
+        }
+        setHint("流中断，正在重连…");
+        setTimeout(function () {
+          if (camStreamOn && !leaving) {
+            img.src = CAM_STREAM_URL + "?t=" + Date.now();
+          }
+        }, 800);
+      };
+    }
+
+    async function startExclusive() {
+      setHint("正在进入独占预览…");
+      try {
+        await fetch("/api/camera/camera_resume", { method: "POST" });
+      } catch (e) { /* ignore */ }
+      camStreamOn = true;
+      bindHandlers();
+      var img = document.getElementById("camView");
+      if (img) img.src = CAM_STREAM_URL + "?t=" + Date.now();
+      setMeta("占用图传通道 · 板端 LCD 已暂停");
+      updateRecordUi();
+    }
+
+    document.getElementById("btn-back").addEventListener("click", goBack);
+
+    document.addEventListener("visibilitychange", function () {
+      var img = document.getElementById("camView");
+      if (document.hidden) {
+        /* 切后台/锁屏：不要主动 pause（会立刻断流）。浏览器可能自己挂起 img。 */
+        return;
+      }
+      /* 回到前台：若流已断则自动重连。 */
+      if (leaving || !img) return;
+      if (!camStreamOn) {
+        startExclusive();
+        return;
+      }
+      if (!img.getAttribute("src")) {
+        setHint("恢复预览…");
+        img.src = CAM_STREAM_URL + "?t=" + Date.now();
+      }
+    });
+
+    window.addEventListener("pagehide", function () {
+      leaving = true;
+      if (recording) {
+        stopRecording(false);
+      }
+      camStreamOn = false;
+      clearImg();
+      releaseExclusive(true);
+    });
+
+    updateRecordUi();
+    startExclusive();
+  </script>
+</body>
+</html>
