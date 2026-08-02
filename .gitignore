@@ -25,6 +25,12 @@ camera/sdkconfig.old
 # Component manager (if used)
 project/dependencies.lock
 project/managed_components/
+ble_demo/dependencies.lock
+ble_demo/managed_components/
+factory/dependencies.lock
+factory/managed_components/
+ballot_guard/dependencies.lock
+ballot_guard/managed_components/
 voice_hub/dependencies.lock
 voice_hub/managed_components/
 camera/dependencies.lock
