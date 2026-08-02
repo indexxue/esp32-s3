@@ -1,0 +1,191 @@
+{
+  "schema": 3,
+  "version": "1.1.0",
+  "products": {
+    "project": {
+      "variants": {
+        "sign": {
+          "signed": true,
+          "build_date": "20260802",
+          "built_at_utc": "2026-08-02T06:31:41Z",
+          "artifacts": [
+            {
+              "file": "sign_project_1.1.0_20260802.bin",
+              "size": 1380352,
+              "sha256": "8563afcb3f7385a159b67445458719786b3aab3c560eb7e13f3c3f3826985c5a",
+              "role": "app"
+            },
+            {
+              "file": "sign_project_1.1.0_20260802.hex",
+              "size": 3796332,
+              "role": "app",
+              "format": "intel_hex",
+              "flash_offset": "0x30000"
+            }
+          ],
+          "signing": {
+            "profile": "signed_ota",
+            "algorithm": "rsa3072",
+            "signing_key_id": "dev"
+          },
+          "ota": {
+            "image": "sign_project_1.1.0_20260802.bin",
+            "note": "Upload this file at http://<device>/ota then Apply & Reboot",
+            "sha256": "8563afcb3f7385a159b67445458719786b3aab3c560eb7e13f3c3f3826985c5a",
+            "signing_key_id": "dev",
+            "signing_profile": "signed_ota"
+          }
+        }
+      },
+      "signed": true,
+      "ota": {
+        "image": "sign_project_1.1.0_20260802.bin",
+        "note": "Upload this file at http://<device>/ota then Apply & Reboot",
+        "sha256": "8563afcb3f7385a159b67445458719786b3aab3c560eb7e13f3c3f3826985c5a",
+        "signing_key_id": "dev",
+        "signing_profile": "signed_ota"
+      }
+    },
+    "ble_demo": {
+      "variants": {
+        "unsigned": {
+          "signed": false,
+          "build_date": "20260802",
+          "built_at_utc": "2026-08-02T06:41:03Z",
+          "artifacts": [
+            {
+              "file": "unsigned_ble_demo_1.1.0_20260802.bin",
+              "size": 692912,
+              "sha256": "bf28902bc03d6b8427ac4800b02a91051af002a1da04fcc3baa381baa772e62c",
+              "role": "app"
+            },
+            {
+              "file": "unsigned_ble_demo_1.1.0_20260802.hex",
+              "size": 1905696,
+              "role": "app",
+              "format": "intel_hex",
+              "flash_offset": "0x30000"
+            }
+          ]
+        }
+      },
+      "signed": false
+    },
+    "factory": {
+      "variants": {
+        "unsigned": {
+          "signed": false,
+          "build_date": "20260802",
+          "built_at_utc": "2026-08-02T06:47:06Z",
+          "artifacts": [
+            {
+              "file": "unsigned_factory_1.1.0_20260802.bin",
+              "size": 446192,
+              "sha256": "a22cb55c47a8c63734a913127e234c4eb0329f891d96630b2b1b5e6daaf58a10",
+              "role": "app"
+            },
+            {
+              "file": "unsigned_factory_1.1.0_20260802.hex",
+              "size": 1227152,
+              "role": "app",
+              "format": "intel_hex",
+              "flash_offset": "0x30000"
+            }
+          ]
+        }
+      },
+      "signed": false
+    },
+    "ballot_guard": {
+      "variants": {
+        "unsigned": {
+          "signed": false,
+          "build_date": "20260802",
+          "built_at_utc": "2026-08-02T06:52:45Z",
+          "artifacts": [
+            {
+              "file": "unsigned_ballot_guard_1.1.0_20260802.bin",
+              "size": 1303952,
+              "sha256": "e8d092155e2af6d3d3b7d94f8d24bef99c975f51284f575be00fc462d6b6d286",
+              "role": "app"
+            },
+            {
+              "file": "unsigned_ballot_guard_1.1.0_20260802.hex",
+              "size": 3586200,
+              "role": "app",
+              "format": "intel_hex",
+              "flash_offset": "0x30000"
+            }
+          ]
+        }
+      },
+      "signed": false
+    },
+    "voice_hub": {
+      "variants": {
+        "sign": {
+          "signed": true,
+          "build_date": "20260802",
+          "built_at_utc": "2026-08-02T06:53:40Z",
+          "artifacts": [
+            {
+              "file": "sign_voice_hub_1.1.0_20260802.bin",
+              "size": 1300544,
+              "sha256": "64792dd4743a0c2e5f1915f7c9e4c63543b65d507ef952856c5eda525102d56c",
+              "role": "app"
+            },
+            {
+              "file": "sign_voice_hub_1.1.0_20260802.hex",
+              "size": 3576828,
+              "role": "app",
+              "format": "intel_hex",
+              "flash_offset": "0x30000"
+            }
+          ],
+          "signing": {
+            "profile": "signed_ota",
+            "algorithm": "rsa3072",
+            "signing_key_id": "dev"
+          }
+        }
+      },
+      "signed": true
+    },
+    "camera": {
+      "variants": {
+        "unsigned": {
+          "signed": false,
+          "build_date": "20260802",
+          "built_at_utc": "2026-08-02T07:05:52Z",
+          "artifacts": [
+            {
+              "file": "unsigned_camera_1.1.0_20260802.bin",
+              "size": 3520704,
+              "sha256": "8a6490331c08943fae740a7efba03406f57fe9d0411173cc96d2f5cc368bbe59",
+              "role": "app"
+            },
+            {
+              "file": "unsigned_camera_1.1.0_20260802.hex",
+              "size": 9682812,
+              "role": "app",
+              "format": "intel_hex",
+              "flash_offset": "0x30000"
+            }
+          ]
+        }
+      },
+      "signed": false
+    }
+  },
+  "target": "esp32s3",
+  "git_commit": "49ca7fac",
+  "naming": {
+    "pattern": "{sign_tag}_{product}_{version}_{build_date}.{ext}",
+    "sign_tag": "unsigned",
+    "example": "unsigned_camera_1.1.0_20260802.bin"
+  },
+  "signing_summary": {
+    "all_signed": false,
+    "any_signed": true
+  }
+}
