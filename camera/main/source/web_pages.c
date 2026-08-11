@@ -5,6 +5,7 @@
 
 #include "web_pages.h"
 
+#include "camera_app_config.h"
 #include "camera_model.h"
 #include "camera_sensor.h"
 #include "servo_ctrl.h"
@@ -24,13 +25,6 @@
 #include "net_wifi.h"
 #include "nvs.h"
 #include "web_ctrl_wifi_api.h"
-
-#ifndef CAMERA_APP_COLLECT_MODE
-#define CAMERA_APP_COLLECT_MODE 0
-#endif
-#ifndef CAMERA_APP_CALIB_MODE
-#define CAMERA_APP_CALIB_MODE 0
-#endif
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
@@ -895,8 +889,10 @@ static esp_err_t web_api_app_mode_get(httpd_req_t *req)
     mode = "calib";
 #elif CAMERA_APP_COLLECT_MODE
     mode = "collect";
-#else
+#elif CAMERA_APP_DETECT_MODE
     mode = "detect";
+#else
+    mode = "preview";
 #endif
     {
         char body[64];

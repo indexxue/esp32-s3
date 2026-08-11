@@ -26,9 +26,9 @@ static const device_button_spec_t s_buttons_voice_hub[] = {
     {0, BTN_ID_CONFIRM, "功能", 0, (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET)},
 };
 
-/** camera 单键：GPIO0 功能键（双击 PAIR → 清 STA 重回 SoftAP 配网）。 */
+/** camera 单键：GPIO45 BTN1（双击 PAIR → 清 STA 重回 SoftAP 配网）。 */
 static const device_button_spec_t s_buttons_camera[] = {
-    {0, BTN_ID_CONFIRM, "功能", 0,
+    {45, BTN_ID_CONFIRM, "功能", 0,
      (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR)},
 };
 
@@ -79,13 +79,13 @@ static const device_product_profile_t s_product_profiles[] = {
     {
         .product_id         = NVS_PROJECT_ID_CAMERA,
         .name               = "camera",
-        .board_mask         = DEVICE_BOARD_MASK_I2C | DEVICE_BOARD_MASK_LCD,
+        .board_mask         = DEVICE_BOARD_MASK_I2C | DEVICE_BOARD_MASK_IMU,
         .platform_mask      = DEVICE_PLATFORM_MASK_BUTTON | DEVICE_PLATFORM_MASK_WEB |
                               DEVICE_PLATFORM_MASK_LED,
         .buttons            = s_buttons_camera,
         .button_count       = (uint8_t)(sizeof(s_buttons_camera) / sizeof(s_buttons_camera[0])),
-        .lcd_smoke_title    = "camera LCD OK",
-        .lcd_smoke_subtitle = "240x135 ready",
+        .lcd_smoke_title    = "camera (no LCD)",
+        .lcd_smoke_subtitle = "web preview",
     },
 };
 

@@ -135,16 +135,16 @@
 #elif defined(BOARD_PROFILE_CAMERA)
 
 /* -------------------------------------------------------------------------- */
-/* camera_rev_a — 240x135 ST7789 / OV2640 / SoftAP web preview / dual servo   */
-/* Only one I2C bus (GPIO4/5): OV2640 SCCB; no other I2C peripherals.         */
+/* camera_rev_a — OV2640 / SoftAP web / dual servo / host SPI / QMI8658A      */
+/* I2C1 GPIO10/11：OV2640 SCCB；I2C2 GPIO14/13：QMI8658A。无 LCD。              */
 /* -------------------------------------------------------------------------- */
 
 #define BOARD_GPIO_IO5 (-1)
 #define BOARD_GPIO_IO4_PWM (-1)
 
 #define BOARD_I2C_BUS1_HW_PORT (0)
-#define BOARD_I2C_BUS1_PIN_SCL (4)
-#define BOARD_I2C_BUS1_PIN_SDA (5)
+#define BOARD_I2C_BUS1_PIN_SCL (10)
+#define BOARD_I2C_BUS1_PIN_SDA (11)
 
 #define BOARD_I2C_DEFAULT_CLOCK_HZ (100000U)
 #define BOARD_I2C_DEFAULT_TIMEOUT_MS (200U)
@@ -159,9 +159,9 @@
 #define BOARD_I2C_OV2640_SCCB_ADDR (0x30U)
 
 #define BOARD_I2C_BUS2_HW_PORT (1)
-#define BOARD_I2C_BUS2_PIN_SCL (-1)
-#define BOARD_I2C_BUS2_PIN_SDA (-1)
-#define BOARD_I2C_QMI8658A_PORT BOARD_I2C_BUS1_HW_PORT
+#define BOARD_I2C_BUS2_PIN_SCL (14)
+#define BOARD_I2C_BUS2_PIN_SDA (13)
+#define BOARD_I2C_QMI8658A_PORT BOARD_I2C_BUS2_HW_PORT
 #define BOARD_I2C_QMI8658A_ADDR (0x6AU)
 #define BOARD_I2C_DS3231_PORT BOARD_I2C_BUS1_HW_PORT
 #define BOARD_I2C_DS3231_ADDR DS3231_I2C_ADDR_7BIT
@@ -176,31 +176,32 @@
 #define BOARD_DS3231_SYNC_MINUTE (0U)
 #define BOARD_DS3231_SYNC_SECOND (0U)
 
+/* camera 无 LCD：宏仅供 board.c 编译占位，勿接外设。 */
 #define BOARD_ST7789_SPI_HOST (SPI_HOST_2_E)
-#define BOARD_ST7789_PIN_SCK (39)
-#define BOARD_ST7789_PIN_MOSI (38)
-#define BOARD_ST7789_PIN_CS (42)
-#define BOARD_ST7789_PIN_DC (40)
-#define BOARD_ST7789_PIN_RST (41)
-#define BOARD_ST7789_PIN_BL (1)
+#define BOARD_ST7789_PIN_SCK (-1)
+#define BOARD_ST7789_PIN_MOSI (-1)
+#define BOARD_ST7789_PIN_CS (-1)
+#define BOARD_ST7789_PIN_DC (-1)
+#define BOARD_ST7789_PIN_RST (-1)
+#define BOARD_ST7789_PIN_BL (-1)
 #define BOARD_ST7789_SPI_DEV_CS_PIN (-1)
 #define BOARD_ST7789_SPI_MAX_TX (32768)
 #define BOARD_ST7789_SPI_CLOCK_HZ (40000000U)
 
-#define BOARD_OV2640_PIN_XCLK (15)
-#define BOARD_OV2640_PIN_PCLK (13)
-#define BOARD_OV2640_PIN_VSYNC (6)
-#define BOARD_OV2640_PIN_HREF (7)
-#define BOARD_OV2640_PIN_D0 (11)
-#define BOARD_OV2640_PIN_D1 (9)
-#define BOARD_OV2640_PIN_D2 (8)
-#define BOARD_OV2640_PIN_D3 (10)
-#define BOARD_OV2640_PIN_D4 (12)
-#define BOARD_OV2640_PIN_D5 (18)
-#define BOARD_OV2640_PIN_D6 (17)
-#define BOARD_OV2640_PIN_D7 (16)
+#define BOARD_OV2640_PIN_XCLK (8)
+#define BOARD_OV2640_PIN_PCLK (16)
+#define BOARD_OV2640_PIN_VSYNC (9)
+#define BOARD_OV2640_PIN_HREF (46)
+#define BOARD_OV2640_PIN_D0 (7)
+#define BOARD_OV2640_PIN_D1 (5)
+#define BOARD_OV2640_PIN_D2 (4)
+#define BOARD_OV2640_PIN_D3 (6)
+#define BOARD_OV2640_PIN_D4 (15)
+#define BOARD_OV2640_PIN_D5 (17)
+#define BOARD_OV2640_PIN_D6 (18)
+#define BOARD_OV2640_PIN_D7 (3)
 #define BOARD_OV2640_PIN_PWDN (-1)
-#define BOARD_OV2640_PIN_RESET (-1)
+#define BOARD_OV2640_PIN_RESET (12)
 #define BOARD_OV2640_XCLK_HZ (20000000U)
 
 /* camera: no SD card slot (macros only for sdcard.c compilation) */
@@ -216,11 +217,15 @@
 #define BOARD_SDCARD_HOST_FLAGS_EXTRA (0U)
 #define BOARD_SDCARD_MOUNT_POINT "/sdcard"
 
-#define BOARD_CAMERA_PIN_BUTTON (0)
+#define BOARD_CAMERA_PIN_BUTTON (45) /* BTN1 */
 #define BOARD_CAMERA_WS2812_PIN (48)
-#define BOARD_CAMERA_WS2812_COUNT (1U)
+#define BOARD_CAMERA_WS2812_COUNT (4U)
 
-/** 1=初始化 ST7789 + 本地预览/顶栏；0=跳过 LCD（SPI2/背光不占用，网页预览仍可用）。 */
+/** GPIO1：12V 电源开关继电器（高开 / 低关，按硬件确认）。 */
+#define BOARD_CAMERA_PIN_PWR_RELAY (1)
+#define BOARD_CAMERA_PWR_RELAY_ACTIVE_LEVEL (1U)
+
+/** 本板无 LCD；保留开关供 start.c 条件编译，固定为 0。 */
 #ifndef CAMERA_ENABLE_LCD
 #define CAMERA_ENABLE_LCD 0
 #endif
@@ -228,13 +233,13 @@
 /*
  * MG996R 双舵机（LEDC 50 Hz）。
  * 画面坐标：原点左上，x 右、y 下。
- *   Pan  (PWM1/GPIO46)：err_x>0 → 右转（使目标回中）；反向时翻 BOARD_SERVO_PAN_SIGN
- *   Tilt (PWM2/GPIO3) ：err_y>0 → 下俯；反向时翻 BOARD_SERVO_TILT_SIGN
+ *   Pan  (PWM1/GPIO21)：err_x>0 → 右转（使目标回中）；反向时翻 BOARD_SERVO_PAN_SIGN
+ *   Tilt (PWM2/GPIO47)：err_y>0 → 下俯；反向时翻 BOARD_SERVO_TILT_SIGN
  * 角度 0–ANGLE_MAX 线性映射 PULSE_MIN–MAX µs；中位 ANGLE_MAX/2 → CENTER_PULSE。
  * 软限位为上电默认（Pan 全行程、Tilt 240° 窗），运行时可由 /api/servo 改。
  */
-#define BOARD_SERVO_PAN_PIN (46)
-#define BOARD_SERVO_TILT_PIN (3)
+#define BOARD_SERVO_PAN_PIN (21)
+#define BOARD_SERVO_TILT_PIN (47)
 #define BOARD_SERVO_PWM_FREQ_HZ (50U)
 #define BOARD_SERVO_PWM_TIMER (0)       /* PWM_TIMER_0_E */
 #define BOARD_SERVO_PAN_PWM_CH (0)      /* PWM_CHANNEL_0_E */
@@ -253,15 +258,15 @@
 #define BOARD_SERVO_TILT_SIGN (1)
 
 /*
- * 对外通信 SPI1（产品名）→ 硬件 SPI3；与 ST7789 的 SPI2 隔离。
+ * 对外通信 SPI1（产品名）→ 硬件 SPI3。
  * 锁定：Mode1 (CPOL=0,CPHA=1) / 1 MHz / 32B / ~20 ms。
- * SCK=21 CS=14；逻辑 MOSI=GPIO45、逻辑 MISO=GPIO47（软件对调，对接 TM4C 丝印）。
+ * SCK=39 MOSI=40 MISO=41 CS=38。
  */
 #define BOARD_SPI1_HOST (SPI_HOST_3_E)
-#define BOARD_SPI1_PIN_SCK (21)
-#define BOARD_SPI1_PIN_MOSI (45)
-#define BOARD_SPI1_PIN_MISO (47)
-#define BOARD_SPI1_PIN_CS (14)
+#define BOARD_SPI1_PIN_SCK (39)
+#define BOARD_SPI1_PIN_MOSI (40)
+#define BOARD_SPI1_PIN_MISO (41)
+#define BOARD_SPI1_PIN_CS (38)
 #ifndef BOARD_SPI1_CLOCK_HZ
 #define BOARD_SPI1_CLOCK_HZ (1000000U)
 #endif
@@ -272,7 +277,7 @@
 #define BOARD_SPI1_ENABLE (1)
 #endif
 
-/* camera: no battery ADC（GPIO3 已划给舵机 Tilt，勿作 ADC） */
+/* camera: no battery ADC */
 #define BOARD_BATTERY_PIN_ENABLE (-1)
 #define BOARD_BATTERY_PIN_ADC (-1)
 #define BOARD_BATTERY_ADC_CHANNEL ADC_CHANNEL_0_E

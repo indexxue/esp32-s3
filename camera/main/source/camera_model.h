@@ -7,6 +7,8 @@
 
 #include "type.h"
 
+#include "camera_app_config.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -19,18 +21,8 @@ extern "C" {
 #define CAMERA_MODEL_UI_BOX_STRIDE (5U)
 
 /**
- * 应用模式（编译期，改后重编）：
- * 1 = 采数：不启 ESPDet，SoftAP JPEG 给 steel_ball_annotate 抓帧；
- * 0 = 识别：启检测与叠框（默认）。采数请改回 1 或关浏览器独占预览。
- * 也可在 camera/main/CMakeLists.txt 里设 CAMERA_APP_COLLECT_MODE。
- */
-#ifndef CAMERA_APP_COLLECT_MODE
-#define CAMERA_APP_COLLECT_MODE 0
-#endif
-
-/**
- * 检测框叠加目标（编译期宏，可单独开/关；也可全开或全关）。
- * 1 = 开，0 = 关。改后需重编固件。采数模式下强制关闭。
+ * 检测框叠加目标（编译期宏，可单独开/关）。
+ * DETECT=0 / COLLECT=1 时强制关闭。
  */
 #ifndef CAMERA_DETECT_OVERLAY_LCD
 #define CAMERA_DETECT_OVERLAY_LCD 1
@@ -39,7 +31,7 @@ extern "C" {
 #define CAMERA_DETECT_OVERLAY_WEB 1
 #endif
 
-#if CAMERA_APP_COLLECT_MODE
+#if (!CAMERA_APP_DETECT_MODE) || (CAMERA_APP_COLLECT_MODE)
 #undef CAMERA_DETECT_OVERLAY_LCD
 #define CAMERA_DETECT_OVERLAY_LCD 0
 #undef CAMERA_DETECT_OVERLAY_WEB

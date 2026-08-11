@@ -26,7 +26,6 @@ typedef struct {
 
 status_t app_start(const app_lifecycle_t *lifecycle);
 status_t app_entry(void);
-status_t camera_start_modules_task(void);
 
 #ifdef __cplusplus
 }
