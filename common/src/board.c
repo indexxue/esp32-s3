@@ -10,7 +10,9 @@
 
 #include "gpio.h"
 #include "i2c.h"
+#if !defined(BOARD_PROFILE_DESKTOP_PET)
 #include "lcd.h"
+#endif
 #include "log.h"
 #include "ds3231.h"
 #include "sdcard.h"
@@ -20,7 +22,11 @@
 
 static qmi8658a_t s_qmi8658;
 static ds3231_t s_ds3231;
+#if defined(BOARD_PROFILE_DESKTOP_PET)
+static gc9a01_t s_gc9a01;
+#else
 static st7789_t s_st7789;
+#endif
 static uint32_t s_board_ready_mask;
 
 #define BOARD_IR_QUEUE_LEN (8U)
@@ -166,10 +172,26 @@ bool_t BoardPeriphReady(uint32_t mask)
 
 st7789_t *BoardSt7789(void)
 {
+#if defined(BOARD_PROFILE_DESKTOP_PET)
+    return NULL;
+#else
     if (!BoardPeriphReady(DEVICE_BOARD_MASK_LCD)) {
         return NULL;
     }
     return &s_st7789;
+#endif
+}
+
+gc9a01_t *BoardGc9a01(void)
+{
+#if defined(BOARD_PROFILE_DESKTOP_PET)
+    if (!BoardPeriphReady(DEVICE_BOARD_MASK_LCD)) {
+        return NULL;
+    }
+    return &s_gc9a01;
+#else
+    return NULL;
+#endif
 }
 
 qmi8658a_t *BoardQmi8658(void)
@@ -232,7 +254,7 @@ static status_t board_qmi8658_init(void)
 
     switch (qmi8658a_init_with_config(&s_qmi8658, &cfg)) {
     case QMI8658A_OK:
-        LOG_INFO("QMI8658A on I2C2 (port %d) init OK", BOARD_I2C_QMI8658A_PORT);
+        LOG_INFO("QMI8658A on I2C port %d init OK", BOARD_I2C_QMI8658A_PORT);
         return STATUS_OK;
     case QMI8658A_ERROR_ID:
         LOG_ERROR("QMI8658A WHO_AM_I mismatch (check wiring / address 0x%02X)",
@@ -340,6 +362,164 @@ static status_t board_ds3231_init(void)
     return STATUS_OK;
 }
 
+#if defined(BOARD_PROFILE_DESKTOP_PET)
+
+static void board_gc9a01_spi_tx(const uint8_t *data, uint16_t len)
+{
+    s32_t cs = (s32_t)BOARD_GC9A01_SPI_DEV_CS_PIN;
+
+    if ((data == NULL) || (len == 0U)) {
+        return;
+    }
+    if (DmaBufferIsBusCapable(data, (usize_t)len) != FALSE) {
+        (void)SpiTransmitDma(cs, data, (usize_t)len);
+    } else {
+        (void)SpiTransmit(cs, data, (usize_t)len);
+    }
+}
+
+static void board_gc9a01_pin_cs(int high)
+{
+    (void)GpioWritePin((s32_t)BOARD_GC9A01_PIN_CS, (u32_t)(high ? 1 : 0));
+}
+
+static void board_gc9a01_pin_dc(int high)
+{
+    (void)GpioWritePin((s32_t)BOARD_GC9A01_PIN_DC, (u32_t)(high ? 1 : 0));
+}
+
+static void board_gc9a01_pin_rst(int high)
+{
+    if ((s32_t)BOARD_GC9A01_PIN_RST < 0) {
+        return;
+    }
+    (void)GpioWritePin((s32_t)BOARD_GC9A01_PIN_RST, (u32_t)(high ? 1 : 0));
+}
+
+static void board_gc9a01_pin_bl(int high)
+{
+    (void)GpioWritePin((s32_t)BOARD_GC9A01_PIN_BL, (u32_t)(high ? 1 : 0));
+}
+
+static void board_gc9a01_delay_ms(uint32_t ms)
+{
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+static bool_t board_gc9a01_gpio_output_pin(s32_t pin)
+{
+    GpioPinConfig_t cfg = {0};
+
+    cfg.pin        = pin;
+    cfg.mode       = GPIO_MODE_OUTPUT_E;
+    cfg.pullUpEn   = GPIO_PULL_DISABLE_E;
+    cfg.pullDownEn = GPIO_PULL_DISABLE_E;
+    cfg.intrType   = GPIO_INTR_DISABLE_E;
+
+    return GpioConfigurePin(&cfg);
+}
+
+static void board_gc9a01_smoke_test(void)
+{
+    uint16_t w = gc9a01_display_width(&s_gc9a01);
+    uint16_t h = gc9a01_display_height(&s_gc9a01);
+    const char *title = device_profile_lcd_smoke_title();
+
+    gc9a01_fill(&s_gc9a01, 0U, 0U, w, h, 0x01CFU); /* dark blue RGB565 */
+    LOG_INFO("GC9A01 smoke: %s, %ux%u", title, (unsigned int)w, (unsigned int)h);
+}
+
+static status_t board_gc9a01_init(void)
+{
+    SpiDriverConfig_t busCfg = {0};
+    SpiDeviceConfig_t devCfg = {0};
+    gc9a01_config_t tftCfg = {0};
+
+    if (GpioDriverInit() != TRUE) {
+        LOG_ERROR("GC9A01: GpioDriverInit failed, esp err %d", (int)GpioGetLastError());
+        return STATUS_FAIL;
+    }
+
+    if (board_gc9a01_gpio_output_pin((s32_t)BOARD_GC9A01_PIN_CS) != TRUE) {
+        LOG_ERROR("GC9A01: CS GPIO%d failed", BOARD_GC9A01_PIN_CS);
+        return STATUS_FAIL;
+    }
+    if (board_gc9a01_gpio_output_pin((s32_t)BOARD_GC9A01_PIN_DC) != TRUE) {
+        LOG_ERROR("GC9A01: DC GPIO%d failed", BOARD_GC9A01_PIN_DC);
+        return STATUS_FAIL;
+    }
+    if ((s32_t)BOARD_GC9A01_PIN_RST >= 0) {
+        if (board_gc9a01_gpio_output_pin((s32_t)BOARD_GC9A01_PIN_RST) != TRUE) {
+            LOG_ERROR("GC9A01: RST GPIO%d failed", BOARD_GC9A01_PIN_RST);
+            return STATUS_FAIL;
+        }
+    }
+    if (board_gc9a01_gpio_output_pin((s32_t)BOARD_GC9A01_PIN_BL) != TRUE) {
+        LOG_ERROR("GC9A01: BL GPIO%d failed", BOARD_GC9A01_PIN_BL);
+        return STATUS_FAIL;
+    }
+
+    busCfg.host            = BOARD_GC9A01_SPI_HOST;
+    busCfg.sclkPin         = (s32_t)BOARD_GC9A01_PIN_SCK;
+    busCfg.mosiPin         = (s32_t)BOARD_GC9A01_PIN_MOSI;
+    busCfg.misoPin         = (s32_t)BOARD_GC9A01_PIN_MISO;
+    busCfg.quadWpPin       = -1;
+    busCfg.quadHdPin       = -1;
+    busCfg.maxTransferSize = (s32_t)BOARD_GC9A01_SPI_MAX_TX;
+    busCfg.dmaChannel      = DMA_SPI_BUS_AUTO_E;
+    busCfg.intrFlags       = 0;
+    busCfg.maxDeviceCount  = 2U;
+
+    if (SpiDriverInit(&busCfg) != TRUE) {
+        LOG_ERROR("GC9A01: SpiDriverInit failed, esp err %d", (int)SpiGetLastError());
+        return STATUS_FAIL;
+    }
+
+    devCfg.host           = BOARD_GC9A01_SPI_HOST;
+    devCfg.chipSelectPin  = (s32_t)BOARD_GC9A01_SPI_DEV_CS_PIN;
+    devCfg.clockSpeedHz   = BOARD_GC9A01_SPI_CLOCK_HZ;
+    devCfg.mode           = SPI_CLOCK_MODE_0_E;
+    devCfg.flags          = 0U;
+    devCfg.queueSize      = 7U;
+    devCfg.csEnaPretrans  = 0U;
+    devCfg.csEnaPosttrans = 0U;
+
+    if (SpiRegisterDevice(&devCfg) != TRUE) {
+        LOG_ERROR("GC9A01: SpiRegisterDevice failed, esp err %d", (int)SpiGetLastError());
+        return STATUS_FAIL;
+    }
+
+    tftCfg.spi_tx   = board_gc9a01_spi_tx;
+    tftCfg.set_cs   = board_gc9a01_pin_cs;
+    tftCfg.set_dc   = board_gc9a01_pin_dc;
+    tftCfg.set_rst  = ((s32_t)BOARD_GC9A01_PIN_RST >= 0) ? board_gc9a01_pin_rst : NULL;
+    tftCfg.set_bl   = board_gc9a01_pin_bl;
+    tftCfg.delay_ms = board_gc9a01_delay_ms;
+    tftCfg.rotation = (uint8_t)GC9A01_ROT_0;
+
+    switch (gc9a01_register(&s_gc9a01, &tftCfg)) {
+    case GC9A01_OK:
+        LOG_INFO("GC9A01 SPI SCK=%d MOSI=%d MISO=%d CS=%d DC=%d RST=%d BL=%d init OK",
+                 BOARD_GC9A01_PIN_SCK,
+                 BOARD_GC9A01_PIN_MOSI,
+                 BOARD_GC9A01_PIN_MISO,
+                 BOARD_GC9A01_PIN_CS,
+                 BOARD_GC9A01_PIN_DC,
+                 BOARD_GC9A01_PIN_RST,
+                 BOARD_GC9A01_PIN_BL);
+        board_gc9a01_smoke_test();
+        return STATUS_OK;
+    case GC9A01_ERROR_PARAM:
+        LOG_ERROR("GC9A01 register failed: bad param");
+        return STATUS_FAIL;
+    default:
+        LOG_ERROR("GC9A01 register failed");
+        return STATUS_FAIL;
+    }
+}
+
+#else /* !BOARD_PROFILE_DESKTOP_PET — ST7789 path */
+
 static void board_st7789_spi_tx(const uint8_t *data, uint16_t len)
 {
     s32_t cs = (s32_t)BOARD_ST7789_SPI_DEV_CS_PIN;
@@ -366,6 +546,9 @@ static void board_st7789_pin_dc(int high)
 
 static void board_st7789_pin_rst(int high)
 {
+    if ((s32_t)BOARD_ST7789_PIN_RST < 0) {
+        return;
+    }
     (void)GpioWritePin((s32_t)BOARD_ST7789_PIN_RST, (u32_t)(high ? 1 : 0));
 }
 
@@ -425,9 +608,11 @@ static status_t board_st7789_init(void)
         LOG_ERROR("ST7789: GpioConfigurePin DC GPIO%d failed", BOARD_ST7789_PIN_DC);
         return STATUS_FAIL;
     }
-    if (board_st7789_gpio_output_pin((s32_t)BOARD_ST7789_PIN_RST) != TRUE) {
-        LOG_ERROR("ST7789: GpioConfigurePin RST GPIO%d failed", BOARD_ST7789_PIN_RST);
-        return STATUS_FAIL;
+    if ((s32_t)BOARD_ST7789_PIN_RST >= 0) {
+        if (board_st7789_gpio_output_pin((s32_t)BOARD_ST7789_PIN_RST) != TRUE) {
+            LOG_ERROR("ST7789: GpioConfigurePin RST GPIO%d failed", BOARD_ST7789_PIN_RST);
+            return STATUS_FAIL;
+        }
     }
     if (board_st7789_gpio_output_pin((s32_t)BOARD_ST7789_PIN_BL) != TRUE) {
         LOG_ERROR("ST7789: GpioConfigurePin BL GPIO%d failed", BOARD_ST7789_PIN_BL);
@@ -437,7 +622,11 @@ static status_t board_st7789_init(void)
     busCfg.host            = BOARD_ST7789_SPI_HOST;
     busCfg.sclkPin         = (s32_t)BOARD_ST7789_PIN_SCK;
     busCfg.mosiPin         = (s32_t)BOARD_ST7789_PIN_MOSI;
+#if defined(BOARD_ST7789_PIN_MISO)
+    busCfg.misoPin         = (s32_t)BOARD_ST7789_PIN_MISO;
+#else
     busCfg.misoPin         = -1;
+#endif
     busCfg.quadWpPin       = -1;
     busCfg.quadHdPin       = -1;
     busCfg.maxTransferSize = (s32_t)BOARD_ST7789_SPI_MAX_TX;
@@ -492,6 +681,8 @@ static status_t board_st7789_init(void)
     }
 }
 
+#endif /* BOARD_PROFILE_DESKTOP_PET */
+
 #if BOARD_I2C_BUS1_SCAN_ON_BOOT
 static void board_i2c1_scan_device_cb(void *user_ctx, u16_t address7bit)
 {
@@ -544,27 +735,9 @@ static status_t board_init_i2c_bus1(void)
     return STATUS_OK;
 }
 
-static status_t board_init_i2c_bus2(void)
+static status_t board_register_qmi8658a_i2c(void)
 {
-    I2cDriverConfig_t bus2Cfg = {0};
     I2cDeviceConfig_t qmiCfg = {0};
-
-    bus2Cfg.port = BOARD_I2C_BUS2_HW_PORT;
-    bus2Cfg.sdaPin = BOARD_I2C_BUS2_PIN_SDA;
-    bus2Cfg.sclPin = BOARD_I2C_BUS2_PIN_SCL;
-    bus2Cfg.defaultClockSpeedHz = BOARD_I2C_DEFAULT_CLOCK_HZ;
-    bus2Cfg.defaultTransactionTimeoutMs = BOARD_I2C_DEFAULT_TIMEOUT_MS;
-    bus2Cfg.maxDeviceCount = BOARD_I2C_MAX_DEVICES;
-    bus2Cfg.glitchIgnoreCount = BOARD_I2C_GLITCH_IGNORE;
-    bus2Cfg.enableSdaPullup = TRUE;
-    bus2Cfg.enableSclPullup = TRUE;
-
-    if (I2cDriverInit(&bus2Cfg) != TRUE) {
-        LOG_ERROR("I2cDriverInit I2C2 (port %d) failed, esp err %d",
-                  BOARD_I2C_BUS2_HW_PORT,
-                  (int)I2cGetLastError());
-        return STATUS_FAIL;
-    }
 
     qmiCfg.port = BOARD_I2C_QMI8658A_PORT;
     qmiCfg.deviceAddress7bit = BOARD_I2C_QMI8658A_ADDR;
@@ -577,6 +750,42 @@ static status_t board_init_i2c_bus2(void)
                   BOARD_I2C_QMI8658A_PORT,
                   (int)I2cGetLastError());
         return STATUS_FAIL;
+    }
+
+    return STATUS_OK;
+}
+
+static status_t board_init_i2c_bus2(void)
+{
+    /* desktop_pet 等单总线板：BUS2 引脚为 -1，不创建第二路 master。 */
+    if ((BOARD_I2C_BUS2_PIN_SDA < 0) || (BOARD_I2C_BUS2_PIN_SCL < 0)) {
+        if (BOARD_I2C_QMI8658A_PORT == BOARD_I2C_BUS2_HW_PORT) {
+            LOG_ERROR("I2C2 pins invalid but QMI8658A assigned to port %d",
+                      BOARD_I2C_BUS2_HW_PORT);
+            return STATUS_FAIL;
+        }
+        return STATUS_OK;
+    }
+
+    {
+        I2cDriverConfig_t bus2Cfg = {0};
+
+        bus2Cfg.port = BOARD_I2C_BUS2_HW_PORT;
+        bus2Cfg.sdaPin = BOARD_I2C_BUS2_PIN_SDA;
+        bus2Cfg.sclPin = BOARD_I2C_BUS2_PIN_SCL;
+        bus2Cfg.defaultClockSpeedHz = BOARD_I2C_DEFAULT_CLOCK_HZ;
+        bus2Cfg.defaultTransactionTimeoutMs = BOARD_I2C_DEFAULT_TIMEOUT_MS;
+        bus2Cfg.maxDeviceCount = BOARD_I2C_MAX_DEVICES;
+        bus2Cfg.glitchIgnoreCount = BOARD_I2C_GLITCH_IGNORE;
+        bus2Cfg.enableSdaPullup = TRUE;
+        bus2Cfg.enableSclPullup = TRUE;
+
+        if (I2cDriverInit(&bus2Cfg) != TRUE) {
+            LOG_ERROR("I2cDriverInit I2C2 (port %d) failed, esp err %d",
+                      BOARD_I2C_BUS2_HW_PORT,
+                      (int)I2cGetLastError());
+            return STATUS_FAIL;
+        }
     }
 
     return STATUS_OK;
@@ -608,8 +817,15 @@ static status_t board_init_i2c(void)
         return STATUS_FAIL;
     }
 
+    /*
+     * IMU 可能挂 I2C1（desktop_pet）或 I2C2（量产板）。
+     * 先按需初始化 bus2（有有效引脚时），再在 BOARD_I2C_QMI8658A_PORT 上注册。
+     */
     if (device_profile_board_wants(DEVICE_BOARD_MASK_IMU)) {
         if (board_init_i2c_bus2() != STATUS_OK) {
+            return STATUS_FAIL;
+        }
+        if (board_register_qmi8658a_i2c() != STATUS_OK) {
             return STATUS_FAIL;
         }
     }
@@ -658,11 +874,15 @@ status_t BoardInit(void)
     }
 
     if (device_profile_board_wants(DEVICE_BOARD_MASK_SDCARD)) {
+#if defined(BOARD_PROFILE_DESKTOP_PET) && !DESKTOP_PET_ENABLE_SDCARD
+        LOG_INFO("SD skipped (DESKTOP_PET_ENABLE_SDCARD=0)");
+#else
         if (sdcard_mount(BOARD_SDCARD_MOUNT_POINT) != STATUS_OK) {
             LOG_WARN("SD card FAT mount skipped or failed (check card / wiring), path %s", BOARD_SDCARD_MOUNT_POINT);
         } else {
             s_board_ready_mask |= DEVICE_BOARD_MASK_SDCARD;
         }
+#endif
     }
 
     if (device_profile_board_wants(DEVICE_BOARD_MASK_LCD)) {
@@ -670,6 +890,13 @@ status_t BoardInit(void)
         LOG_INFO("LCD skipped (CAMERA_ENABLE_LCD=0)");
 #elif defined(BOARD_PROFILE_VOICE_HUB) && !VOICE_HUB_ENABLE_LCD
         LOG_INFO("LCD skipped (VOICE_HUB_ENABLE_LCD=0)");
+#elif defined(BOARD_PROFILE_DESKTOP_PET) && !DESKTOP_PET_ENABLE_LCD
+        LOG_INFO("LCD skipped (DESKTOP_PET_ENABLE_LCD=0; GC9A01)");
+#elif defined(BOARD_PROFILE_DESKTOP_PET)
+        if (board_gc9a01_init() != STATUS_OK) {
+            return STATUS_FAIL;
+        }
+        s_board_ready_mask |= DEVICE_BOARD_MASK_LCD;
 #else
         if (board_st7789_init() != STATUS_OK) {
             return STATUS_FAIL;
@@ -684,10 +911,14 @@ status_t BoardInit(void)
     }
 
     if (device_profile_board_wants(DEVICE_BOARD_MASK_IMU)) {
+#if defined(BOARD_PROFILE_DESKTOP_PET) && !DESKTOP_PET_ENABLE_IMU
+        LOG_INFO("IMU skipped (DESKTOP_PET_ENABLE_IMU=0)");
+#else
         if (board_qmi8658_init() != STATUS_OK) {
             return STATUS_FAIL;
         }
         s_board_ready_mask |= DEVICE_BOARD_MASK_IMU;
+#endif
     }
 
     if (device_profile_board_wants(DEVICE_BOARD_MASK_IR)) {

@@ -66,7 +66,7 @@ function Resolve-IdfProjectPath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("project", "ble_demo", "factory", "ballot_guard", "voice_hub", "camera")]
+        [ValidateSet("project", "ble_demo", "factory", "ballot_guard", "voice_hub", "camera", "desktop_pet")]
         [string]$Project,
         [Parameter(Mandatory = $true)]
         [hashtable]$IdfEnv

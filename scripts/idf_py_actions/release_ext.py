@@ -33,7 +33,7 @@ _VERSION_RE = re.compile(r'^V?(?P<maj>\d+)\.(?P<min>\d+)\.(?P<pat>\d+)$', re.IGN
 _CMAKE_PROJECT_RE = re.compile(r'project\s*\(\s*(\w+)\s*\)')
 
 # ESP-IDF 工程目录名（与 CMake project(...) 一致），release-all 默认顺序。
-ALL_RELEASE_PRODUCTS = ('project', 'ble_demo', 'factory', 'ballot_guard', 'voice_hub', 'camera')
+ALL_RELEASE_PRODUCTS = ('project', 'ble_demo', 'factory', 'ballot_guard', 'voice_hub', 'camera', 'desktop_pet')
 
 MANIFEST_SCHEMA = 3
 
@@ -915,7 +915,7 @@ def action_extensions(base_actions: Dict, project_path: str) -> Dict[str, Any]:
                 'callback': release_all,
                 'short_help': 'Build all products into ../firmware/<version>/.',
                 'help': (
-                    'Run release for project, ble_demo, factory, ballot_guard, voice_hub into one\n'
+                    'Run release for project, ble_demo, factory, ballot_guard, voice_hub, camera, desktop_pet into one\n'
                     'firmware/<semver>/ folder (same version, multiple products).\n'
                     'Re-releasing overwrites each product\'s files in that folder.\n'
                     'See firmware/README.md.'

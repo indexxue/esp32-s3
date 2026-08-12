@@ -73,7 +73,13 @@ status_t sdcard_mount(const char *base_path)
 
     esp_err_t err = esp_vfs_fat_sdmmc_mount(base_path, &host, &slot, &mount_cfg, &s_card);
     if (err != ESP_OK) {
-        LOG_ERROR("esp_vfs_fat_sdmmc_mount(%s) failed: %s", base_path, esp_err_to_name(err));
+        /*
+         * IDF：card_init 成功后 f_mount 失败会打 vfs_fat_sdmmc "failed to mount card (N)"。
+         * N=13 → FR_NO_FILESYSTEM（卡已识别，但无合法 FAT；本仓库 FatFS 未开 exFAT）。
+         */
+        LOG_ERROR("esp_vfs_fat_sdmmc_mount(%s) failed: %s (need FAT32; exFAT unsupported)",
+                  base_path,
+                  esp_err_to_name(err));
         s_card = NULL;
         return err;
     }

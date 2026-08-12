@@ -9,18 +9,21 @@ factory/build/
 ballot_guard/build/
 ble_demo/build/
 camera/build/
+desktop_pet/build/
 project/sdkconfig
 factory/sdkconfig
 ballot_guard/sdkconfig
 ble_demo/sdkconfig
 voice_hub/sdkconfig
 camera/sdkconfig
+desktop_pet/sdkconfig
 project/sdkconfig.old
 factory/sdkconfig.old
 ballot_guard/sdkconfig.old
 ble_demo/sdkconfig.old
 voice_hub/sdkconfig.old
 camera/sdkconfig.old
+desktop_pet/sdkconfig.old
 
 # Component manager (if used)
 project/dependencies.lock
@@ -35,6 +38,8 @@ voice_hub/dependencies.lock
 voice_hub/managed_components/
 camera/dependencies.lock
 camera/managed_components/
+desktop_pet/dependencies.lock
+desktop_pet/managed_components/
 
 # PyInstaller: LCD 图转工具 Windows 打包中间目录
 tools/build_pyinstaller/

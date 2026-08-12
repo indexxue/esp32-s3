@@ -11,7 +11,7 @@
 # PowerShell without repo `idf` alias: use  .\idf.cmd  (not bare `idf`).
 $ErrorActionPreference = "Stop"
 
-$validProjects = @("project", "ble_demo", "factory", "ballot_guard", "voice_hub", "camera")
+$validProjects = @("project", "ble_demo", "factory", "ballot_guard", "voice_hub", "camera", "desktop_pet")
 $Project = "project"
 $IdfArgs = @()
 $RawArgs = @($args)

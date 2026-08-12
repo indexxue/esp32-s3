@@ -32,6 +32,12 @@ static const device_button_spec_t s_buttons_camera[] = {
      (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR)},
 };
 
+/** desktop_pet 单键：GPIO0（与 board.h BOARD_DESKTOP_PET_PIN_BUTTON 一致）。 */
+static const device_button_spec_t s_buttons_desktop_pet[] = {
+    {0, BTN_ID_CONFIRM, "功能", 0,
+     (uint16_t)(BTN_PERMISSION_CONFIRM | BTN_PERMISSION_RESET | BTN_PERMISSION_PAIR)},
+};
+
 static const device_product_profile_t s_product_profiles[] = {
     {
         .product_id         = NVS_DEVICE_ID_DEFAULT,
@@ -87,6 +93,19 @@ static const device_product_profile_t s_product_profiles[] = {
         .lcd_smoke_title    = "camera (no LCD)",
         .lcd_smoke_subtitle = "web preview",
     },
+    {
+        /* 骨架：I2C + 电池 + LCD 掩码；实驱由 DESKTOP_PET_ENABLE_* 门控。 */
+        .product_id         = NVS_PROJECT_ID_DESKTOP_PET,
+        .name               = "desktop_pet",
+        .board_mask         = DEVICE_BOARD_MASK_I2C | DEVICE_BOARD_MASK_BATTERY | DEVICE_BOARD_MASK_LCD |
+                              DEVICE_BOARD_MASK_IMU | DEVICE_BOARD_MASK_SDCARD,
+        .platform_mask      = DEVICE_PLATFORM_MASK_BUTTON | DEVICE_PLATFORM_MASK_LED |
+                              DEVICE_PLATFORM_MASK_WEB,
+        .buttons            = s_buttons_desktop_pet,
+        .button_count       = (uint8_t)(sizeof(s_buttons_desktop_pet) / sizeof(s_buttons_desktop_pet[0])),
+        .lcd_smoke_title    = "desktop_pet LCD",
+        .lcd_smoke_subtitle = "240 round IPS",
+    },
 };
 
 typedef struct {
@@ -98,6 +117,7 @@ static const device_hardware_entry_t s_hardware_table[] = {
     {NVS_HARDWARE_ID_TY_S3_REV_A, "ty_s3_rev_a"},
     {NVS_HARDWARE_ID_VOICE_HUB_REV_A, "voice_hub_rev_a"},
     {NVS_HARDWARE_ID_CAMERA_REV_A, "camera_rev_a"},
+    {NVS_HARDWARE_ID_DESKTOP_PET_REV_A, "desktop_pet_rev_a"},
 };
 
 static const device_product_profile_t *product_profile_lookup(uint32_t product_id)

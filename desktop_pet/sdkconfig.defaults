@@ -1,0 +1,39 @@
+# N16R8 + dual OTA (see flash_partition/partitions_16m_n16r8.md).
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_IDF_TARGET_ESP32S3=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# Custom partition table (dual slot: app_a=ota_0, app_b=ota_1). See doc/partition_switch_development_plan.md.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../flash_partition/partitions_16m_n16r8.csv"
+
+# Auto-start SoftAP + HTTP after BoardInit (see components/web_ctrl/README.md).
+CONFIG_WEB_CTRL_AUTO_START=y
+
+# BoardInit runs on app_main; keep headroom after moving web_ctrl_start to web_boot task.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+
+# --- N16R8 performance (R8 = 8MB OPI PSRAM; see flash_partition/partitions_16m_n16r8.md) ---
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# CPU 240MHz (ESP32-S3 max). Flash stays DIO@80M (WROOM-1 N16R8 quad flash; WROOM-2 oct flash is optional).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Release-style app optimization (smaller/slower than debug; better throughput for SD/LCD paths).
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# OTA rollback + SoftAP local OTA (see doc/ota_development_plan.md).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK is not set
+# CONFIG_OTA_ROLLBACK_TEST is not set
+CONFIG_OTA_HTTPS_PULL=y
+CONFIG_WEB_CTRL_OTA=y
+CONFIG_WEB_CTRL_OTA_UPLOAD_MAX=8388608
+CONFIG_WEB_CTRL_OTA_CLOUD_PULL=y

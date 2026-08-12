@@ -36,12 +36,14 @@ extern "C" {
 #define NVS_PROJECT_ID_BALLOT_GUARD NVS_PROJECT_ID_MAKE(0x02U)
 #define NVS_PROJECT_ID_VOICE_HUB NVS_PROJECT_ID_MAKE(0x03U)
 #define NVS_PROJECT_ID_CAMERA NVS_PROJECT_ID_MAKE(0x04U)
+#define NVS_PROJECT_ID_DESKTOP_PET NVS_PROJECT_ID_MAKE(0x05U)
 
 #define NVS_PROJECT_ID_TABLE(X)                                                                                      \
     X(MAIN, NVS_PROJECT_ID_MAIN, "main")                                                                             \
     X(BALLOT_GUARD, NVS_PROJECT_ID_BALLOT_GUARD, "ballot_guard")                                                     \
     X(VOICE_HUB, NVS_PROJECT_ID_VOICE_HUB, "voice_hub")                                                     \
-    X(CAMERA, NVS_PROJECT_ID_CAMERA, "camera")
+    X(CAMERA, NVS_PROJECT_ID_CAMERA, "camera")                                                                       \
+    X(DESKTOP_PET, NVS_PROJECT_ID_DESKTOP_PET, "desktop_pet")
 
 #define NVS_DEVICE_ID_IS_PROJECT(id) (((uint32_t)(id) & 0xFFFFFF00U) == NVS_PROJECT_ID_CAT_PROJECT)
 
@@ -51,6 +53,7 @@ extern "C" {
 #define NVS_HARDWARE_ID_TY_S3_REV_A NVS_HARDWARE_ID_MAKE(0x01U)
 #define NVS_HARDWARE_ID_VOICE_HUB_REV_A NVS_HARDWARE_ID_MAKE(0x02U)
 #define NVS_HARDWARE_ID_CAMERA_REV_A NVS_HARDWARE_ID_MAKE(0x03U)
+#define NVS_HARDWARE_ID_DESKTOP_PET_REV_A NVS_HARDWARE_ID_MAKE(0x04U)
 
 #ifndef NVS_DEFAULT_HARDWARE_ID
 #define NVS_DEFAULT_HARDWARE_ID NVS_HARDWARE_ID_TY_S3_REV_A

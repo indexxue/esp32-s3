@@ -10,6 +10,7 @@ ESP32-S3（N16R8）固件 monorepo。本地 ESP-IDF 工具链（`Espressif/`）�
 | `ballot_guard` | `ballot_guard/` | 选票监管应用（SoftAP/STA OTA，见 [`ballot_guard/README.txt`](ballot_guard/README.txt)） |
 | `voice_hub` | `voice_hub/` | 交互式语音设备（ES8311/OV2640/ST7789，见 [`voice_hub/README.txt`](voice_hub/README.txt)） |
 | `camera` | `camera/` | 摄像头预览 + 钢珠 ESPDet 检测 + 云台（见 [`camera/README.txt`](camera/README.txt)） |
+| `desktop_pet` | `desktop_pet/` | 桌宠骨架（圆屏/ES8311/TB6612/SDIO 等 IO 预留，见 [`desktop_pet/README.txt`](desktop_pet/README.txt)） |
 
 共享代码：`common/`、`bsp_driver/`、`cbb/`（**Git 子模块**）、`components/`（如 `web_ctrl`）。
 
@@ -22,7 +23,7 @@ ESP32-S3（N16R8）固件 monorepo。本地 ESP-IDF 工具链（`Espressif/`）�
 | **cmd**（推荐，Cursor 默认「ESP-IDF 5.5」） | `idf build`、`idf -Project project release 1.0.10` |
 | **PowerShell** | 终端选 **「ESP-IDF PowerShell」** 后直接 `idf ...`；否则 **`.\idf.cmd ...`**（不要裸打 `idf`） |
 
-**`-Project <名>`**（可选）：选择工程目录，默认 `project`。可选值：`project`、`ble_demo`、`factory`、`ballot_guard`、`voice_hub`、`camera`。例：`idf -Project factory build` 等价于在 `factory/` 下执行 `idf.py build`。
+**`-Project <名>`**（可选）：选择工程目录，默认 `project`。可选值：`project`、`ble_demo`、`factory`、`ballot_guard`、`voice_hub`、`camera`、`desktop_pet`。例：`idf -Project factory build` 等价于在 `factory/` 下执行 `idf.py build`。
 
 ### 一次性环境脚本
 

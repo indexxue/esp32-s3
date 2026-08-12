@@ -8,6 +8,7 @@
 #include "qmi8658a.h"
 #include "spi.h"
 #include "st7789.h"
+#include "gc9a01.h"
 #include "adc.h"
 
 #if defined(BOARD_PROFILE_VOICE_HUB)
@@ -292,6 +293,165 @@
 
 #define BOARD_IO4_PWM_FREQ_HZ (5000U)
 
+#elif defined(BOARD_PROFILE_DESKTOP_PET)
+
+/* -------------------------------------------------------------------------- */
+/* desktop_pet_rev_a — 桌宠实板引脚（改接线只改本段）                            */
+/* 单 I2C：SCL=18 SDA=8（ES8311 / QMI8685 / IT7259 同总线）。无触摸 INT/RST。      */
+/* 圆屏 GC9A01 SPI；N16R8 勿占用 GPIO35–37。                                    */
+/* -------------------------------------------------------------------------- */
+
+#define BOARD_GPIO_IO5 (-1)
+#define BOARD_GPIO_IO4_PWM (-1)
+
+/** 唯一 I2C：SCL=GPIO18，SDA=GPIO8。 */
+#define BOARD_I2C_BUS1_HW_PORT (0)
+#define BOARD_I2C_BUS1_PIN_SCL (18)
+#define BOARD_I2C_BUS1_PIN_SDA (8)
+
+#define BOARD_I2C_DEFAULT_CLOCK_HZ (100000U)
+#define BOARD_I2C_DEFAULT_TIMEOUT_MS (200U)
+#define BOARD_I2C_MAX_DEVICES (8U)
+#define BOARD_I2C_GLITCH_IGNORE (7U)
+
+#ifndef BOARD_I2C_BUS1_SCAN_ON_BOOT
+#define BOARD_I2C_BUS1_SCAN_ON_BOOT (1)
+#endif
+
+/** 本板无第二路 I2C。 */
+#define BOARD_I2C_BUS2_HW_PORT (1)
+#define BOARD_I2C_BUS2_PIN_SCL (-1)
+#define BOARD_I2C_BUS2_PIN_SDA (-1)
+
+/** QMI8685 挂 I2C1（驱动暂用 qmi8658a）。 */
+#define BOARD_I2C_QMI8658A_PORT BOARD_I2C_BUS1_HW_PORT
+#define BOARD_I2C_QMI8658A_ADDR (0x6AU)
+
+/** 本板无 RTC；占位供 board.c 编译。 */
+#define BOARD_I2C_DS3231_PORT BOARD_I2C_BUS1_HW_PORT
+#define BOARD_I2C_DS3231_ADDR DS3231_I2C_ADDR_7BIT
+#ifndef BOARD_DS3231_SYNC_TIME_ON_BOOT
+#define BOARD_DS3231_SYNC_TIME_ON_BOOT (0)
+#endif
+#define BOARD_DS3231_SYNC_YEAR (2026U)
+#define BOARD_DS3231_SYNC_MONTH (6U)
+#define BOARD_DS3231_SYNC_DAY (21U)
+#define BOARD_DS3231_SYNC_WEEKDAY (1U)
+#define BOARD_DS3231_SYNC_HOUR (0U)
+#define BOARD_DS3231_SYNC_MINUTE (0U)
+#define BOARD_DS3231_SYNC_SECOND (0U)
+
+/**
+ * GC9A01 1.28" 圆屏 SPI（240×240）。
+ * 无独立 LCD_RST：靠重新上电复位（PIN_RST=-1）。
+ */
+#define BOARD_GC9A01_SPI_HOST (SPI_HOST_2_E)
+#define BOARD_GC9A01_PIN_SCK (7)
+#define BOARD_GC9A01_PIN_MOSI (16)
+#define BOARD_GC9A01_PIN_MISO (15)
+#define BOARD_GC9A01_PIN_CS (6)
+#define BOARD_GC9A01_PIN_DC (17)
+#define BOARD_GC9A01_PIN_RST (-1)
+#define BOARD_GC9A01_PIN_BL (5)
+#define BOARD_GC9A01_SPI_DEV_CS_PIN (-1)
+#define BOARD_GC9A01_SPI_MAX_TX (32768)
+#define BOARD_GC9A01_SPI_CLOCK_HZ (40000000U)
+/** cmd.c lcdbench 等共用时钟宏名时的别名。 */
+#define BOARD_ST7789_SPI_CLOCK_HZ BOARD_GC9A01_SPI_CLOCK_HZ
+
+#define BOARD_DESKTOP_PET_LCD_WIDTH GC9A01_PANEL_W
+#define BOARD_DESKTOP_PET_LCD_HEIGHT GC9A01_PANEL_H
+
+/** 电容触摸 IT7259：同 I2C1，7-bit 地址 0x46（8-bit 写 0x8C）；无 INT/RST。 */
+#define BOARD_DESKTOP_PET_TOUCH_I2C_PORT BOARD_I2C_BUS1_HW_PORT
+#define BOARD_DESKTOP_PET_TOUCH_I2C_ADDR (0x46U)
+#define BOARD_DESKTOP_PET_TOUCH_PIN_INT (-1)
+#define BOARD_DESKTOP_PET_TOUCH_PIN_RST (-1)
+
+/** ES8311：I2C1 控制 + I2S；SPE_EN=功放使能。丝印按板级命名。 */
+#define BOARD_DESKTOP_PET_ES8311_I2C_PORT BOARD_I2C_BUS1_HW_PORT
+#define BOARD_DESKTOP_PET_ES8311_I2C_ADDR (0x18U)
+#define BOARD_DESKTOP_PET_I2S_DIN_PIN (9)   /* I2S_DIN */
+#define BOARD_DESKTOP_PET_I2S_WS_PIN (10)   /* I2S_LRCK */
+#define BOARD_DESKTOP_PET_I2S_DOUT_PIN (11) /* I2S_DOUT */
+#define BOARD_DESKTOP_PET_I2S_BCLK_PIN (12) /* I2S_BCLK */
+#define BOARD_DESKTOP_PET_I2S_MCLK_PIN (13) /* I2S_MCLK */
+#define BOARD_DESKTOP_PET_PA_EN_PIN (14)    /* SPE_EN */
+#define BOARD_DESKTOP_PET_PA_EN_ACTIVE_LEVEL (1U)
+
+/**
+ * TB6612：M1=AIN + PWMA，M2=BIN + PWMB。
+ * STBY=-1 表示板上常使能（或硬件上拉）。
+ */
+#define BOARD_DESKTOP_PET_TB6612_PIN_PWMA (45)
+#define BOARD_DESKTOP_PET_TB6612_PIN_PWMB (38)
+#define BOARD_DESKTOP_PET_TB6612_PIN_AIN1 (46) /* M1_IN1 */
+#define BOARD_DESKTOP_PET_TB6612_PIN_AIN2 (3)  /* M1_IN2 */
+#define BOARD_DESKTOP_PET_TB6612_PIN_BIN1 (21) /* M2_IN1 */
+#define BOARD_DESKTOP_PET_TB6612_PIN_BIN2 (47) /* M2_IN2 */
+#define BOARD_DESKTOP_PET_TB6612_PIN_STBY (-1)
+
+/** SDMMC 4 线。bring-up 先 10MHz；稳定后再提速。 */
+#define BOARD_SDCARD_PIN_CMD (41)
+#define BOARD_SDCARD_PIN_CLK (42)
+#define BOARD_SDCARD_PIN_D0 (2)
+#define BOARD_SDCARD_PIN_D1 (1)
+#define BOARD_SDCARD_PIN_D2 (39)
+#define BOARD_SDCARD_PIN_D3 (40)
+#define BOARD_SDCARD_BUS_WIDTH (4U)
+#define BOARD_SDCARD_MAX_FREQ_KHZ (10000U)
+#define BOARD_SDCARD_SDMMC_DMA_PATH (0U)
+#define BOARD_SDCARD_HOST_FLAGS_EXTRA (0U)
+#define BOARD_SDCARD_MOUNT_POINT "/sdcard"
+
+#define BOARD_DESKTOP_PET_PIN_BUTTON (0)
+#define BOARD_DESKTOP_PET_WS2812_PIN (48) /* RGB_DIN */
+#define BOARD_DESKTOP_PET_WS2812_COUNT (4U)
+
+/**
+ * 锂电池 100K/100K 分压 → GPIO4（ADC1_CH3）：Vbat = 2 * Vadc。
+ * 无独立采样使能脚（ENABLE=-1，分压常通）。
+ */
+#define BOARD_BATTERY_PIN_ENABLE (-1)
+#define BOARD_BATTERY_PIN_ADC (4)
+#define BOARD_BATTERY_ADC_CHANNEL ADC_CHANNEL_3_E
+
+/** M1→… bring-up：填好引脚后按需置 1（改后重编）。 */
+#ifndef DESKTOP_PET_ENABLE_SELFTEST
+#define DESKTOP_PET_ENABLE_SELFTEST 1
+#endif
+#ifndef DESKTOP_PET_ENABLE_LCD
+#define DESKTOP_PET_ENABLE_LCD 1
+#endif
+#ifndef DESKTOP_PET_ENABLE_TOUCH
+#define DESKTOP_PET_ENABLE_TOUCH 1
+#endif
+#ifndef DESKTOP_PET_ENABLE_IMU
+#define DESKTOP_PET_ENABLE_IMU 1
+#endif
+#ifndef DESKTOP_PET_ENABLE_AUDIO
+#define DESKTOP_PET_ENABLE_AUDIO 1
+#endif
+#ifndef DESKTOP_PET_ENABLE_MOTOR
+#define DESKTOP_PET_ENABLE_MOTOR 1
+#endif
+#ifndef DESKTOP_PET_ENABLE_SDCARD
+#define DESKTOP_PET_ENABLE_SDCARD 1
+#endif
+#ifndef DESKTOP_PET_ENABLE_WIFI_WEB
+#define DESKTOP_PET_ENABLE_WIFI_WEB 1
+#endif
+
+#define BOARD_IR_SENSOR0_PIN (-1)
+#define BOARD_IR_SENSOR1_PIN (-1)
+#define BOARD_IR_SENSOR_COUNT (2U)
+#define BOARD_IR_DEBOUNCE_MS (400U)
+
+#define BOARD_BUZZER_PIN (-1)
+#define BOARD_BUZZER_ACTIVE_LEVEL (1U)
+
+#define BOARD_IO4_PWM_FREQ_HZ (5000U)
+
 #else
 #define BOARD_GPIO_IO5 (5)
 #define BOARD_GPIO_IO4_PWM (4)
@@ -406,7 +566,7 @@
 /** IO4 呼吸灯 PWM 频率（与 BoardInit 中配置一致） */
 #define BOARD_IO4_PWM_FREQ_HZ (5000U)
 
-#endif /* BOARD_PROFILE_VOICE_HUB */
+#endif /* BOARD_PROFILE_* */
 
 /**
  * 板级外设：按 device_profile 中 board_mask 选择初始化子集。
@@ -423,6 +583,9 @@ void BoardDeinitI2cBus(void);
 
 /** 已由 `BoardInit` 完成 `st7789_register` 后的句柄；未初始化时返回 NULL。 */
 st7789_t *BoardSt7789(void);
+
+/** 已由 `BoardInit` 完成 `gc9a01_register` 后的句柄（desktop_pet）；未初始化时返回 NULL。 */
+gc9a01_t *BoardGc9a01(void);
 
 /** 已由 `BoardInit` 完成 `qmi8658a_init_with_config` 后的句柄；未初始化时返回 NULL。 */
 qmi8658a_t *BoardQmi8658(void);
