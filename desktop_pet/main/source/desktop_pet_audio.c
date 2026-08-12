@@ -1,0 +1,633 @@
+/**
+ * @file desktop_pet_audio.c
+ * @brief ES8311 捕获 + I2S RX → PSRAM PCM 环形写满即停。
+ */
+
+#include "desktop_pet_audio.h"
+
+#include "board.h"
+#include "es8311.h"
+#include "gpio.h"
+#include "i2c.h"
+#include "log.h"
+#include "sdcard.h"
+
+#include "driver/i2s_std.h"
+#include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+
+#define AUDIO_I2S_NUM (I2S_NUM_0)
+#define AUDIO_TASK_STACK (4096U)
+#define AUDIO_TASK_PRIO (5U)
+#define AUDIO_CHUNK_SAMPLES (256U)
+/**
+ * MIC PGA：0=0dB … 7=42dB。偏高会吵，过低人声小；30dB 折中。
+ */
+#define AUDIO_MIC_GAIN_STEPS (5U) /* 30dB */
+#define AUDIO_MIC_GAIN_REG ((uint8_t)(0x20U | (AUDIO_MIC_GAIN_STEPS & 0x07U)))
+/** ADC 数字音量：0xBF≈0dB。 */
+#define AUDIO_ADC_VOLUME_REG (0xBFU)
+/** 仅去直流：R≈0.995 → fc≈12Hz @16kHz（不做噪声门，避免卡断/爆音）。 */
+#define AUDIO_HPF_R_Q15 (32604)
+#define AUDIO_SD_DIR BOARD_SDCARD_MOUNT_POINT "/record"
+
+static es8311_t s_codec;
+static i2s_chan_handle_t s_i2s_tx;
+static i2s_chan_handle_t s_i2s_rx;
+static int16_t *s_pcm;
+static size_t s_pcm_cap_samples;
+static size_t s_pcm_len_samples;
+static bool s_ready;
+static bool s_recording;
+static TaskHandle_t s_rec_task;
+static SemaphoreHandle_t s_lock;
+static uint16_t s_rec_file_seq;
+static int32_t s_hpf_x1;
+static int32_t s_hpf_y1;
+
+/*
+ * 板丝印 I2S_DIN/DOUT 按 Codec 脚命名时：
+ *   I2S_DIN  = 进 Codec（接 ESP DOUT）
+ *   I2S_DOUT = 出 Codec（接 ESP DIN）
+ * 若 peak 仍为 0，把下面改成 0 再试（按 MCU 脚命名）。
+ */
+#ifndef AUDIO_I2S_PINS_CODEC_NAMED
+#define AUDIO_I2S_PINS_CODEC_NAMED 1
+#endif
+
+static int audio_i2c_write(uint8_t addr7, const uint8_t *data, uint16_t len)
+{
+    if (I2cWrite((s32_t)BOARD_DESKTOP_PET_ES8311_I2C_PORT, (u16_t)addr7, data, (usize_t)len) != TRUE) {
+        return -1;
+    }
+    return 0;
+}
+
+static int audio_i2c_write_read(uint8_t addr7,
+                                const uint8_t *write_data,
+                                uint16_t write_len,
+                                uint8_t *read_data,
+                                uint16_t read_len)
+{
+    if (I2cWriteRead((s32_t)BOARD_DESKTOP_PET_ES8311_I2C_PORT,
+                     (u16_t)addr7,
+                     write_data,
+                     (usize_t)write_len,
+                     read_data,
+                     (usize_t)read_len) != TRUE) {
+        return -1;
+    }
+    return 0;
+}
+
+static void audio_delay_ms(uint32_t ms)
+{
+    vTaskDelay(pdMS_TO_TICKS(ms == 0U ? 1U : ms));
+}
+
+static status_t audio_pa_init_off(void)
+{
+    GpioPinConfig_t cfg = {0};
+
+    cfg.pin = (s32_t)BOARD_DESKTOP_PET_PA_EN_PIN;
+    cfg.mode = (s32_t)GPIO_MODE_OUTPUT_E;
+    cfg.pullUpEn = (s32_t)GPIO_PULL_DISABLE_E;
+    cfg.pullDownEn = (s32_t)GPIO_PULL_DISABLE_E;
+    cfg.intrType = (s32_t)GPIO_INTR_DISABLE_E;
+    if (GpioConfigurePin(&cfg) != TRUE) {
+        return STATUS_FAIL;
+    }
+    (void)GpioWritePin((s32_t)BOARD_DESKTOP_PET_PA_EN_PIN, 0U);
+    return STATUS_OK;
+}
+
+static status_t audio_i2s_init(void)
+{
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(AUDIO_I2S_NUM, I2S_ROLE_MASTER);
+    gpio_num_t esp_dout;
+    gpio_num_t esp_din;
+    i2s_std_config_t std_cfg;
+
+#if AUDIO_I2S_PINS_CODEC_NAMED
+    /* 丝印=Codec：板 DIN→ESP dout，板 DOUT→ESP din */
+    esp_dout = (gpio_num_t)BOARD_DESKTOP_PET_I2S_DIN_PIN;
+    esp_din = (gpio_num_t)BOARD_DESKTOP_PET_I2S_DOUT_PIN;
+#else
+    esp_dout = (gpio_num_t)BOARD_DESKTOP_PET_I2S_DOUT_PIN;
+    esp_din = (gpio_num_t)BOARD_DESKTOP_PET_I2S_DIN_PIN;
+#endif
+
+    /* 与 IDF i2s_es8311 一致：全双工 + STEREO + MCLK×256 */
+    std_cfg = (i2s_std_config_t){
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg =
+            {
+                .mclk = BOARD_DESKTOP_PET_I2S_MCLK_PIN,
+                .bclk = BOARD_DESKTOP_PET_I2S_BCLK_PIN,
+                .ws = BOARD_DESKTOP_PET_I2S_WS_PIN,
+                .dout = esp_dout,
+                .din = esp_din,
+                .invert_flags =
+                    {
+                        .mclk_inv = false,
+                        .bclk_inv = false,
+                        .ws_inv = false,
+                    },
+            },
+    };
+
+    chan_cfg.auto_clear = true;
+    std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+
+    if (i2s_new_channel(&chan_cfg, &s_i2s_tx, &s_i2s_rx) != ESP_OK) {
+        LOG_ERROR("audio: i2s_new_channel failed");
+        return STATUS_FAIL;
+    }
+    if (i2s_channel_init_std_mode(s_i2s_tx, &std_cfg) != ESP_OK) {
+        LOG_ERROR("audio: i2s TX init_std_mode failed");
+        return STATUS_FAIL;
+    }
+    if (i2s_channel_init_std_mode(s_i2s_rx, &std_cfg) != ESP_OK) {
+        LOG_ERROR("audio: i2s RX init_std_mode failed");
+        return STATUS_FAIL;
+    }
+    LOG_INFO("audio: I2S duplex ESP dout=GPIO%d din=GPIO%d (codec_named=%d)",
+             (int)esp_dout,
+             (int)esp_din,
+             AUDIO_I2S_PINS_CODEC_NAMED);
+    return STATUS_OK;
+}
+
+/** 一阶 DC blocker（轻柔，不做门限静音）。 */
+static int16_t audio_dc_block(int16_t x)
+{
+    int32_t x0 = (int32_t)x;
+    int32_t y;
+
+    y = x0 - s_hpf_x1 + ((s_hpf_y1 * (int32_t)AUDIO_HPF_R_Q15) >> 15);
+    s_hpf_x1 = x0;
+    if (y > 32767) {
+        y = 32767;
+    } else if (y < -32768) {
+        y = -32768;
+    }
+    s_hpf_y1 = y;
+    return (int16_t)y;
+}
+
+static void audio_rec_task(void *arg)
+{
+    int16_t chunk_st[AUDIO_CHUNK_SAMPLES * 2U];
+    int32_t peak_l = 0;
+    int32_t peak_r = 0;
+    int32_t peak_out = 0;
+    uint64_t energy_l = 0U;
+    uint64_t energy_r = 0U;
+    /* 丢掉使能毛刺（约 40ms）。 */
+    size_t skip_frames =
+        ((size_t)DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ * 40U) / 1000U;
+    /* 预热后再锁声道，避免逐帧 L/R 切换造成爆音。 */
+    size_t pick_frames =
+        ((size_t)DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ * 80U) / 1000U;
+    int use_right = -1;
+
+    (void)arg;
+    s_hpf_x1 = 0;
+    s_hpf_y1 = 0;
+
+    while (s_recording) {
+        size_t nbytes = 0U;
+        size_t room;
+        size_t want;
+        size_t frames;
+        size_t i;
+        size_t stored;
+
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+            continue;
+        }
+        room = (s_pcm_cap_samples > s_pcm_len_samples) ? (s_pcm_cap_samples - s_pcm_len_samples) : 0U;
+        xSemaphoreGive(s_lock);
+
+        if (room == 0U) {
+            LOG_INFO("audio: pcm buffer full, auto-stop");
+            s_recording = false;
+            (void)es8311_stop(&s_codec);
+            break;
+        }
+
+        want = (room < AUDIO_CHUNK_SAMPLES) ? room : AUDIO_CHUNK_SAMPLES;
+        if (i2s_channel_read(s_i2s_rx, chunk_st, want * 2U * sizeof(int16_t), &nbytes, pdMS_TO_TICKS(200)) !=
+            ESP_OK) {
+            continue;
+        }
+        frames = nbytes / (sizeof(int16_t) * 2U);
+        if (frames == 0U) {
+            continue;
+        }
+
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+            continue;
+        }
+        if ((s_pcm == NULL) || (s_pcm_len_samples >= s_pcm_cap_samples)) {
+            xSemaphoreGive(s_lock);
+            continue;
+        }
+
+        stored = 0U;
+        for (i = 0U; i < frames; i++) {
+            const int16_t l = chunk_st[i * 2U];
+            const int16_t r = chunk_st[i * 2U + 1U];
+            const int32_t al = (l < 0) ? -(int32_t)l : (int32_t)l;
+            const int32_t ar = (r < 0) ? -(int32_t)r : (int32_t)r;
+            int16_t sample;
+            int16_t processed;
+            int32_t ap;
+
+            if (al > peak_l) {
+                peak_l = al;
+            }
+            if (ar > peak_r) {
+                peak_r = ar;
+            }
+
+            if (skip_frames > 0U) {
+                skip_frames--;
+                continue;
+            }
+
+            energy_l += (uint64_t)al;
+            energy_r += (uint64_t)ar;
+
+            if (use_right < 0) {
+                if (pick_frames > 0U) {
+                    pick_frames--;
+                    continue;
+                }
+                use_right = (energy_r > energy_l) ? 1 : 0;
+                LOG_INFO("audio: lock channel %s", use_right ? "R" : "L");
+            }
+
+            sample = (use_right != 0) ? r : l;
+            processed = audio_dc_block(sample);
+            ap = (processed < 0) ? -(int32_t)processed : (int32_t)processed;
+            if (ap > peak_out) {
+                peak_out = ap;
+            }
+
+            if ((s_pcm_len_samples + stored) >= s_pcm_cap_samples) {
+                break;
+            }
+            s_pcm[s_pcm_len_samples + stored] = processed;
+            stored++;
+        }
+        s_pcm_len_samples += stored;
+        xSemaphoreGive(s_lock);
+    }
+
+    LOG_INFO("audio: rec peak L=%ld R=%ld out=%ld energy L=%llu R=%llu",
+             (long)peak_l,
+             (long)peak_r,
+             (long)peak_out,
+             (unsigned long long)energy_l,
+             (unsigned long long)energy_r);
+    s_rec_task = NULL;
+    vTaskDelete(NULL);
+}
+
+status_t desktop_pet_audio_init(void)
+{
+#if !DESKTOP_PET_ENABLE_AUDIO
+    LOG_INFO("audio disabled (DESKTOP_PET_ENABLE_AUDIO=0)");
+    return STATUS_FAIL;
+#else
+    I2cDeviceConfig_t icfg = {0};
+    es8311_config_t ccfg = {0};
+    size_t bytes;
+
+    if (s_ready) {
+        return STATUS_OK;
+    }
+
+    s_lock = xSemaphoreCreateMutex();
+    if (s_lock == NULL) {
+        return STATUS_FAIL;
+    }
+
+    if (audio_pa_init_off() != STATUS_OK) {
+        LOG_WARN("audio: PA_EN gpio init failed");
+    }
+
+    icfg.port = (s32_t)BOARD_DESKTOP_PET_ES8311_I2C_PORT;
+    icfg.deviceAddress7bit = (u16_t)BOARD_DESKTOP_PET_ES8311_I2C_ADDR;
+    icfg.clockSpeedHz = 0U;
+    icfg.transactionTimeoutMs = 0U;
+    if (I2cRegisterDevice(&icfg) != TRUE) {
+        LOG_ERROR("audio: ES8311 I2cRegisterDevice failed");
+        return STATUS_FAIL;
+    }
+
+    if (I2cProbe((s32_t)BOARD_DESKTOP_PET_ES8311_I2C_PORT, (u16_t)BOARD_DESKTOP_PET_ES8311_I2C_ADDR) != TRUE) {
+        LOG_ERROR("audio: ES8311 probe fail @0x%02X", (unsigned)BOARD_DESKTOP_PET_ES8311_I2C_ADDR);
+        return STATUS_FAIL;
+    }
+    LOG_INFO("audio: ES8311 probed @0x%02X", (unsigned)BOARD_DESKTOP_PET_ES8311_I2C_ADDR);
+
+    /* 先起 I2S 全双工（含 MCLK），再配 Codec；时钟常开，避免启停丢锁。 */
+    if (audio_i2s_init() != STATUS_OK) {
+        return STATUS_FAIL;
+    }
+    if (i2s_channel_enable(s_i2s_tx) != ESP_OK) {
+        LOG_ERROR("audio: i2s TX enable failed");
+        return STATUS_FAIL;
+    }
+    if (i2s_channel_enable(s_i2s_rx) != ESP_OK) {
+        LOG_ERROR("audio: i2s RX enable failed");
+        return STATUS_FAIL;
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    ccfg.write = audio_i2c_write;
+    ccfg.write_read = audio_i2c_write_read;
+    ccfg.delay_ms = audio_delay_ms;
+    ccfg.i2c_addr7 = (uint8_t)BOARD_DESKTOP_PET_ES8311_I2C_ADDR;
+    ccfg.sample_rate_hz = DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ;
+    ccfg.i2s_port = (int)AUDIO_I2S_NUM;
+    ccfg.mclk_div = 256U;
+    ccfg.use_mclk = true;
+
+    {
+        es8311_status_t cst = es8311_init_with_config(&s_codec, &ccfg);
+
+        if (cst != ES8311_OK) {
+            LOG_ERROR("audio: es8311_init_with_config failed st=%d", (int)cst);
+            return STATUS_FAIL;
+        }
+    }
+
+    s_pcm_cap_samples = (size_t)DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ * (size_t)DESKTOP_PET_AUDIO_MAX_SECONDS;
+    bytes = s_pcm_cap_samples * sizeof(int16_t);
+    s_pcm = (int16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_pcm == NULL) {
+        s_pcm = (int16_t *)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (s_pcm == NULL) {
+        LOG_ERROR("audio: pcm buffer alloc failed (%u bytes)", (unsigned)bytes);
+        return STATUS_FAIL;
+    }
+    s_pcm_len_samples = 0U;
+
+    s_ready = true;
+    LOG_INFO("audio ready: ES8311+I2S duplex %uHz mono, buf=%us, clk=MCLK",
+             (unsigned)DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ,
+             (unsigned)DESKTOP_PET_AUDIO_MAX_SECONDS);
+    return STATUS_OK;
+#endif
+}
+
+bool desktop_pet_audio_is_ready(void)
+{
+    return s_ready;
+}
+
+bool desktop_pet_audio_is_recording(void)
+{
+    return s_recording;
+}
+
+static void audio_es8311_dump_regs(void)
+{
+    /* 捕获通路关键：时钟/SDP/模拟电源/MIC 选择/PGA/ADC 音量 */
+    static const uint8_t regs[] = {
+        0x00U, 0x01U, 0x02U, 0x0AU, 0x0DU, 0x0EU, 0x14U, 0x15U, 0x16U, 0x17U,
+    };
+    uint8_t vals[sizeof(regs)];
+    size_t i;
+
+    for (i = 0U; i < sizeof(regs); i++) {
+        if (es8311_read_reg(&s_codec, regs[i], &vals[i]) != ES8311_OK) {
+            LOG_WARN("audio: es8311 dump fail @0x%02X", (unsigned)regs[i]);
+            return;
+        }
+    }
+    LOG_INFO("audio: es8311 dump "
+             "00=%02X 01=%02X 02=%02X 0A=%02X 0D=%02X 0E=%02X "
+             "14=%02X 15=%02X 16=%02X 17=%02X",
+             (unsigned)vals[0],
+             (unsigned)vals[1],
+             (unsigned)vals[2],
+             (unsigned)vals[3],
+             (unsigned)vals[4],
+             (unsigned)vals[5],
+             (unsigned)vals[6],
+             (unsigned)vals[7],
+             (unsigned)vals[8],
+             (unsigned)vals[9]);
+}
+
+status_t desktop_pet_audio_record_start(void)
+{
+    int16_t drain[256];
+    int d;
+
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (s_recording) {
+        return STATUS_OK;
+    }
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return STATUS_FAIL;
+    }
+    s_pcm_len_samples = 0U;
+    xSemaphoreGive(s_lock);
+
+    /* I2S/MCLK 已在 init 常开；这里只起 Codec ADC。 */
+    if (es8311_set_mode(&s_codec, ES8311_MODE_CAPTURE) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    if (es8311_start(&s_codec) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    (void)es8311_set_mic_gain(&s_codec, AUDIO_MIC_GAIN_STEPS);
+    (void)es8311_set_adc_volume(&s_codec, AUDIO_ADC_VOLUME_REG);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    audio_es8311_dump_regs();
+
+    for (d = 0; d < 6; d++) {
+        size_t nbytes = 0U;
+        (void)i2s_channel_read(s_i2s_rx, drain, sizeof(drain), &nbytes, pdMS_TO_TICKS(50));
+    }
+    LOG_INFO("audio: raw after drain L=%d R=%d L2=%d R2=%d",
+             (int)drain[0],
+             (int)drain[1],
+             (int)drain[2],
+             (int)drain[3]);
+
+    LOG_INFO("audio: micgain_reg=0x%02X adc_vol=0x%02X",
+             (unsigned)AUDIO_MIC_GAIN_REG,
+             (unsigned)AUDIO_ADC_VOLUME_REG);
+
+    s_recording = true;
+    if (xTaskCreate(audio_rec_task, "pet_rec", AUDIO_TASK_STACK, NULL, AUDIO_TASK_PRIO, &s_rec_task) != pdPASS) {
+        s_recording = false;
+        (void)es8311_stop(&s_codec);
+        LOG_ERROR("audio: rec task create failed");
+        return STATUS_FAIL;
+    }
+
+    LOG_INFO("audio: record start");
+    return STATUS_OK;
+}
+
+status_t desktop_pet_audio_record_stop(void)
+{
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (!s_recording) {
+        return STATUS_OK;
+    }
+
+    s_recording = false;
+    for (int i = 0; i < 50 && (s_rec_task != NULL); i++) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    (void)es8311_stop(&s_codec);
+    /* I2S 保持使能，维持 MCLK。 */
+
+    LOG_INFO("audio: record stop, samples=%u (%.2fs)",
+             (unsigned)s_pcm_len_samples,
+             (double)s_pcm_len_samples / (double)DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ);
+    return STATUS_OK;
+}
+
+size_t desktop_pet_audio_pcm_bytes(void)
+{
+    return s_pcm_len_samples * sizeof(int16_t);
+}
+
+const int16_t *desktop_pet_audio_pcm_data(void)
+{
+    return s_pcm;
+}
+
+status_t desktop_pet_audio_save_to_sd(char *out_path, size_t out_path_len)
+{
+    char path[64];
+    FILE *fp;
+    const int16_t *pcm;
+    size_t pcm_bytes;
+    uint32_t data_bytes;
+    uint32_t byte_rate;
+    uint16_t block_align;
+    uint8_t hdr[44];
+    size_t nw;
+
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (sdcard_get_card() == NULL) {
+        LOG_WARN("audio: SD not mounted, skip save");
+        return STATUS_FAIL;
+    }
+
+    pcm = desktop_pet_audio_pcm_data();
+    pcm_bytes = desktop_pet_audio_pcm_bytes();
+    if ((pcm == NULL) || (pcm_bytes == 0U)) {
+        LOG_WARN("audio: no pcm to save");
+        return STATUS_FAIL;
+    }
+
+    if (mkdir(AUDIO_SD_DIR, 0775) != 0) {
+        if (errno != EEXIST) {
+            LOG_ERROR("audio: mkdir %s failed errno=%d", AUDIO_SD_DIR, errno);
+            return STATUS_FAIL;
+        }
+    }
+
+    s_rec_file_seq++;
+    if (s_rec_file_seq == 0U) {
+        s_rec_file_seq = 1U;
+    }
+    (void)snprintf(path, sizeof(path), AUDIO_SD_DIR "/rec_%04u.wav", (unsigned)s_rec_file_seq);
+
+    fp = fopen(path, "wb");
+    if (fp == NULL) {
+        LOG_ERROR("audio: fopen %s failed errno=%d", path, errno);
+        return STATUS_FAIL;
+    }
+
+    data_bytes = (uint32_t)pcm_bytes;
+    block_align = (uint16_t)((DESKTOP_PET_AUDIO_CHANNELS * DESKTOP_PET_AUDIO_BITS) / 8U);
+    byte_rate = DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ * (uint32_t)block_align;
+
+    /* RIFF WAV PCM header (little-endian) */
+    memcpy(&hdr[0], "RIFF", 4);
+    {
+        uint32_t riff_size = 36U + data_bytes;
+        hdr[4] = (uint8_t)(riff_size);
+        hdr[5] = (uint8_t)(riff_size >> 8);
+        hdr[6] = (uint8_t)(riff_size >> 16);
+        hdr[7] = (uint8_t)(riff_size >> 24);
+    }
+    memcpy(&hdr[8], "WAVE", 4);
+    memcpy(&hdr[12], "fmt ", 4);
+    hdr[16] = 16;
+    hdr[17] = 0;
+    hdr[18] = 0;
+    hdr[19] = 0; /* fmt chunk size */
+    hdr[20] = 1;
+    hdr[21] = 0; /* PCM */
+    hdr[22] = (uint8_t)DESKTOP_PET_AUDIO_CHANNELS;
+    hdr[23] = 0;
+    {
+        uint32_t rate = DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ;
+        hdr[24] = (uint8_t)(rate);
+        hdr[25] = (uint8_t)(rate >> 8);
+        hdr[26] = (uint8_t)(rate >> 16);
+        hdr[27] = (uint8_t)(rate >> 24);
+        hdr[28] = (uint8_t)(byte_rate);
+        hdr[29] = (uint8_t)(byte_rate >> 8);
+        hdr[30] = (uint8_t)(byte_rate >> 16);
+        hdr[31] = (uint8_t)(byte_rate >> 24);
+    }
+    hdr[32] = (uint8_t)(block_align);
+    hdr[33] = (uint8_t)(block_align >> 8);
+    hdr[34] = (uint8_t)DESKTOP_PET_AUDIO_BITS;
+    hdr[35] = 0;
+    memcpy(&hdr[36], "data", 4);
+    hdr[40] = (uint8_t)(data_bytes);
+    hdr[41] = (uint8_t)(data_bytes >> 8);
+    hdr[42] = (uint8_t)(data_bytes >> 16);
+    hdr[43] = (uint8_t)(data_bytes >> 24);
+
+    if (fwrite(hdr, 1, sizeof(hdr), fp) != sizeof(hdr)) {
+        LOG_ERROR("audio: write wav hdr failed");
+        fclose(fp);
+        return STATUS_FAIL;
+    }
+    nw = fwrite(pcm, 1, pcm_bytes, fp);
+    (void)fflush(fp);
+    fclose(fp);
+    if (nw != pcm_bytes) {
+        LOG_ERROR("audio: write pcm short %u/%u", (unsigned)nw, (unsigned)pcm_bytes);
+        return STATUS_FAIL;
+    }
+
+    LOG_INFO("audio: saved %s (%u bytes pcm)", path, (unsigned)pcm_bytes);
+    if ((out_path != NULL) && (out_path_len > 0U)) {
+        (void)snprintf(out_path, out_path_len, "%s", path);
+    }
+    return STATUS_OK;
+}

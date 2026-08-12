@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>桌宠 · SD 文件</title>
+<style>
+:root{--bg:#0f1419;--surface:#1a2332;--surface2:#243044;--border:#2d3a4d;--text:#e8eef7;--muted:#8b9cb3;--accent:#3d8bfd;--danger:#e85d6c;--ok:#3dd68c;--radius:12px;--font:system-ui,-apple-system,'Segoe UI',sans-serif}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(160deg,#0a0e14,#121a24 50%,#0f1419);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.5}
+.wrap{max-width:720px;margin:0 auto;padding:20px 16px 48px}
+.top{margin-bottom:20px}.top h1{font-size:1.4rem;margin:0 0 6px;font-weight:700}.top p{margin:0;color:var(--muted);font-size:.9rem}
+.nav{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 18px}
+.nav a,.btn{display:inline-block;padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);text-decoration:none;font-size:.9rem;cursor:pointer}
+.nav a:hover,.btn:hover{border-color:var(--accent)}
+.btn-accent{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-danger{background:#3a1f26;border-color:var(--danger);color:#ffb4bc}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:14px}
+.crumb{font-size:.85rem;color:var(--muted);word-break:break-all;margin-bottom:10px}
+.crumb a{color:var(--accent);text-decoration:none}
+.status{font-size:.85rem;color:var(--muted);margin-bottom:10px}.status.err{color:var(--danger)}.status.ok{color:var(--ok)}
+table{width:100%;border-collapse:collapse;font-size:.9rem}th,td{text-align:left;padding:10px 6px;border-bottom:1px solid var(--border);vertical-align:middle}
+th{color:var(--muted);font-weight:600;font-size:.8rem}tr:last-child td{border-bottom:0}
+.name{color:var(--text)}.name a{color:var(--text);text-decoration:none}.name a:hover{color:var(--accent)}
+.badge{display:inline-block;font-size:.7rem;padding:2px 6px;border-radius:4px;background:var(--surface2);color:var(--muted);margin-right:6px}
+.actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.empty{color:var(--muted);padding:18px 0;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>SD 卡文件管理</h1>
+    <p>AP / STA 下均可访问；录音默认在 <code>record/</code></p>
+  </div>
+  <div class="nav">
+    <a href="#/">SD 根目录</a>
+    <a href="#/record">录音目录</a>
+    <button type="button" class="btn btn-accent" id="btnRefresh">刷新</button>
+    <a href="/provision">Wi‑Fi</a>
+    <a href="/ota">OTA</a>
+  </div>
+  <div class="card">
+    <div class="crumb" id="crumb">/sdcard</div>
+    <div class="status" id="status">加载中…</div>
+    <div id="list"></div>
+  </div>
+</div>
+<script>
+(function(){
+  var statusEl=document.getElementById('status');
+  var listEl=document.getElementById('list');
+  var crumbEl=document.getElementById('crumb');
+
+  function pathFromHash(){
+    var h=(location.hash||'#/').replace(/^#\/?/,'');
+    return decodeURIComponent(h).replace(/^\/+|\/+$/g,'');
+  }
+  function setStatus(t,cls){statusEl.className='status'+(cls?' '+cls:'');statusEl.textContent=t;}
+  function fmtBytes(n){
+    n=+n||0;if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(2)+' MB';
+  }
+  function esc(s){return String(s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
+  function joinPath(base,name){return base?base+'/'+name:name;}
+  function fileUrl(path){return '/api/sd/file?path='+encodeURIComponent(path);}
+
+  function renderCrumb(path){
+    var parts=path?path.split('/'):[];
+    var html='<a href="#/">/sdcard</a>';
+    var acc='';
+    for(var i=0;i<parts.length;i++){
+      acc=acc?(acc+'/'+parts[i]):parts[i];
+      html+=' / <a href="#/'+acc+'">'+esc(parts[i])+'</a>';
+    }
+    crumbEl.innerHTML=html;
+  }
+
+  async function downloadFile(path,name){
+    setStatus('下载中: '+name+' …');
+    try{
+      var r=await fetch(fileUrl(path),{cache:'no-store'});
+      if(!r.ok){
+        var msg='HTTP '+r.status;
+        try{var j=await r.json();if(j&&j.error)msg=j.error;}catch(e){}
+        setStatus('下载失败: '+msg,'err');
+        return;
+      }
+      var blob=await r.blob();
+      var url=URL.createObjectURL(blob);
+      var a=document.createElement('a');
+      a.href=url;
+      a.download=name||'download.bin';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function(){URL.revokeObjectURL(url);},2000);
+      setStatus('已开始下载: '+name,'ok');
+    }catch(e){
+      setStatus('下载失败: '+e.message,'err');
+    }
+  }
+
+  async function loadList(){
+    var path=pathFromHash();
+    renderCrumb(path);
+    setStatus('加载中…');
+    listEl.innerHTML='';
+    try{
+      var url='/api/sd/list'+(path?('?path='+encodeURIComponent(path)):'');
+      var r=await fetch(url,{cache:'no-store'});
+      var j=await r.json();
+      if(!j.ok){setStatus('失败: '+(j.error||r.status),'err');return;}
+      setStatus('共 '+(j.files?j.files.length:0)+' 项','ok');
+      if(!j.files||!j.files.length){listEl.innerHTML='<div class="empty">目录为空</div>';return;}
+      var rows='<table><thead><tr><th>名称</th><th>大小</th><th></th></tr></thead><tbody>';
+      j.files.forEach(function(f){
+        var full=joinPath(path,f.name);
+        var nameCell;
+        var actions='';
+        if(f.kind==='dir'){
+          nameCell='<span class="badge">DIR</span><a href="#/'+full+'">'+esc(f.name)+'/</a>';
+        }else{
+          nameCell='<span class="badge">FILE</span>'+esc(f.name);
+          actions=
+            '<button type="button" class="btn btn-accent" data-dl="'+esc(full)+'" data-name="'+esc(f.name)+'">下载</button>'+
+            '<button type="button" class="btn btn-danger" data-del="'+esc(full)+'">删除</button>';
+        }
+        var size=f.kind==='dir'?'—':fmtBytes(f.bytes);
+        rows+='<tr><td class="name">'+nameCell+'</td><td>'+size+'</td><td class="actions">'+actions+'</td></tr>';
+      });
+      rows+='</tbody></table>';
+      listEl.innerHTML=rows;
+      listEl.querySelectorAll('[data-dl]').forEach(function(btn){
+        btn.addEventListener('click',function(){
+          downloadFile(btn.getAttribute('data-dl'),btn.getAttribute('data-name'));
+        });
+      });
+      listEl.querySelectorAll('[data-del]').forEach(function(btn){
+        btn.addEventListener('click',function(){delFile(btn.getAttribute('data-del'));});
+      });
+    }catch(e){
+      setStatus('请求失败: '+e.message,'err');
+    }
+  }
+
+  async function delFile(path){
+    if(!path||!confirm('删除 '+path+' ?'))return;
+    setStatus('删除中…');
+    try{
+      var r=await fetch('/api/sd/delete?path='+encodeURIComponent(path),{method:'POST'});
+      var j=await r.json();
+      if(!j.ok){setStatus('删除失败: '+(j.error||r.status),'err');return;}
+      setStatus('已删除','ok');
+      loadList();
+    }catch(e){setStatus('删除失败: '+e.message,'err');}
+  }
+
+  document.getElementById('btnRefresh').addEventListener('click',loadList);
+  window.addEventListener('hashchange',loadList);
+  if(!location.hash)location.hash='#/record';
+  else loadList();
+})();
+</script>
+</body>
+</html>

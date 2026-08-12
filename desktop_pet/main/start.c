@@ -13,7 +13,7 @@
 #include "board.h"
 #include "button.h"
 #include "device_profile.h"
-#include "desktop_pet_selftest.h"
+#include "desktop_pet_ui.h"
 #include "flexible_button.h"
 #include "led_scene.h"
 #include "log.h"
@@ -23,6 +23,7 @@
 #if CONFIG_WEB_CTRL_AUTO_START && DESKTOP_PET_ENABLE_WIFI_WEB
 #include "esp_err.h"
 #include "web_ctrl.h"
+#include "web_pages.h"
 #endif
 
 #define BUTTON_SCAN_PERIOD_MS (1000 / FLEX_BTN_SCAN_FREQ_HZ)
@@ -152,6 +153,8 @@ static void web_ctrl_boot_task(void *arg)
     (void)arg;
     web_ctrl_config_init_defaults(&wcfg);
     web_ctrl_config_merge_nvs(&wcfg);
+    wcfg.root_get_handler      = web_pages_root_get_handler;
+    wcfg.gallery_http_register = web_pages_sd_http_register;
     {
         const esp_err_t werr = web_ctrl_start(&wcfg);
 
@@ -159,7 +162,7 @@ static void web_ctrl_boot_task(void *arg)
             LOG_WARN("web_ctrl_start failed: %s", esp_err_to_name(werr));
         } else {
             app_ota_confirm_running_image();
-            LOG_INFO("web_ctrl started (desktop_pet skeleton)");
+            LOG_INFO("web_ctrl started (SD file manager)");
         }
     }
     vTaskDelete(NULL);
@@ -211,11 +214,13 @@ static status_t app_init(void)
     app_ota_confirm_running_image();
 #endif
 
-    if (desktop_pet_selftest_start() != STATUS_OK) {
-        LOG_WARN("desktop_pet_selftest_start failed");
+#if DESKTOP_PET_ENABLE_LCD
+    if (desktop_pet_ui_start() != STATUS_OK) {
+        LOG_WARN("desktop_pet_ui_start failed");
     }
+#endif
 
-    LOG_INFO("%s ready lcd=%d touch=%d imu=%d audio=%d motor=%d sd=%d selftest=%d (platform_mask=0x%02lX)",
+    LOG_INFO("%s ready lcd=%d touch=%d imu=%d audio=%d motor=%d sd=%d (platform_mask=0x%02lX)",
              product->name,
              DESKTOP_PET_ENABLE_LCD,
              DESKTOP_PET_ENABLE_TOUCH,
@@ -223,7 +228,6 @@ static status_t app_init(void)
              DESKTOP_PET_ENABLE_AUDIO,
              DESKTOP_PET_ENABLE_MOTOR,
              DESKTOP_PET_ENABLE_SDCARD,
-             DESKTOP_PET_ENABLE_SELFTEST,
              (unsigned long)device_profile_platform_mask());
     return STATUS_OK;
 }

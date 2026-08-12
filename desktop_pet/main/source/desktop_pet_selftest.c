@@ -1,6 +1,6 @@
 /**
  * @file desktop_pet_selftest.c
- * @brief 桌宠外设烟测：LCD / 电池 / IMU / LED / 电机 / SD / I2C / 功放使能。
+ * @brief 桌宠外设烟测（参考程序，默认不参与编译）。见 desktop_pet_selftest.h。
  */
 
 #include "desktop_pet_selftest.h"
@@ -48,6 +48,9 @@
 #define MOTOR_PWM_FREQ_HZ (20000U)
 #define MOTOR_PWM_DUTY_RES PWM_DUTY_RES_10BIT_E
 #define MOTOR_TEST_MS (800U)
+/** 左轮前转 + 右轮后转（原地右转）时长。 */
+#define MOTOR_SPIN_TEST_MS (5000U)
+#define MOTOR_TEST_SPEED_PERMILLE (350U)
 #endif
 
 static void selftest_log_result(const char *name, bool ok, const char *detail)
@@ -291,10 +294,19 @@ static bool selftest_motor(void)
         selftest_log_result("motor", false, "init");
         return false;
     }
-    (void)tb6612_car_forward(&s_tb6612, 350U);
+
+    /* 短时双轮前进，确认两侧都能转。 */
+    (void)tb6612_car_forward(&s_tb6612, MOTOR_TEST_SPEED_PERMILLE);
     vTaskDelay(pdMS_TO_TICKS(MOTOR_TEST_MS));
     (void)tb6612_car_stop(&s_tb6612, true);
-    selftest_log_result("motor", true, "fwd pulse");
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    /* 左轮前转 + 右轮后转，持续 5s（spin_right）。 */
+    (void)tb6612_car_spin_right(&s_tb6612, MOTOR_TEST_SPEED_PERMILLE);
+    vTaskDelay(pdMS_TO_TICKS(MOTOR_SPIN_TEST_MS));
+    (void)tb6612_car_stop(&s_tb6612, true);
+
+    selftest_log_result("motor", true, "fwd + Lfwd/Rrev 5s");
     return true;
 #endif
 }

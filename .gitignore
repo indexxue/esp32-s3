@@ -44,6 +44,9 @@ desktop_pet/managed_components/
 # PyInstaller: LCD 图转工具 Windows 打包中间目录
 tools/build_pyinstaller/
 
+# LVGL PC simulator (local clone via tools/setup_lvgl_sim.ps1; do not commit)
+tools/lvgl_sim/
+
 # Local debug / release logs
 project/cmake_out.txt
 project/cmake_reconf.txt

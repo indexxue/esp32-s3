@@ -1,0 +1,7 @@
+## desktop_pet LVGL (Component Manager). managed_components/ is gitignored.
+dependencies:
+  lvgl/lvgl:
+    version: "^9.2.0"
+    public: true
+  idf:
+    version: ">=5.5.0"
