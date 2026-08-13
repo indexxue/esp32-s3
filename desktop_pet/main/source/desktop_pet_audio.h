@@ -1,6 +1,6 @@
 /**
  * @file desktop_pet_audio.h
- * @brief ES8311 + I2S record; PCM in PSRAM, stop writes WAV under /sdcard/record/.
+ * @brief ES8311 + I2S record/play; PCM in PSRAM, stop writes WAV under /sdcard/record/.
  */
 
 #ifndef DESKTOP_PET_AUDIO_H
@@ -25,9 +25,18 @@ extern "C" {
 status_t desktop_pet_audio_init(void);
 bool desktop_pet_audio_is_ready(void);
 bool desktop_pet_audio_is_recording(void);
+bool desktop_pet_audio_is_playing(void);
+bool desktop_pet_audio_is_paused(void);
 
 status_t desktop_pet_audio_record_start(void);
 status_t desktop_pet_audio_record_stop(void);
+
+/** 从当前 PCM 开头播放；若已暂停则继续。录音中或无数据时失败。 */
+status_t desktop_pet_audio_play_start(void);
+/** 暂停播放（保留进度）；未在播放时成功返回。 */
+status_t desktop_pet_audio_play_pause(void);
+/** 停止播放并回到开头。 */
+status_t desktop_pet_audio_play_stop(void);
 
 size_t desktop_pet_audio_pcm_bytes(void);
 const int16_t *desktop_pet_audio_pcm_data(void);

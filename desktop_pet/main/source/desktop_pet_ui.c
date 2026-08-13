@@ -51,6 +51,8 @@ static lv_obj_t *s_lbl_ip;
 static lv_obj_t *s_btn_rec_lbl;
 static float s_yaw_deg;
 static volatile int s_rec_req; /* 0=none 1=start 2=stop */
+static volatile int s_play_req; /* 0=none 1=play/resume 2=pause */
+static bool s_play_shown;
 
 #if DESKTOP_PET_ENABLE_TOUCH
 static it7259_t s_touch;
@@ -209,6 +211,17 @@ static void ui_rec_status_set(const char *text, bool recording)
     if (s_btn_rec_lbl != NULL) {
         lv_label_set_text(s_btn_rec_lbl, recording ? "Stop" : "Rec");
     }
+    s_play_shown = false;
+}
+
+static void ui_play_status_set(const char *text, bool playing)
+{
+    if (s_lbl_rec != NULL) {
+        lv_label_set_text(s_lbl_rec, text);
+        lv_obj_set_style_text_color(s_lbl_rec,
+                                    playing ? lv_color_hex(0x7CFF9A) : lv_color_hex(0xA0E0FF), 0);
+    }
+    s_play_shown = playing;
 }
 
 static void ui_rec_btn_cb(lv_event_t *e)
@@ -231,6 +244,49 @@ static void ui_rec_btn_cb(lv_event_t *e)
         s_rec_req = 1;
         ui_rec_status_set("Starting...", true);
     }
+}
+
+static void ui_play_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    LOG_INFO("Play button pressed (ready=%d rec=%d play=%d pause=%d pcm=%u)",
+             desktop_pet_audio_is_ready() ? 1 : 0,
+             desktop_pet_audio_is_recording() ? 1 : 0,
+             desktop_pet_audio_is_playing() ? 1 : 0,
+             desktop_pet_audio_is_paused() ? 1 : 0,
+             (unsigned)desktop_pet_audio_pcm_bytes());
+
+    if (!desktop_pet_audio_is_ready()) {
+        ui_play_status_set("Play: N/A", false);
+        return;
+    }
+    if (desktop_pet_audio_is_recording()) {
+        ui_rec_status_set("Rec first", true);
+        return;
+    }
+    if (desktop_pet_audio_pcm_bytes() == 0U) {
+        ui_play_status_set("No rec", false);
+        return;
+    }
+
+    s_play_req = 1;
+    ui_play_status_set("Starting...", true);
+}
+
+static void ui_pause_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    LOG_INFO("Pause button pressed (play=%d pause=%d)",
+             desktop_pet_audio_is_playing() ? 1 : 0,
+             desktop_pet_audio_is_paused() ? 1 : 0);
+
+    if (!desktop_pet_audio_is_playing()) {
+        ui_play_status_set("Idle", false);
+        return;
+    }
+
+    s_play_req = 2;
+    ui_play_status_set("Pausing...", true);
 }
 
 static void ui_rec_poll_timer_cb(lv_timer_t *timer)
@@ -265,12 +321,35 @@ static void ui_rec_poll_timer_cb(lv_timer_t *timer)
         }
     }
 
+    if (s_play_req == 1) {
+        s_play_req = 0;
+        if (desktop_pet_audio_play_start() != STATUS_OK) {
+            ui_play_status_set("Play fail", false);
+            LOG_ERROR("audio play_start failed");
+        } else {
+            ui_play_status_set("Playing", true);
+            LOG_INFO("audio play_start ok");
+        }
+    } else if (s_play_req == 2) {
+        s_play_req = 0;
+        (void)desktop_pet_audio_play_pause();
+        ui_play_status_set("Paused", true);
+        LOG_INFO("audio play_pause");
+    }
+
     if (!desktop_pet_audio_is_ready()) {
         return;
     }
     if (desktop_pet_audio_is_recording()) {
         (void)snprintf(buf, sizeof(buf), "REC %uB", (unsigned)desktop_pet_audio_pcm_bytes());
         ui_rec_status_set(buf, true);
+    } else if (desktop_pet_audio_is_paused()) {
+        ui_play_status_set("Paused", true);
+    } else if (desktop_pet_audio_is_playing()) {
+        ui_play_status_set("Playing", true);
+    } else if (s_play_shown) {
+        ui_play_status_set("Idle", false);
+        s_play_shown = false;
     }
 }
 
@@ -371,6 +450,10 @@ static void ui_screen_home_create(void)
     lv_obj_t *btn;
     lv_obj_t *btn_lbl;
     lv_obj_t *btn_rec;
+    lv_obj_t *btn_play;
+    lv_obj_t *btn_pause;
+    lv_obj_t *play_lbl;
+    lv_obj_t *pause_lbl;
 
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x202020), 0);
 
@@ -406,21 +489,39 @@ static void ui_screen_home_create(void)
     lv_obj_align(face, LV_ALIGN_CENTER, 0, -20);
 
     btn = lv_button_create(scr);
-    lv_obj_set_size(btn, 80, 40);
-    lv_obj_align(btn, LV_ALIGN_CENTER, -48, 40);
+    lv_obj_set_size(btn, 64, 32);
+    lv_obj_align(btn, LV_ALIGN_CENTER, -48, 28);
     lv_obj_add_event_cb(btn, ui_pet_btn_cb, LV_EVENT_CLICKED, face);
     btn_lbl = lv_label_create(btn);
     lv_label_set_text(btn_lbl, "pet");
     lv_obj_center(btn_lbl);
 
     btn_rec = lv_button_create(scr);
-    lv_obj_set_size(btn_rec, 80, 40);
-    lv_obj_align(btn_rec, LV_ALIGN_CENTER, 48, 40);
+    lv_obj_set_size(btn_rec, 64, 32);
+    lv_obj_align(btn_rec, LV_ALIGN_CENTER, 48, 28);
     lv_obj_add_flag(btn_rec, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(btn_rec, ui_rec_btn_cb, LV_EVENT_PRESSED, NULL);
     s_btn_rec_lbl = lv_label_create(btn_rec);
     lv_label_set_text(s_btn_rec_lbl, "Rec");
     lv_obj_center(s_btn_rec_lbl);
+
+    btn_play = lv_button_create(scr);
+    lv_obj_set_size(btn_play, 64, 32);
+    lv_obj_align(btn_play, LV_ALIGN_CENTER, -48, 68);
+    lv_obj_add_flag(btn_play, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn_play, ui_play_btn_cb, LV_EVENT_PRESSED, NULL);
+    play_lbl = lv_label_create(btn_play);
+    lv_label_set_text(play_lbl, "Play");
+    lv_obj_center(play_lbl);
+
+    btn_pause = lv_button_create(scr);
+    lv_obj_set_size(btn_pause, 64, 32);
+    lv_obj_align(btn_pause, LV_ALIGN_CENTER, 48, 68);
+    lv_obj_add_flag(btn_pause, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn_pause, ui_pause_btn_cb, LV_EVENT_PRESSED, NULL);
+    pause_lbl = lv_label_create(btn_pause);
+    lv_label_set_text(pause_lbl, "Pause");
+    lv_obj_center(pause_lbl);
 
     if (!desktop_pet_audio_is_ready()) {
         ui_rec_status_set("Rec: N/A", false);

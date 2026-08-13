@@ -1,6 +1,6 @@
 /**
  * @file desktop_pet_audio.c
- * @brief ES8311 捕获 + I2S RX → PSRAM PCM 环形写满即停。
+ * @brief ES8311 捕获/播放 + I2S：RX 写入 PSRAM，TX 回放；写满即停。
  */
 
 #include "desktop_pet_audio.h"
@@ -34,6 +34,8 @@
 #define AUDIO_MIC_GAIN_REG ((uint8_t)(0x20U | (AUDIO_MIC_GAIN_STEPS & 0x07U)))
 /** ADC 数字音量：0xBF≈0dB。 */
 #define AUDIO_ADC_VOLUME_REG (0xBFU)
+/** DAC 数字音量：0xBF≈0dB。 */
+#define AUDIO_DAC_VOLUME_REG (0xBFU)
 /** 仅去直流：R≈0.995 → fc≈12Hz @16kHz（不做噪声门，避免卡断/爆音）。 */
 #define AUDIO_HPF_R_Q15 (32604)
 #define AUDIO_SD_DIR BOARD_SDCARD_MOUNT_POINT "/record"
@@ -46,7 +48,11 @@ static size_t s_pcm_cap_samples;
 static size_t s_pcm_len_samples;
 static bool s_ready;
 static bool s_recording;
+static bool s_playing;
+static bool s_paused;
+static size_t s_play_pos_samples;
 static TaskHandle_t s_rec_task;
+static TaskHandle_t s_play_task;
 static SemaphoreHandle_t s_lock;
 static uint16_t s_rec_file_seq;
 static int32_t s_hpf_x1;
@@ -106,6 +112,22 @@ static status_t audio_pa_init_off(void)
     }
     (void)GpioWritePin((s32_t)BOARD_DESKTOP_PET_PA_EN_PIN, 0U);
     return STATUS_OK;
+}
+
+static void audio_pa_set(bool on)
+{
+    u32_t level = on ? (u32_t)BOARD_DESKTOP_PET_PA_EN_ACTIVE_LEVEL : 0U;
+
+    (void)GpioWritePin((s32_t)BOARD_DESKTOP_PET_PA_EN_PIN, level);
+}
+
+static void audio_wait_task_end(TaskHandle_t *task)
+{
+    int i;
+
+    for (i = 0; i < 50 && (*task != NULL); i++) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
 }
 
 static status_t audio_i2s_init(void)
@@ -303,6 +325,54 @@ static void audio_rec_task(void *arg)
     vTaskDelete(NULL);
 }
 
+static void audio_play_task(void *arg)
+{
+    int16_t chunk_st[AUDIO_CHUNK_SAMPLES * 2U];
+
+    (void)arg;
+
+    while (s_playing) {
+        size_t remain;
+        size_t want;
+        size_t i;
+        size_t nbytes = 0U;
+
+        if (s_paused) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+            continue;
+        }
+        if ((s_pcm == NULL) || (s_play_pos_samples >= s_pcm_len_samples)) {
+            xSemaphoreGive(s_lock);
+            break;
+        }
+        remain = s_pcm_len_samples - s_play_pos_samples;
+        want = (remain < AUDIO_CHUNK_SAMPLES) ? remain : AUDIO_CHUNK_SAMPLES;
+        for (i = 0U; i < want; i++) {
+            const int16_t sample = s_pcm[s_play_pos_samples + i];
+
+            chunk_st[i * 2U] = sample;
+            chunk_st[i * 2U + 1U] = sample;
+        }
+        s_play_pos_samples += want;
+        xSemaphoreGive(s_lock);
+
+        (void)i2s_channel_write(s_i2s_tx, chunk_st, want * 2U * sizeof(int16_t), &nbytes,
+                                pdMS_TO_TICKS(200));
+    }
+
+    audio_pa_set(false);
+    (void)es8311_stop(&s_codec);
+    s_playing = false;
+    s_paused = false;
+    s_play_task = NULL;
+    LOG_INFO("audio: play end, pos=%u", (unsigned)s_play_pos_samples);
+    vTaskDelete(NULL);
+}
+
 status_t desktop_pet_audio_init(void)
 {
 #if !DESKTOP_PET_ENABLE_AUDIO
@@ -403,6 +473,16 @@ bool desktop_pet_audio_is_recording(void)
     return s_recording;
 }
 
+bool desktop_pet_audio_is_playing(void)
+{
+    return s_playing;
+}
+
+bool desktop_pet_audio_is_paused(void)
+{
+    return s_playing && s_paused;
+}
+
 static void audio_es8311_dump_regs(void)
 {
     /* 捕获通路关键：时钟/SDP/模拟电源/MIC 选择/PGA/ADC 音量 */
@@ -443,6 +523,9 @@ status_t desktop_pet_audio_record_start(void)
     }
     if (s_recording) {
         return STATUS_OK;
+    }
+    if (desktop_pet_audio_play_stop() != STATUS_OK) {
+        LOG_WARN("audio: play_stop before record failed");
     }
 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -499,9 +582,7 @@ status_t desktop_pet_audio_record_stop(void)
     }
 
     s_recording = false;
-    for (int i = 0; i < 50 && (s_rec_task != NULL); i++) {
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
+    audio_wait_task_end(&s_rec_task);
 
     (void)es8311_stop(&s_codec);
     /* I2S 保持使能，维持 MCLK。 */
@@ -509,6 +590,99 @@ status_t desktop_pet_audio_record_stop(void)
     LOG_INFO("audio: record stop, samples=%u (%.2fs)",
              (unsigned)s_pcm_len_samples,
              (double)s_pcm_len_samples / (double)DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ);
+    return STATUS_OK;
+}
+
+status_t desktop_pet_audio_play_stop(void)
+{
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (!s_playing && (s_play_task == NULL)) {
+        return STATUS_OK;
+    }
+
+    s_playing = false;
+    s_paused = false;
+    audio_wait_task_end(&s_play_task);
+    audio_pa_set(false);
+    (void)es8311_stop(&s_codec);
+    s_play_pos_samples = 0U;
+    LOG_INFO("audio: play stop");
+    return STATUS_OK;
+}
+
+status_t desktop_pet_audio_play_pause(void)
+{
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (!s_playing) {
+        return STATUS_OK;
+    }
+
+    s_paused = true;
+    audio_pa_set(false);
+    LOG_INFO("audio: play pause, pos=%u", (unsigned)s_play_pos_samples);
+    return STATUS_OK;
+}
+
+status_t desktop_pet_audio_play_start(void)
+{
+    size_t pcm_len;
+
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (s_recording) {
+        LOG_WARN("audio: play ignored, recording");
+        return STATUS_FAIL;
+    }
+
+    if (s_playing && s_paused) {
+        audio_pa_set(true);
+        s_paused = false;
+        LOG_INFO("audio: play resume, pos=%u", (unsigned)s_play_pos_samples);
+        return STATUS_OK;
+    }
+    if (s_playing) {
+        return STATUS_OK;
+    }
+
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return STATUS_FAIL;
+    }
+    pcm_len = s_pcm_len_samples;
+    xSemaphoreGive(s_lock);
+    if ((s_pcm == NULL) || (pcm_len == 0U)) {
+        LOG_WARN("audio: no pcm to play");
+        return STATUS_FAIL;
+    }
+
+    s_play_pos_samples = 0U;
+    s_paused = false;
+
+    if (es8311_set_mode(&s_codec, ES8311_MODE_PLAYBACK) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    if (es8311_start(&s_codec) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    (void)es8311_set_dac_volume(&s_codec, AUDIO_DAC_VOLUME_REG);
+    audio_pa_set(true);
+    vTaskDelay(pdMS_TO_TICKS(30));
+
+    s_playing = true;
+    if (xTaskCreate(audio_play_task, "pet_play", AUDIO_TASK_STACK, NULL, AUDIO_TASK_PRIO, &s_play_task) !=
+        pdPASS) {
+        s_playing = false;
+        audio_pa_set(false);
+        (void)es8311_stop(&s_codec);
+        LOG_ERROR("audio: play task create failed");
+        return STATUS_FAIL;
+    }
+
+    LOG_INFO("audio: play start, samples=%u", (unsigned)pcm_len);
     return STATUS_OK;
 }
 
