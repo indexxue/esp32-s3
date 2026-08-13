@@ -1,6 +1,6 @@
 /**
  * @file ui.h
- * @brief LVGL port on GC9A01：flush / touch / pet_view / GPIO0 debug overlay.
+ * @brief LVGL port on GC9A01：flush / touch / pet_view；可选 debug 覆盖层。
  */
 
 #ifndef UI_H
@@ -18,7 +18,10 @@ extern "C" {
  */
 status_t desktop_pet_ui_start(void);
 
-/** 从按键任务投递：在 LVGL 任务中切换 Rec/Play debug 覆盖层。 */
+/**
+ * GPIO0 单击入口。仅当 DESKTOP_PET_ENABLE_DEBUG_UI=1 时切换 debug 覆盖层；
+ * 默认关闭时为空操作（产品路径，语义另定）。
+ */
 void desktop_pet_ui_toggle_debug(void);
 
 #ifdef __cplusplus

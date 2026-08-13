@@ -1,6 +1,6 @@
 /**
  * @file pet_view.c
- * @brief Round-screen compositor: body image, eyes/mouth, HUD, care buttons.
+ * @brief Round-screen compositor: body, face, Needs dots, Dock (product §B).
  */
 
 #include "pet_view.h"
@@ -18,12 +18,33 @@
 #define PET_VIEW_BLINK_MS (140U)
 #define PET_VIEW_HOLD_MS (650U)
 #define PET_BODY_PIXELS ((uint32_t)PET_RES_FRAME_MAX_W * (uint32_t)PET_RES_FRAME_MAX_H)
-#define PET_BAR_W (56)
-#define PET_BAR_H (6)
+#define PET_SPLASH_PIXELS ((uint32_t)PET_RES_SPLASH_MAX_W * (uint32_t)PET_RES_SPLASH_MAX_H)
+#define PET_SPLASH_GATE_MS (1000U)
+#define PET_SPLASH_POLL_MS (50U)
+#define PET_SPLASH_ARC_SIZE (132)
+#define PET_SPLASH_FALLBACK_SIZE (96)
+#define PET_NEED_DOT_SIZE (10)
+#define PET_NEED_DOT_GAP (8)
+#define PET_DOCK_BTN_SIZE (28)
+#define PET_DOCK_BTN_GAP (8)
+#define PET_HINT_FADE_MS (2800U)
 
 static pet_view_alloc_fn s_alloc;
 static pet_view_free_fn s_free;
 static pet_view_intent_hook_t s_intent_hook;
+static pet_view_boot_done_fn s_boot_done;
+static lv_obj_t *s_boot_parent;
+static lv_obj_t *s_splash_layer;
+static lv_obj_t *s_splash_img;
+static lv_obj_t *s_splash_fallback;
+static lv_obj_t *s_splash_arc;
+static lv_image_dsc_t s_splash_dsc;
+static uint16_t *s_splash_pix;
+static lv_timer_t *s_splash_timer;
+static uint32_t s_splash_t0;
+static bool s_splash_pack_done;
+static bool s_splash_active;
+static int16_t s_splash_arc_rot;
 
 static lv_obj_t *s_body_fallback;
 static lv_obj_t *s_body_img;
@@ -34,11 +55,11 @@ static lv_obj_t *s_pupil_r;
 static lv_obj_t *s_mouth;
 static lv_obj_t *s_brow_l;
 static lv_obj_t *s_brow_r;
-static lv_obj_t *s_bar_h;
-static lv_obj_t *s_bar_m;
-static lv_obj_t *s_bar_e;
-static lv_obj_t *s_status;
+static lv_obj_t *s_need_h;
+static lv_obj_t *s_need_m;
+static lv_obj_t *s_need_e;
 static lv_obj_t *s_pack_hint;
+static lv_timer_t *s_hint_timer;
 
 static lv_image_dsc_t s_img_dsc[2];
 static uint16_t *s_pix[2];
@@ -88,49 +109,32 @@ static void fill_img_dsc(lv_image_dsc_t *dsc, const uint16_t *pix, uint16_t w, u
     dsc->data = (const uint8_t *)pix;
 }
 
-static void set_bar(lv_obj_t *bar, uint8_t v, uint32_t color)
+static void set_need_dot(lv_obj_t *dot, uint8_t v, uint32_t color_ok, uint32_t color_low)
 {
-    int32_t w;
+    lv_opa_t opa;
 
-    if (bar == NULL) {
+    if (dot == NULL) {
         return;
     }
-    w = ((int32_t)PET_BAR_W * (int32_t)v) / 100;
-    if (w < 2) {
-        w = 2;
+    /* Brightness tracks level; low value switches to warn tint. */
+    if (v < 25U) {
+        lv_obj_set_style_bg_color(dot, lv_color_hex(color_low), 0);
+        opa = (lv_opa_t)(LV_OPA_50 + ((uint16_t)v * (LV_OPA_COVER - LV_OPA_50)) / 25U);
+    } else {
+        lv_obj_set_style_bg_color(dot, lv_color_hex(color_ok), 0);
+        opa = (lv_opa_t)(LV_OPA_60 + (((uint16_t)v - 25U) * (LV_OPA_COVER - LV_OPA_60)) / 75U);
     }
-    lv_obj_set_width(bar, w);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(dot, opa, 0);
 }
 
 static void apply_hud(void)
 {
     pet_needs_t n;
-    const char *st = "";
 
     pet_core_get_needs(&n);
-    set_bar(s_bar_h, n.hunger, n.hunger < 25U ? 0xFF6666U : 0x7CFF9AU);
-    set_bar(s_bar_m, n.mood, n.mood < 25U ? 0xFFAA44U : 0x7EC8FFU);
-    set_bar(s_bar_e, n.energy, n.energy < 25U ? 0xC0C0C0U : 0xFFE27AU);
-
-    if (n.sleeping) {
-        st = "zzz";
-    } else if (pet_core_clip() == PET_CLIP_EAT) {
-        st = "nom";
-    } else if (pet_core_clip() == PET_CLIP_PLAY) {
-        st = "yay";
-    } else if (n.hunger < 25U) {
-        st = "hungry";
-    } else if (n.energy < 25U) {
-        st = "sleepy";
-    } else if (n.mood < 25U) {
-        st = "lonely";
-    } else {
-        st = pet_face_name(pet_core_face());
-    }
-    if (s_status != NULL) {
-        lv_label_set_text(s_status, st);
-    }
+    set_need_dot(s_need_h, n.hunger, 0x7CFF9AU, 0xFF6666U);
+    set_need_dot(s_need_m, n.mood, 0x7EC8FFU, 0xFFAA44U);
+    set_need_dot(s_need_e, n.energy, 0xFFE27AU, 0xC0C0C0U);
 }
 
 static void apply_face(pet_face_id_t face)
@@ -317,6 +321,19 @@ static void care_cb(lv_event_t *e)
     (void)pet_core_post(id, 0);
 }
 
+static void chat_cb(lv_event_t *e)
+{
+    pet_intent_t in;
+
+    (void)e;
+    in.id = PET_INTENT_OPEN_CHAT;
+    in.arg0 = 0;
+    in.arg1 = 0;
+    if (s_intent_hook != NULL) {
+        s_intent_hook(&in);
+    }
+}
+
 static void body_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -334,40 +351,64 @@ static void body_event_cb(lv_event_t *e)
     }
 }
 
-static lv_obj_t *make_bar_track(lv_obj_t *parent, int32_t x, int32_t y, uint32_t col)
+static lv_obj_t *make_need_dot(lv_obj_t *parent, int32_t x_ofs, uint32_t color)
 {
-    lv_obj_t *track = lv_obj_create(parent);
-    lv_obj_t *fill;
+    lv_obj_t *dot = lv_obj_create(parent);
 
-    lv_obj_remove_style_all(track);
-    lv_obj_set_size(track, PET_BAR_W, PET_BAR_H);
-    lv_obj_set_style_bg_color(track, lv_color_hex(0x404040), 0);
-    lv_obj_set_style_bg_opa(track, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(track, 3, 0);
-    lv_obj_align(track, LV_ALIGN_TOP_MID, x, y);
-
-    fill = lv_obj_create(track);
-    lv_obj_remove_style_all(fill);
-    lv_obj_set_size(fill, PET_BAR_W, PET_BAR_H);
-    lv_obj_set_style_bg_color(fill, lv_color_hex(col), 0);
-    lv_obj_set_style_bg_opa(fill, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(fill, 3, 0);
-    lv_obj_align(fill, LV_ALIGN_LEFT_MID, 0, 0);
-    return fill;
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, PET_NEED_DOT_SIZE, PET_NEED_DOT_SIZE);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(dot, 1, 0);
+    lv_obj_set_style_border_color(dot, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_border_opa(dot, LV_OPA_40, 0);
+    lv_obj_align(dot, LV_ALIGN_TOP_MID, x_ofs, 20);
+    return dot;
 }
 
-static lv_obj_t *make_care_btn(lv_obj_t *parent, const char *title, int32_t x, pet_evt_id_t evt)
+static lv_obj_t *make_dock_btn(lv_obj_t *parent, const char *title, int32_t x, pet_evt_id_t evt,
+                               bool chat_style)
 {
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_t *lbl;
 
-    lv_obj_set_size(btn, 56, 26);
-    lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, x, -10);
-    lv_obj_add_event_cb(btn, care_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)evt);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, PET_DOCK_BTN_SIZE, PET_DOCK_BTN_SIZE);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    if (chat_style) {
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x3A5570), 0);
+        lv_obj_set_style_border_width(btn, 1, 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(0x7EC8FF), 0);
+        lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
+    } else {
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x3A3A44), 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+    }
+    lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, x, -14);
+    if (chat_style) {
+        lv_obj_add_event_cb(btn, chat_cb, LV_EVENT_CLICKED, NULL);
+    } else {
+        lv_obj_add_event_cb(btn, care_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)evt);
+    }
     lbl = lv_label_create(btn);
     lv_label_set_text(lbl, title);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(chat_style ? 0xDCEEFFU : 0xE8EAF0U), 0);
+#if LV_FONT_MONTSERRAT_14
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+#endif
     lv_obj_center(lbl);
     return btn;
+}
+
+static void hint_fade_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_pack_hint != NULL) {
+        lv_obj_add_flag(s_pack_hint, LV_OBJ_FLAG_HIDDEN);
+    }
+    s_hint_timer = NULL;
 }
 
 static lv_obj_t *make_eye(lv_obj_t *parent, int32_t x)
@@ -403,6 +444,61 @@ static void poll_timer_cb(lv_timer_t *t)
     pet_view_poll();
 }
 
+static void splash_destroy(void)
+{
+    if (s_splash_timer != NULL) {
+        lv_timer_delete(s_splash_timer);
+        s_splash_timer = NULL;
+    }
+    if (s_splash_layer != NULL) {
+        lv_obj_delete(s_splash_layer);
+        s_splash_layer = NULL;
+    }
+    s_splash_img = NULL;
+    s_splash_fallback = NULL;
+    s_splash_arc = NULL;
+    if (s_splash_pix != NULL) {
+        view_free(s_splash_pix);
+        s_splash_pix = NULL;
+    }
+    (void)memset(&s_splash_dsc, 0, sizeof(s_splash_dsc));
+    s_splash_active = false;
+}
+
+static void splash_enter_home(void)
+{
+    lv_obj_t *parent = s_boot_parent;
+    pet_view_boot_done_fn done = s_boot_done;
+
+    splash_destroy();
+    pet_view_create(parent);
+    if (done != NULL) {
+        done(parent);
+    }
+}
+
+static void splash_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_splash_active) {
+        return;
+    }
+
+    /* Spin the progress ring (visual C). */
+    if (s_splash_arc != NULL) {
+        s_splash_arc_rot = (int16_t)((s_splash_arc_rot + 12) % 360);
+        lv_arc_set_rotation(s_splash_arc, (int32_t)s_splash_arc_rot);
+    }
+
+    if (!s_splash_pack_done) {
+        return;
+    }
+    if (lv_tick_elaps(s_splash_t0) < PET_SPLASH_GATE_MS) {
+        return;
+    }
+    splash_enter_home();
+}
+
 void pet_view_set_alloc(pet_view_alloc_fn alloc_fn, pet_view_free_fn free_fn)
 {
     s_alloc = alloc_fn;
@@ -414,9 +510,89 @@ void pet_view_set_intent_hook(pet_view_intent_hook_t hook)
     s_intent_hook = hook;
 }
 
+void pet_view_boot_start(lv_obj_t *parent, pet_view_boot_done_fn on_home)
+{
+    uint16_t w = 0;
+    uint16_t h = 0;
+    bool got_splash;
+
+    if (parent == NULL) {
+        parent = lv_screen_active();
+    }
+    s_boot_parent = parent;
+    s_boot_done = on_home;
+    s_splash_pack_done = false;
+    s_splash_arc_rot = 270;
+    s_splash_t0 = lv_tick_get();
+    s_splash_active = true;
+
+    lv_obj_set_style_bg_color(parent, lv_color_hex(0x202020), 0);
+
+    s_splash_layer = lv_obj_create(parent);
+    lv_obj_remove_style_all(s_splash_layer);
+    lv_obj_set_size(s_splash_layer, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(s_splash_layer, lv_color_hex(0x202020), 0);
+    lv_obj_set_style_bg_opa(s_splash_layer, LV_OPA_COVER, 0);
+    lv_obj_align(s_splash_layer, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_remove_flag(s_splash_layer, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_splash_pix = (uint16_t *)view_alloc(PET_SPLASH_PIXELS * 2U);
+    got_splash = false;
+    if (s_splash_pix != NULL) {
+        got_splash = pet_res_load_splash(s_splash_pix, PET_SPLASH_PIXELS, &w, &h);
+    }
+
+    if (got_splash) {
+        fill_img_dsc(&s_splash_dsc, s_splash_pix, w, h);
+        s_splash_img = lv_image_create(s_splash_layer);
+        lv_image_set_src(s_splash_img, &s_splash_dsc);
+        lv_obj_set_size(s_splash_img, (int32_t)w, (int32_t)h);
+        lv_obj_align(s_splash_img, LV_ALIGN_CENTER, 0, 0);
+    } else {
+        s_splash_fallback = lv_obj_create(s_splash_layer);
+        lv_obj_remove_style_all(s_splash_fallback);
+        lv_obj_set_size(s_splash_fallback, PET_SPLASH_FALLBACK_SIZE, PET_SPLASH_FALLBACK_SIZE);
+        lv_obj_set_style_bg_color(s_splash_fallback, lv_color_hex(0x4AA3C8), 0);
+        lv_obj_set_style_bg_opa(s_splash_fallback, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(s_splash_fallback, LV_RADIUS_CIRCLE, 0);
+        lv_obj_align(s_splash_fallback, LV_ALIGN_CENTER, 0, -8);
+        if (s_splash_pix != NULL) {
+            view_free(s_splash_pix);
+            s_splash_pix = NULL;
+        }
+    }
+
+    /* Arc above splash bitmap (visual C). */
+    s_splash_arc = lv_arc_create(s_splash_layer);
+    lv_obj_set_size(s_splash_arc, PET_SPLASH_ARC_SIZE, PET_SPLASH_ARC_SIZE);
+    lv_obj_align(s_splash_arc, LV_ALIGN_CENTER, 0, -8);
+    lv_arc_set_bg_angles(s_splash_arc, 0, 360);
+    lv_arc_set_angles(s_splash_arc, 0, 270);
+    lv_arc_set_rotation(s_splash_arc, s_splash_arc_rot);
+    lv_obj_remove_style(s_splash_arc, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(s_splash_arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(s_splash_arc, 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_splash_arc, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_splash_arc, lv_color_hex(0x2A3148), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_splash_arc, lv_color_hex(0x7EC8FF), LV_PART_INDICATOR);
+
+    s_splash_timer = lv_timer_create(splash_timer_cb, PET_SPLASH_POLL_MS, NULL);
+}
+
+void pet_view_boot_pack_done(void)
+{
+    s_splash_pack_done = true;
+    /* If boot_start was skipped, open home immediately. */
+    if (!s_splash_active && (s_boot_parent != NULL)) {
+        splash_enter_home();
+    }
+}
+
 void pet_view_create(lv_obj_t *parent)
 {
     lv_obj_t *hit;
+    lv_obj_t *dock;
+    int32_t dock_span;
     uint32_t bytes = PET_BODY_PIXELS * 2U;
 
     if (parent == NULL) {
@@ -435,7 +611,7 @@ void pet_view_create(lv_obj_t *parent)
 
     s_body_fallback = lv_obj_create(parent);
     lv_obj_remove_style_all(s_body_fallback);
-    lv_obj_set_size(s_body_fallback, 120, 120);
+    lv_obj_set_size(s_body_fallback, 150, 150);
     lv_obj_set_style_bg_color(s_body_fallback, lv_color_hex(0x4AA3C8), 0);
     lv_obj_set_style_bg_opa(s_body_fallback, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(s_body_fallback, LV_RADIUS_CIRCLE, 0);
@@ -474,41 +650,53 @@ void pet_view_create(lv_obj_t *parent)
 
     hit = lv_obj_create(parent);
     lv_obj_remove_style_all(hit);
-    lv_obj_set_size(hit, 140, 140);
+    lv_obj_set_size(hit, 150, 150);
     lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
     lv_obj_align(hit, LV_ALIGN_CENTER, 0, -6);
     lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(hit, body_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(hit, body_event_cb, LV_EVENT_RELEASED, NULL);
 
-    s_bar_h = make_bar_track(parent, -62, 14, 0x7CFF9A);
-    s_bar_m = make_bar_track(parent, 0, 14, 0x7EC8FF);
-    s_bar_e = make_bar_track(parent, 62, 14, 0xFFE27A);
-
-    s_status = lv_label_create(parent);
-    lv_label_set_text(s_status, "idle");
-    lv_obj_set_style_text_color(s_status, lv_color_hex(0xE8E8E8), 0);
-#if LV_FONT_MONTSERRAT_14
-    lv_obj_set_style_text_font(s_status, &lv_font_montserrat_14, 0);
-#endif
-    lv_obj_align(s_status, LV_ALIGN_TOP_MID, 0, 26);
+    /* Needs：顶中三点，间距 8，绿/蓝/黄 = 饥饿/心情/精力 */
+    {
+        int32_t step = PET_NEED_DOT_SIZE + PET_NEED_DOT_GAP;
+        s_need_h = make_need_dot(parent, -step, 0x7CFF9A);
+        s_need_m = make_need_dot(parent, 0, 0x7EC8FF);
+        s_need_e = make_need_dot(parent, step, 0xFFE27A);
+    }
 
     s_pack_hint = lv_label_create(parent);
-    lv_obj_set_style_text_color(s_pack_hint, lv_color_hex(0x808080), 0);
+    lv_obj_set_style_text_color(s_pack_hint, lv_color_hex(0xA0A0A0), 0);
 #if LV_FONT_MONTSERRAT_14
     lv_obj_set_style_text_font(s_pack_hint, &lv_font_montserrat_14, 0);
 #endif
-    lv_obj_align(s_pack_hint, LV_ALIGN_TOP_MID, 0, 44);
+    lv_obj_align(s_pack_hint, LV_ALIGN_TOP_MID, 0, 36);
     if (pet_res_is_loaded()) {
         lv_label_set_text(s_pack_hint, "");
+        lv_obj_add_flag(s_pack_hint, LV_OBJ_FLAG_HIDDEN);
         show_body_clip(PET_CLIP_IDLE);
     } else {
         lv_label_set_text(s_pack_hint, "NO PACK");
+        s_hint_timer = lv_timer_create(hint_fade_cb, PET_HINT_FADE_MS, NULL);
+        lv_timer_set_repeat_count(s_hint_timer, 1);
     }
 
-    (void)make_care_btn(parent, "Feed", -60, PET_EVT_CARE_FEED);
-    (void)make_care_btn(parent, "Play", 0, PET_EVT_CARE_PLAY);
-    (void)make_care_btn(parent, "Sleep", 60, PET_EVT_CARE_SLEEP);
+    /* Dock 底弧四钮：喂/玩/睡/聊；ø28 间距 8（无中文字体用 F/P/S/C） */
+    dock_span = PET_DOCK_BTN_SIZE + PET_DOCK_BTN_GAP;
+    dock = lv_obj_create(parent);
+    lv_obj_remove_style_all(dock);
+    lv_obj_set_size(dock, (4 * PET_DOCK_BTN_SIZE) + (3 * PET_DOCK_BTN_GAP) + 16,
+                    PET_DOCK_BTN_SIZE + 10);
+    lv_obj_set_style_bg_color(dock, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(dock, LV_OPA_30, 0);
+    lv_obj_set_style_radius(dock, 999, 0);
+    lv_obj_align(dock, LV_ALIGN_BOTTOM_MID, 0, -9);
+    lv_obj_remove_flag(dock, LV_OBJ_FLAG_CLICKABLE);
+
+    (void)make_dock_btn(parent, "F", (int32_t)(-3 * dock_span / 2), PET_EVT_CARE_FEED, false);
+    (void)make_dock_btn(parent, "P", (int32_t)(-dock_span / 2), PET_EVT_CARE_PLAY, false);
+    (void)make_dock_btn(parent, "S", (int32_t)(dock_span / 2), PET_EVT_CARE_SLEEP, false);
+    (void)make_dock_btn(parent, "C", (int32_t)(3 * dock_span / 2), PET_EVT_CARE_WAKE, true);
 
     apply_face(PET_FACE_IDLE);
     apply_hud();

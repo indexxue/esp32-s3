@@ -54,11 +54,12 @@ void pet_sim_app_create(void)
         root = "tools/pet_sim/sdcard/pet";
     }
     pet_fs_set_root(root);
+    pet_view_boot_start(lv_screen_active(), NULL);
     if (pet_res_load()) {
         pet_core_init(pet_res_needs_cfg());
     } else {
         pet_core_init(NULL);
     }
-    pet_view_create(lv_screen_active());
+    pet_view_boot_pack_done();
     (void)lv_timer_create(key_timer_cb, 50, NULL);
 }

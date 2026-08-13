@@ -57,6 +57,7 @@ typedef enum {
     PET_INTENT_LED,
     PET_INTENT_MOTOR,
     PET_INTENT_SFX,
+    PET_INTENT_OPEN_CHAT, /* Dock「聊」→ 对话页（view 直投 hook，不经 core） */
     PET_INTENT_COUNT
 } pet_intent_id_t;
 

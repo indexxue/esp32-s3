@@ -1,25 +1,28 @@
 /**
  * @file ui.c
- * @brief LVGL port: GC9A01 flush, IT7259, pet_view, GPIO0 debug Rec/Play overlay.
+ * @brief LVGL port: GC9A01 flush, IT7259, pet_view; optional debug overlay.
  */
 
 #include "ui.h"
 
-#include "agent.h"
-#include "audio.h"
 #include "board.h"
 #include "gc9a01.h"
 #include "i2c.h"
 #include "it7259.h"
 #include "led_scene.h"
 #include "log.h"
-#include "net_wifi.h"
 #include "pet_core.h"
 #include "pet_fs.h"
 #include "pet_res.h"
 #include "pet_view.h"
 #include "qmi8658a.h"
 #include "type.h"
+
+#if DESKTOP_PET_ENABLE_DEBUG_UI
+#include "agent.h"
+#include "audio.h"
+#include "net_wifi.h"
+#endif
 
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -57,6 +60,7 @@ static uint8_t *s_buf1;
 static uint8_t *s_buf2;
 static esp_timer_handle_t s_tick_timer;
 static bool s_started;
+#if DESKTOP_PET_ENABLE_DEBUG_UI
 static lv_obj_t *s_debug;
 static lv_obj_t *s_lbl_roll;
 static lv_obj_t *s_lbl_pitch;
@@ -72,6 +76,7 @@ static volatile int s_play_req;
 static volatile int s_debug_req;
 static bool s_debug_on;
 static bool s_play_shown;
+#endif
 static uint8_t s_shake_hits;
 static uint8_t s_flip_hits;
 static uint32_t s_shake_cool_ms;
@@ -228,6 +233,7 @@ static status_t ui_touch_init(void)
 }
 #endif /* DESKTOP_PET_ENABLE_TOUCH */
 
+#if DESKTOP_PET_ENABLE_DEBUG_UI
 static void ui_rec_status_set(const char *text, bool recording)
 {
     if (s_lbl_rec != NULL) {
@@ -449,6 +455,7 @@ static void ui_apply_debug_visible(void)
     }
     LOG_INFO("debug overlay %s", s_debug_on ? "on" : "off");
 }
+#endif /* DESKTOP_PET_ENABLE_DEBUG_UI */
 
 static void ui_intent_hook(const pet_intent_t *in)
 {
@@ -461,6 +468,9 @@ static void ui_intent_hook(const pet_intent_t *in)
         } else {
             led_scene_run(LED_SCENE_ID_TRIGGER);
         }
+    } else if (in->id == PET_INTENT_OPEN_CHAT) {
+        /* 对话页空壳在后续里程碑接入；先占位打点。 */
+        LOG_INFO("chat: OPEN_CHAT (page TBD)");
     } else if (in->id == PET_INTENT_MOTOR || in->id == PET_INTENT_SFX) {
         /* 量产路径暂未接 TB6612 / 音效；显式吞掉避免误以为已驱动。 */
         (void)in;
@@ -478,26 +488,32 @@ static void ui_gesture_timer_cb(lv_timer_t *timer)
     }
 
 #if !DESKTOP_PET_ENABLE_IMU
+#if DESKTOP_PET_ENABLE_DEBUG_UI
     if (s_debug_on && (s_lbl_roll != NULL)) {
         lv_label_set_text(s_lbl_roll, "R: --");
         lv_label_set_text(s_lbl_pitch, "P: --");
         lv_label_set_text(s_lbl_yaw, "Y: --");
     }
+#endif
 #else
     {
     qmi8658a_t *imu;
     int16_t ax, ay, az, gx, gy, gz;
     float ax_g, ay_g, az_g;
     float mag;
+#if DESKTOP_PET_ENABLE_DEBUG_UI
     char buf[24];
+#endif
 
     imu = BoardQmi8658();
     if ((imu == NULL) || !imu->initialized) {
+#if DESKTOP_PET_ENABLE_DEBUG_UI
         if (s_debug_on && (s_lbl_roll != NULL)) {
             lv_label_set_text(s_lbl_roll, "R: --");
             lv_label_set_text(s_lbl_pitch, "P: --");
             lv_label_set_text(s_lbl_yaw, "Y: --");
         }
+#endif
         return;
     }
 
@@ -512,7 +528,11 @@ static void ui_gesture_timer_cb(lv_timer_t *timer)
 
     if (mag > UI_SHAKE_G) {
         s_shake_hits++;
+#if DESKTOP_PET_ENABLE_DEBUG_UI
         if ((s_shake_hits >= UI_SHAKE_HITS) && (s_shake_cool_ms == 0U) && !s_debug_on) {
+#else
+        if ((s_shake_hits >= UI_SHAKE_HITS) && (s_shake_cool_ms == 0U)) {
+#endif
             s_shake_hits = 0U;
             s_shake_cool_ms = UI_SHAKE_COOLDOWN_MS;
             (void)pet_core_post(PET_EVT_IMU_SHAKE, 0);
@@ -523,7 +543,11 @@ static void ui_gesture_timer_cb(lv_timer_t *timer)
 
     if (az_g < UI_FLIP_G) {
         s_flip_hits++;
+#if DESKTOP_PET_ENABLE_DEBUG_UI
         if ((s_flip_hits >= UI_FLIP_HITS) && !s_debug_on) {
+#else
+        if (s_flip_hits >= UI_FLIP_HITS) {
+#endif
             s_flip_hits = 0U;
             (void)pet_core_post(PET_EVT_IMU_FLIP, 0);
         }
@@ -531,6 +555,7 @@ static void ui_gesture_timer_cb(lv_timer_t *timer)
         s_flip_hits = 0U;
     }
 
+#if DESKTOP_PET_ENABLE_DEBUG_UI
     if (!s_debug_on || (s_lbl_roll == NULL)) {
         return;
     }
@@ -553,10 +578,12 @@ static void ui_gesture_timer_cb(lv_timer_t *timer)
         (void)snprintf(buf, sizeof(buf), "Y:%5.1f", (double)s_yaw_deg);
         lv_label_set_text(s_lbl_yaw, buf);
     }
+#endif
     }
 #endif
 }
 
+#if DESKTOP_PET_ENABLE_DEBUG_UI
 static void ui_talk_btn_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
@@ -658,12 +685,27 @@ static void ui_debug_overlay_create(lv_obj_t *parent)
         ui_rec_status_set("Rec: N/A", false);
     }
 }
+#endif /* DESKTOP_PET_ENABLE_DEBUG_UI */
+
+static void ui_on_pet_home(lv_obj_t *scr)
+{
+#if DESKTOP_PET_ENABLE_DEBUG_UI
+    ui_debug_overlay_create(scr);
+#else
+    (void)scr;
+#endif
+    (void)lv_timer_create(ui_gesture_timer_cb, UI_GESTURE_PERIOD_MS, NULL);
+}
 
 static void ui_screen_pet_create(void)
 {
     lv_obj_t *scr = lv_screen_active();
 
     pet_fs_set_root("/sdcard/pet");
+    pet_view_set_alloc(ui_alloc_psram, ui_free_psram);
+    pet_view_set_intent_hook(ui_intent_hook);
+    pet_view_boot_start(scr, ui_on_pet_home);
+
     if (pet_res_load()) {
         pet_core_init(pet_res_needs_cfg());
         LOG_INFO("pet pack loaded root=%s", pet_fs_root());
@@ -671,11 +713,7 @@ static void ui_screen_pet_create(void)
         pet_core_init(NULL);
         LOG_WARN("pet pack missing (%s); fallback body", pet_fs_root());
     }
-    pet_view_set_alloc(ui_alloc_psram, ui_free_psram);
-    pet_view_set_intent_hook(ui_intent_hook);
-    pet_view_create(scr);
-    ui_debug_overlay_create(scr);
-    (void)lv_timer_create(ui_gesture_timer_cb, UI_GESTURE_PERIOD_MS, NULL);
+    pet_view_boot_pack_done();
 }
 
 static void ui_task(void *arg)
@@ -684,11 +722,13 @@ static void ui_task(void *arg)
     for (;;) {
         uint32_t delay_ms;
 
+#if DESKTOP_PET_ENABLE_DEBUG_UI
         if (s_debug_req != 0) {
             s_debug_req = 0;
             s_debug_on = !s_debug_on;
             ui_apply_debug_visible();
         }
+#endif
 
         delay_ms = lv_timer_handler();
         if (delay_ms > 50U) {
@@ -703,7 +743,11 @@ static void ui_task(void *arg)
 
 void desktop_pet_ui_toggle_debug(void)
 {
+#if DESKTOP_PET_ENABLE_DEBUG_UI
     s_debug_req = 1;
+#else
+    /* Product home: GPIO0 single-click reserved (debug overlay isolated). */
+#endif
 }
 
 status_t desktop_pet_ui_start(void)

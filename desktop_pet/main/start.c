@@ -130,7 +130,11 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
 
     switch (event) {
     case BTN_EVENT_SINGLE_CLICK:
+#if DESKTOP_PET_ENABLE_DEBUG_UI
         LOG_INFO("BTN single-click: toggle debug overlay");
+#else
+        LOG_INFO("BTN single-click: reserved (debug UI off)");
+#endif
         desktop_pet_ui_toggle_debug();
         break;
     case BTN_EVENT_DOUBLE_CLICK:

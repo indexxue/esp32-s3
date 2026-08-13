@@ -151,9 +151,8 @@ bool pet_res_load(void)
     return true;
 }
 
-bool pet_res_load_frame(pet_clip_id_t clip, uint8_t frame_index,
-                        uint16_t *pixels, uint32_t pixel_cap,
-                        uint16_t *w, uint16_t *h)
+bool pet_res_load_rgbh(const char *rel, uint16_t *pixels, uint32_t pixel_cap,
+                       uint16_t max_w, uint16_t max_h, uint16_t *w, uint16_t *h)
 {
     uint8_t hdr[PET_RGBH_HDR_SIZE];
     FILE *fp;
@@ -162,15 +161,10 @@ bool pet_res_load_frame(pet_clip_id_t clip, uint8_t frame_index,
     uint32_t flags;
     uint32_t need;
     size_t got;
-    const char *rel;
 
-    if ((pixels == NULL) || (w == NULL) || (h == NULL) || !s_loaded) {
+    if ((rel == NULL) || (pixels == NULL) || (w == NULL) || (h == NULL)) {
         return false;
     }
-    if ((clip >= PET_CLIP_COUNT) || (frame_index >= s_clips[clip].frame_count)) {
-        return false;
-    }
-    rel = s_clips[clip].names[frame_index];
     fp = pet_fs_open_read(rel);
     if (fp == NULL) {
         return false;
@@ -186,8 +180,7 @@ bool pet_res_load_frame(pet_clip_id_t clip, uint8_t frame_index,
     fw = rd_u16(&hdr[4]);
     fh = rd_u16(&hdr[6]);
     flags = rd_u32(&hdr[8]);
-    if ((fw == 0U) || (fh == 0U) || (fw > PET_RES_FRAME_MAX_W) || (fh > PET_RES_FRAME_MAX_H) ||
-        (flags != 0U)) {
+    if ((fw == 0U) || (fh == 0U) || (fw > max_w) || (fh > max_h) || (flags != 0U)) {
         (void)fclose(fp);
         return false;
     }
@@ -204,4 +197,22 @@ bool pet_res_load_frame(pet_clip_id_t clip, uint8_t frame_index,
     *w = fw;
     *h = fh;
     return true;
+}
+
+bool pet_res_load_frame(pet_clip_id_t clip, uint8_t frame_index,
+                        uint16_t *pixels, uint32_t pixel_cap,
+                        uint16_t *w, uint16_t *h)
+{
+    if (!s_loaded || (clip >= PET_CLIP_COUNT) || (frame_index >= s_clips[clip].frame_count)) {
+        return false;
+    }
+    return pet_res_load_rgbh(s_clips[clip].names[frame_index], pixels, pixel_cap,
+                             PET_RES_FRAME_MAX_W, PET_RES_FRAME_MAX_H, w, h);
+}
+
+bool pet_res_load_splash(uint16_t *pixels, uint32_t pixel_cap,
+                         uint16_t *w, uint16_t *h)
+{
+    return pet_res_load_rgbh(PET_RES_SPLASH_REL, pixels, pixel_cap,
+                             PET_RES_SPLASH_MAX_W, PET_RES_SPLASH_MAX_H, w, h);
 }

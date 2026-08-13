@@ -2,10 +2,10 @@
 
 **版本**：2.1  
 **日期**：2026-08-13  
-**工程**：[`desktop_pet/`](../desktop_pet/)  
+**工程**：[`desktop_pet/`](../../desktop_pet/)  
 **状态**：方案对齐小智；**§11 已拍板**；实施中（见 §13）  
-**参考**：[78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)、[乐鑫小智组件说明](https://docs.espressif.com/projects/esp-iot-solution/zh_CN/latest/ai/xiaozhi.html)、现有 [`audio`](../desktop_pet/main/source/audio.c)  
-**变更**：v1.0「录完 HTTP ASR」→ v2.0 对齐小智流式；**v2.1 冻结 Q1–Q5，选定服务端并开 Z1**
+**参考**：[78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)、[乐鑫小智组件说明](https://docs.espressif.com/projects/esp-iot-solution/zh_CN/latest/ai/xiaozhi.html)、现有 [`audio`](../../desktop_pet/main/source/audio.c)  
+**文档集**：[`README.md`](README.md) · [`framework.md`](framework.md) · [`product.md`](product.md) · [`CONTEXT.md`](CONTEXT.md)
 
 ---
 
@@ -349,14 +349,15 @@ IDLE ──唤醒/按键──► CONNECTING ──hello OK──► LISTENING
 
 | 路径 | 说明 |
 |------|------|
-| [`desktop_pet/main/source/audio.c`](../desktop_pet/main/source/audio.c) | ES8311 录放（M1） |
-| [`desktop_pet/main/source/ui.c`](../desktop_pet/main/source/ui.c) | LVGL 端口 + debug 覆盖层 |
-| [`doc/desktop_pet_framework.md`](desktop_pet_framework.md) | 桌宠大脑 / SD 资源包 / 分层 UI |
-| [`desktop_pet/main/start.c`](../desktop_pet/main/start.c) | 启动 / web_ctrl / GPIO0 按键钩子 |
+| [`desktop_pet/main/source/audio.c`](../../desktop_pet/main/source/audio.c) | ES8311 录放（M1） |
+| [`desktop_pet/main/source/ui.c`](../../desktop_pet/main/source/ui.c) | LVGL 端口 + debug 覆盖层 |
+| [`framework.md`](framework.md) | 桌宠大脑 / SD 资源包 / 分层 UI |
+| [`product.md`](product.md) | 皮肤 / 主界面 / 对话页约定 |
+| [`desktop_pet/main/start.c`](../../desktop_pet/main/start.c) | 启动 / web_ctrl / GPIO0 按键钩子 |
 | [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) | 设备侧参考 |
 | [xiaozhi websocket 协议](https://github.com/78/xiaozhi-esp32/blob/main/docs/websocket.md) | 会话协议参考 |
 | [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server) | 自建服务端（Z1-1） |
-| [`doc/embedded_coding_standard.md`](embedded_coding_standard.md) | 分层约定 |
+| [`embedded_coding_standard.md`](../embedded_coding_standard.md) | 分层约定 |
 
 ---
 

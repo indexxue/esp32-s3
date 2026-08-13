@@ -6,13 +6,15 @@
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\setup_lvgl_sim.ps1
-py -3 tools\pet_pack\pack_build.py
+py -3 tools\pet_skin\cli.py --splash
 powershell -ExecutionPolicy Bypass -File .\tools\pet_sim\install_into_lvgl_sim.ps1
 ```
 
 Open `tools\lvgl_sim\lv_port_pc_visual_studio\LVGL.sln`, set **LvglWindowsSimulator** as startup, F5.
 
-Debugger working directory is the **repo root** so `tools/pet_sim/sdcard/pet` resolves. Optional: `PET_PACK_ROOT`.
+Boot: splash C (≥1s + pack load) then home. Debugger working directory is the **repo root** so `tools/pet_sim/sdcard/pet` resolves. Optional: `PET_PACK_ROOT`.
+
+Skin tool: [`tools/pet_skin/README.md`](../pet_skin/README.md).
 
 Keys: `1` feed, `2` play, `3` sleep, `4` wake, `0` shake. On-screen Feed / Play / Sleep also work. Display 240×240.
 

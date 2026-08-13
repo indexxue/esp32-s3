@@ -438,6 +438,10 @@
 #ifndef DESKTOP_PET_ENABLE_WIFI_WEB
 #define DESKTOP_PET_ENABLE_WIFI_WEB 1
 #endif
+/** Rec/Play/Conn/Talk debug 覆盖层；产品主界面默认关，研发可置 1。 */
+#ifndef DESKTOP_PET_ENABLE_DEBUG_UI
+#define DESKTOP_PET_ENABLE_DEBUG_UI 0
+#endif
 
 #define BOARD_IR_SENSOR0_PIN (-1)
 #define BOARD_IR_SENSOR1_PIN (-1)
