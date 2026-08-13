@@ -13,8 +13,9 @@
 #include "board.h"
 #include "button.h"
 #include "device_profile.h"
-#include "desktop_pet_agent.h"
-#include "desktop_pet_ui.h"
+#include "agent.h"
+#include "audio.h"
+#include "ui.h"
 #include "esp_system.h"
 #include "flexible_button.h"
 #include "led_scene.h"
@@ -251,6 +252,12 @@ static status_t app_init(void)
     }
 #else
     app_ota_confirm_running_image();
+#endif
+
+#if DESKTOP_PET_ENABLE_AUDIO
+    if (desktop_pet_audio_init() != STATUS_OK) {
+        LOG_WARN("desktop_pet_audio_init failed");
+    }
 #endif
 
 #if DESKTOP_PET_ENABLE_LCD

@@ -1,10 +1,10 @@
 /**
- * @file desktop_pet_audio.h
+ * @file audio.h
  * @brief ES8311 + I2S record/play; PCM in PSRAM, stop writes WAV under /sdcard/record/.
  */
 
-#ifndef DESKTOP_PET_AUDIO_H
-#define DESKTOP_PET_AUDIO_H
+#ifndef AUDIO_H
+#define AUDIO_H
 
 #include "type.h"
 
@@ -77,4 +77,4 @@ status_t desktop_pet_audio_playout_write_mono(const int16_t *pcm, size_t samples
 }
 #endif
 
-#endif /* DESKTOP_PET_AUDIO_H */
+#endif /* AUDIO_H */

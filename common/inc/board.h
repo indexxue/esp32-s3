@@ -416,10 +416,7 @@
 #define BOARD_BATTERY_PIN_ADC (4)
 #define BOARD_BATTERY_ADC_CHANNEL ADC_CHANNEL_3_E
 
-/** M1→… bring-up：填好引脚后按需置 1（改后重编）。自检源码保留作参考，默认关闭。 */
-#ifndef DESKTOP_PET_ENABLE_SELFTEST
-#define DESKTOP_PET_ENABLE_SELFTEST 0
-#endif
+/** M1→… bring-up：填好引脚后按需置 1（改后重编）。 */
 #ifndef DESKTOP_PET_ENABLE_LCD
 #define DESKTOP_PET_ENABLE_LCD 1
 #endif

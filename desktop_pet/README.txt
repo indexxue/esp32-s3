@@ -1,5 +1,9 @@
 desktop_pet — ESP32-S3 桌宠（LVGL UI + 板级驱动）
 
+目录：可移植运行时在 main/source/pet/（pet_core / pet_fs / pet_res / pet_view）；
+  板端业务在 main/source/{ui,audio,agent,pet_opus,web_pages}.c。本地 build/、managed_components/、
+  sdkconfig、dependencies.lock 为生成物，勿提交。
+
 引脚（common/inc/board.h → BOARD_PROFILE_DESKTOP_PET）：
   - I2C 唯一：SCL=18 SDA=8（ES8311 / QMI8685 / IT7259@0x46；无 INT/RST）
   - GC9A01：SCK=7 MOSI=16 MISO=15 CS=6 DC=17 BL=5；无 RST（靠重新上电）
@@ -25,9 +29,10 @@ desktop_pet — ESP32-S3 桌宠（LVGL UI + 板级驱动）
   录音：ES8311 + I2S → PSRAM；Stop 后写 `/sdcard/record/rec_XXXX.wav`（debug 页）
   需 SD 已挂载（FAT32）；无卡时仍可录音，仅保存失败
   依赖：main/idf_component.yml → lvgl/lvgl + esp_websocket_client（managed_components 不入库）
-  若 `idf.py reconfigure` 后 WS 又报 Error create websocket task：重新应用
-  patches/esp_websocket_client_psram_stack.patch（任务栈改到 PSRAM）
-  若点击偏移：改 desktop_pet_ui.c 里 it7259 panel/swap/invert 配置
+  若 `idf.py reconfigure` 后 WS 又报 Error create websocket task：对 stock
+  managed 组件重新应用 patches/esp_websocket_client_psram_stack.patch
+  （任务栈改到 PSRAM；见 patch 头注释）。当前树内 managed 文件已含该改动。
+  若点击偏移：改 ui.c 里 it7259 panel/swap/invert 配置
   Agent URI：menuconfig「Desktop Pet Xiaozhi Agent」或 sdkconfig.defaults 中 CONFIG_DESKTOP_PET_AGENT_WS_URI
 
 Web（AP/STA 同一 HTTP）：
@@ -35,15 +40,8 @@ Web（AP/STA 同一 HTTP）：
   `GET /` SD 文件管理页；`/api/sd/list|file|delete`；另有 `/provision` `/ota`
   需 DESKTOP_PET_ENABLE_WIFI_WEB=1 且 CONFIG_WEB_CTRL_AUTO_START
 
-自检（参考程序，默认不编译/不启动）：
-  源码：main/source/desktop_pet_selftest.c|.h
-  恢复：CMakeLists SRCS 加回该 .c；start.c 调用 desktop_pet_selftest_start()；
-        board.h 中 DESKTOP_PET_ENABLE_SELFTEST=1
-  串口：help / ptest / ptest lcd|bat|imu|led|motor|sd|i2c|audio|touch
-
 Bring-up 开关（board.h，改后重编）：
   DESKTOP_PET_ENABLE_LCD / IMU / MOTOR / SDCARD / AUDIO / TOUCH 默认 1
-  DESKTOP_PET_ENABLE_SELFTEST 默认 0
   SD：需插卡；FatFS 报 (13)=卡已识别但无合法 FAT → 请格式化为 FAT32（勿用 exFAT）。
 
 OTA：

@@ -1,11 +1,11 @@
 /**
- * @file desktop_pet_opus.c
+ * @file pet_opus.c
  * @brief Opus 编解码（78/esp-opus）：上行 VOIP 编码 + 下行解码。
  */
 
-#include "desktop_pet_opus.h"
+#include "pet_opus.h"
 
-#include "desktop_pet_audio.h"
+#include "audio.h"
 #include "log.h"
 
 #include "opus.h"

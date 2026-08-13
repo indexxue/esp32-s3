@@ -1,9 +1,9 @@
 /**
- * @file desktop_pet_audio.c
+ * @file audio.c
  * @brief ES8311 捕获/播放 + I2S：RX 写入 PSRAM，TX 回放；写满即停。
  */
 
-#include "desktop_pet_audio.h"
+#include "audio.h"
 
 #include "board.h"
 #include "es8311.h"
@@ -48,11 +48,11 @@ static int16_t *s_pcm;
 static size_t s_pcm_cap_samples;
 static size_t s_pcm_len_samples;
 static bool s_ready;
-static bool s_recording;
-static bool s_playing;
-static bool s_paused;
-static bool s_streaming;
-static bool s_playouting;
+static volatile bool s_recording;
+static volatile bool s_playing;
+static volatile bool s_paused;
+static volatile bool s_streaming;
+static volatile bool s_playouting;
 static int s_stream_use_right; /* -1 unknown, 0 L, 1 R */
 static uint64_t s_stream_energy_l;
 static uint64_t s_stream_energy_r;
@@ -451,9 +451,11 @@ status_t desktop_pet_audio_init(void)
         return STATUS_OK;
     }
 
-    s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) {
-        return STATUS_FAIL;
+        s_lock = xSemaphoreCreateMutex();
+        if (s_lock == NULL) {
+            return STATUS_FAIL;
+        }
     }
 
     if (audio_pa_init_off() != STATUS_OK) {
@@ -512,9 +514,11 @@ status_t desktop_pet_audio_init(void)
 
     s_pcm_cap_samples = (size_t)DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ * (size_t)DESKTOP_PET_AUDIO_MAX_SECONDS;
     bytes = s_pcm_cap_samples * sizeof(int16_t);
-    s_pcm = (int16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (s_pcm == NULL) {
-        s_pcm = (int16_t *)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        s_pcm = (int16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_pcm == NULL) {
+            s_pcm = (int16_t *)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        }
     }
     if (s_pcm == NULL) {
         LOG_ERROR("audio: pcm buffer alloc failed (%u bytes)", (unsigned)bytes);

@@ -7,5 +7,6 @@ idf_component_register(
         "src/web_ctrl_ota.c"
         "src/web_ctrl.c"
     INCLUDE_DIRS "inc"
+    EMBED_FILES "www/provision.html"
     REQUIRES common bsp_driver esp_netif esp_wifi esp_event nvs_flash esp_http_server esp_timer
 )

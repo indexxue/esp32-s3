@@ -661,10 +661,13 @@ static esp_err_t wifi_sta_try_post_handler(httpd_req_t *req)
 
 static esp_err_t provision_get_handler(httpd_req_t *req)
 {
-    (void)httpd_resp_set_status(req, "302 Found");
-    (void)httpd_resp_set_hdr(req, "Location", "/");
-    (void)httpd_resp_set_type(req, "text/plain");
-    return httpd_resp_send(req, "", HTTPD_RESP_USE_STRLEN);
+    extern const char provision_html_start[] asm("_binary_provision_html_start");
+    extern const char provision_html_end[] asm("_binary_provision_html_end");
+    const size_t len = (size_t)(provision_html_end - provision_html_start);
+
+    (void)httpd_resp_set_type(req, "text/html; charset=utf-8");
+    (void)httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, provision_html_start, len);
 }
 
 esp_err_t web_ctrl_wifi_api_register(httpd_handle_t server)

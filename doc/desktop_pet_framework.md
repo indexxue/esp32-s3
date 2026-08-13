@@ -20,11 +20,11 @@
 
 | 模块 | 路径 | 允许依赖 |
 |------|------|----------|
-| 大脑 | [`desktop_pet/pet_core/`](../desktop_pet/pet_core/) | C 标准库 |
-| 文件系统 | [`desktop_pet/pet_fs.h`](../desktop_pet/pet_fs.h) | `stdio` |
-| 资源包 | [`desktop_pet/pet_res/`](../desktop_pet/pet_res/) | `pet_fs`、`pet_core` |
-| 表演 | [`desktop_pet/pet_view/`](../desktop_pet/pet_view/) | LVGL 9、`pet_core`、`pet_res` |
-| 板端口 | [`desktop_pet/main/source/desktop_pet_ui.c`](../desktop_pet/main/source/desktop_pet_ui.c) | 板级 + 上列模块 |
+| 大脑 | [`desktop_pet/main/source/pet/pet_core/`](../desktop_pet/main/source/pet/pet_core/) | C 标准库 |
+| 文件系统 | [`desktop_pet/main/source/pet/pet_fs.h`](../desktop_pet/main/source/pet/pet_fs.h) | `stdio` |
+| 资源包 | [`desktop_pet/main/source/pet/pet_res/`](../desktop_pet/main/source/pet/pet_res/) | `pet_fs`、`pet_core` |
+| 表演 | [`desktop_pet/main/source/pet/pet_view/`](../desktop_pet/main/source/pet/pet_view/) | LVGL 9、`pet_core`、`pet_res` |
+| 板端口 | [`desktop_pet/main/source/ui.c`](../desktop_pet/main/source/ui.c) | 板级 + 上列模块 |
 | 模拟器端口 | [`tools/pet_sim/`](../tools/pet_sim/) | 上列模块 + Windows LVGL 模拟器 |
 | 打包工具 | [`tools/pet_pack/pack_build.py`](../tools/pet_pack/pack_build.py) | Python 3 |
 

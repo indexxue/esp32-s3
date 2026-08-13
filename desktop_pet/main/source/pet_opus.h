@@ -1,10 +1,10 @@
 /**
- * @file desktop_pet_opus.h
+ * @file pet_opus.h
  * @brief PCM(16 kHz mono) ↔ Opus 帧封装（上行编码 + 下行解码）。
  */
 
-#ifndef DESKTOP_PET_OPUS_H
-#define DESKTOP_PET_OPUS_H
+#ifndef PET_OPUS_H
+#define PET_OPUS_H
 
 #include "type.h"
 
@@ -52,4 +52,4 @@ status_t desktop_pet_opus_decode_frame(const uint8_t *in, size_t in_len, int16_t
 }
 #endif
 
-#endif /* DESKTOP_PET_OPUS_H */
+#endif /* PET_OPUS_H */

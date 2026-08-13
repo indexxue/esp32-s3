@@ -4,7 +4,7 @@
 **日期**：2026-08-13  
 **工程**：[`desktop_pet/`](../desktop_pet/)  
 **状态**：方案对齐小智；**§11 已拍板**；实施中（见 §13）  
-**参考**：[78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)、[乐鑫小智组件说明](https://docs.espressif.com/projects/esp-iot-solution/zh_CN/latest/ai/xiaozhi.html)、现有 [`desktop_pet_audio`](../desktop_pet/main/source/desktop_pet_audio.c)  
+**参考**：[78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)、[乐鑫小智组件说明](https://docs.espressif.com/projects/esp-iot-solution/zh_CN/latest/ai/xiaozhi.html)、现有 [`audio`](../desktop_pet/main/source/audio.c)  
 **变更**：v1.0「录完 HTTP ASR」→ v2.0 对齐小智流式；**v2.1 冻结 Q1–Q5，选定服务端并开 Z1**
 
 ---
@@ -349,8 +349,8 @@ IDLE ──唤醒/按键──► CONNECTING ──hello OK──► LISTENING
 
 | 路径 | 说明 |
 |------|------|
-| [`desktop_pet/main/source/desktop_pet_audio.c`](../desktop_pet/main/source/desktop_pet_audio.c) | ES8311 录放（M1） |
-| [`desktop_pet/main/source/desktop_pet_ui.c`](../desktop_pet/main/source/desktop_pet_ui.c) | LVGL 端口 + debug 覆盖层 |
+| [`desktop_pet/main/source/audio.c`](../desktop_pet/main/source/audio.c) | ES8311 录放（M1） |
+| [`desktop_pet/main/source/ui.c`](../desktop_pet/main/source/ui.c) | LVGL 端口 + debug 覆盖层 |
 | [`doc/desktop_pet_framework.md`](desktop_pet_framework.md) | 桌宠大脑 / SD 资源包 / 分层 UI |
 | [`desktop_pet/main/start.c`](../desktop_pet/main/start.c) | 启动 / web_ctrl / GPIO0 按键钩子 |
 | [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) | 设备侧参考 |

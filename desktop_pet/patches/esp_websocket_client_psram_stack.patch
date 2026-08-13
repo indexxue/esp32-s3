@@ -1,7 +1,39 @@
-# Apply after Component Manager refreshes managed_components:
-#   cd desktop_pet
-#   git apply --directory=managed_components/espressif__esp_websocket_client patches/esp_websocket_client_psram_stack.patch
-# Or re-do the two edits in esp_websocket_client.c:
-#   1) include freertos/idf_additions.h + esp_heap_caps.h
-#   2) xTaskCreatePinnedToCore -> xTaskCreatePinnedToCoreWithCaps(..., MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)
-#   3) vTaskDelete(NULL) at task end -> vTaskDeleteWithCaps(NULL)
+# Apply after Component Manager refreshes managed_components (stock client uses
+# xTaskCreatePinnedToCore / vTaskDelete). From repo root:
+#   git apply --directory=desktop_pet/managed_components/espressif__esp_websocket_client desktop_pet/patches/esp_websocket_client_psram_stack.patch
+# Then rebuild. Current tree already has the WithCaps edits applied in place.
+--- a/esp_websocket_client.c
++++ b/esp_websocket_client.c
+@@ -16,6 +16,8 @@
+ #include "freertos/semphr.h"
+ #include "freertos/queue.h"
+ #include "freertos/event_groups.h"
++#include "freertos/idf_additions.h"
++#include "esp_heap_caps.h"
+ #include "esp_log.h"
+ #include "esp_timer.h"
+ #include "esp_tls_crypto.h"
+@@ -1450,7 +1452,7 @@
+     } else {
+         xEventGroupSetBits(client->status_bits, STOPPED_BIT);
+     }
+-    vTaskDelete(NULL);
++    vTaskDeleteWithCaps(NULL);
+ }
+ 
+ esp_err_t esp_websocket_client_start(esp_websocket_client_handle_t client)
+@@ -1472,11 +1474,13 @@
+     }
+ 
+     xEventGroupClearBits(client->status_bits, STOPPED_BIT | CLOSE_FRAME_SENT_BIT | REQUESTED_STOP_BIT | WAKEUP_BIT);
+-    if (xTaskCreatePinnedToCore(esp_websocket_client_task,
++    /* 桌宠固件内部 RAM 紧张：websocket 任务栈放到 PSRAM，避免 Error create websocket task。 */
++    if (xTaskCreatePinnedToCoreWithCaps(esp_websocket_client_task,
+                                         client->config->task_name ? client->config->task_name : "websocket_task",
+                                         client->config->task_stack, client, client->config->task_prio,
+-                                        &client->task_handle, client->config->task_core_id) != pdTRUE) {
++                                        &client->task_handle, client->config->task_core_id,
++                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdTRUE) {
+         ESP_LOGE(TAG, "Error create websocket task");
+         xEventGroupSetBits(client->status_bits, STOPPED_BIT);
+         return ESP_FAIL;

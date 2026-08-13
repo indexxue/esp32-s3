@@ -1,10 +1,10 @@
 /**
- * @file desktop_pet_ui.h
+ * @file ui.h
  * @brief LVGL port on GC9A01：flush / touch / pet_view / GPIO0 debug overlay.
  */
 
-#ifndef DESKTOP_PET_UI_H
-#define DESKTOP_PET_UI_H
+#ifndef UI_H
+#define UI_H
 
 #include "type.h"
 
@@ -25,4 +25,4 @@ void desktop_pet_ui_toggle_debug(void);
 }
 #endif
 
-#endif /* DESKTOP_PET_UI_H */
+#endif /* UI_H */

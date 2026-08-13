@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "width": 96,
+  "height": 96,
+  "needs": {
+    "hunger_decay_s": 6,
+    "mood_decay_s": 8,
+    "energy_decay_s": 10,
+    "energy_recover_s": 2,
+    "feed_hunger": 28,
+    "play_mood": 24,
+    "tap_mood": 4
+  },
+  "clips": [
+    {"id": "idle", "fps": 4, "frames": 2, "color": [74, 163, 200]},
+    {"id": "sleepy", "fps": 2, "frames": 1, "color": [110, 130, 170]},
+    {"id": "eat", "fps": 6, "frames": 2, "color": [90, 190, 120]},
+    {"id": "play", "fps": 8, "frames": 2, "color": [255, 180, 80]},
+    {"id": "sad", "fps": 2, "frames": 1, "color": [90, 90, 140]},
+    {"id": "sleep_loop", "fps": 2, "frames": 1, "color": [70, 90, 140]},
+    {"id": "poke", "fps": 8, "frames": 1, "color": [255, 140, 160]}
+  ]
+}

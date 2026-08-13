@@ -46,6 +46,8 @@ tools/build_pyinstaller/
 
 # LVGL PC simulator (local clone via tools/setup_lvgl_sim.ps1; do not commit)
 tools/lvgl_sim/
+tools/pet_sim/pet_core_smoke.exe
+tools/pet_sim/*.exe
 
 # Local debug / release logs
 project/cmake_out.txt

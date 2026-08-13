@@ -1,10 +1,10 @@
 /**
- * @file desktop_pet_agent.h
+ * @file agent.h
  * @brief 小智兼容 WebSocket 会话（hello + Opus 上行）。
  */
 
-#ifndef DESKTOP_PET_AGENT_H
-#define DESKTOP_PET_AGENT_H
+#ifndef AGENT_H
+#define AGENT_H
 
 #include "type.h"
 
@@ -57,4 +57,4 @@ bool desktop_pet_agent_is_listen_active(void);
 }
 #endif
 
-#endif /* DESKTOP_PET_AGENT_H */
+#endif /* AGENT_H */

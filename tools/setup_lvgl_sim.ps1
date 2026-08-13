@@ -8,6 +8,9 @@
 #   Open tools\lvgl_sim\lv_port_pc_visual_studio\LVGL.sln in Visual Studio
 #   Set LvglWindowsSimulator as startup project → F5
 # Desktop pet panel: set simulator resolution to 240x240 (round GC9A01).
+# Then inject the pet framework:
+#   py -3 tools\pet_pack\pack_build.py
+#   powershell -ExecutionPolicy Bypass -File .\tools\pet_sim\install_into_lvgl_sim.ps1
 #
 # If clone fails with SSL verify errors (common on some Windows/corp nets):
 #   pass -InsecureSsl  (sets GIT_SSL_NO_VERIFY=1 for this download only)

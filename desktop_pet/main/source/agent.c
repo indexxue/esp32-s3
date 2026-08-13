@@ -1,9 +1,9 @@
 /**
- * @file desktop_pet_agent.c
+ * @file agent.c
  * @brief 小智兼容 WS：hello + listen + Opus 二进制上行（Z1-3）。
  */
 
-#include "desktop_pet_agent.h"
+#include "agent.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,8 +22,8 @@
 #include "esp_websocket_client.h"
 #include "esp_wifi.h"
 
-#include "desktop_pet_audio.h"
-#include "desktop_pet_opus.h"
+#include "audio.h"
+#include "pet_opus.h"
 #include "log.h"
 #include "net_wifi.h"
 
@@ -97,7 +97,10 @@ typedef enum {
     AGENT_CMD_LISTEN_STOP,
     AGENT_CMD_TTS_START,
     AGENT_CMD_TTS_STOP,
+    AGENT_CMD_WS_GONE,
 } agent_cmd_t;
+
+static bool s_inited;
 
 static QueueHandle_t agent_queue_create(UBaseType_t len, UBaseType_t item_size)
 {
@@ -642,7 +645,8 @@ static status_t agent_post_cmd(agent_cmd_t cmd)
         return STATUS_OK;
     }
     /* STOP 必须送达：清队列后重投（启停冲突时以停止为准）。 */
-    if (cmd == AGENT_CMD_LISTEN_STOP || cmd == AGENT_CMD_TTS_STOP || cmd == AGENT_CMD_SESSION_TOGGLE) {
+    if (cmd == AGENT_CMD_LISTEN_STOP || cmd == AGENT_CMD_TTS_STOP || cmd == AGENT_CMD_SESSION_TOGGLE ||
+        cmd == AGENT_CMD_WS_GONE) {
         xQueueReset(s_cmd_q);
         if (xQueueSend(s_cmd_q, &cmd, 0) == pdTRUE) {
             return STATUS_OK;
@@ -793,13 +797,12 @@ static void agent_ws_event(void *handler_args, esp_event_base_t base, int32_t ev
         if (data->op_code == WS_TRANSPORT_OPCODES_TEXT) {
             agent_handle_text(data->data_ptr, data->data_len);
         } else if (data->op_code == WS_TRANSPORT_OPCODES_BINARY) {
-            /* 仅完整帧；分片暂忽略（buffer 足够时通常一整包）。 */
+            /* 仅完整帧入队；分片无拼包缓冲，丢弃避免坏 Opus。 */
             if (data->payload_offset == 0 && data->data_len == data->payload_len) {
                 agent_enqueue_opus((const uint8_t *)data->data_ptr, data->data_len);
-            } else if (data->payload_len > 0 && data->payload_offset + data->data_len >= data->payload_len) {
-                /* 最后一片且无拼包缓冲：丢弃不完整包，避免坏 Opus。 */
-            } else if (data->payload_offset == 0) {
-                agent_enqueue_opus((const uint8_t *)data->data_ptr, data->data_len);
+            } else if (data->payload_len > 0) {
+                LOG_WARN("agent: drop fragmented opus off=%d chunk=%d total=%d", data->payload_offset,
+                         data->data_len, data->payload_len);
             }
         }
         break;
@@ -816,13 +819,8 @@ static void agent_ws_event(void *handler_args, esp_event_base_t base, int32_t ev
             (void)xEventGroupSetBits(s_events, AGENT_FAIL_BIT);
         } else if (s_state == DESKTOP_PET_AGENT_STATE_OPEN || s_state == DESKTOP_PET_AGENT_STATE_LISTENING ||
                    s_state == DESKTOP_PET_AGENT_STATE_SPEAKING) {
-            (void)desktop_pet_audio_stream_stop();
-            (void)desktop_pet_audio_playout_stop();
-            desktop_pet_opus_enc_deinit();
-            desktop_pet_opus_dec_deinit();
-            agent_set_state(DESKTOP_PET_AGENT_STATE_IDLE);
-            s_session_id[0] = '\0';
-            LOG_INFO("agent: session IDLE (ws gone)");
+            /* 停 I2S/Opus 必须在 worker，禁止在 WS 任务里直接 teardown。 */
+            (void)agent_post_cmd(AGENT_CMD_WS_GONE);
         }
         break;
 
@@ -1027,6 +1025,15 @@ static void agent_worker_task(void *arg)
             agent_tts_stop();
             break;
 
+        case AGENT_CMD_WS_GONE:
+            agent_stop_uplink();
+            agent_stop_downlink();
+            s_session_id[0] = '\0';
+            s_hello_sent = false;
+            agent_set_state(DESKTOP_PET_AGENT_STATE_IDLE);
+            LOG_INFO("agent: session IDLE (ws gone)");
+            break;
+
         default:
             break;
         }
@@ -1035,10 +1042,36 @@ static void agent_worker_task(void *arg)
     }
 }
 
+static void agent_init_teardown(void)
+{
+    if (s_cmd_q != NULL) {
+        vQueueDelete(s_cmd_q);
+        s_cmd_q = NULL;
+    }
+    if (s_events != NULL) {
+        vEventGroupDelete(s_events);
+        s_events = NULL;
+    }
+    if (s_ws_tx_lock != NULL) {
+        vSemaphoreDelete(s_ws_tx_lock);
+        s_ws_tx_lock = NULL;
+    }
+    if (s_lock != NULL) {
+        vSemaphoreDelete(s_lock);
+        s_lock = NULL;
+    }
+    s_inited = false;
+}
+
 status_t desktop_pet_agent_init(void)
 {
-    if (s_lock != NULL) {
+    if (s_inited) {
         return STATUS_OK;
+    }
+
+    /* 上次半初始化留下的句柄：清掉再重试。 */
+    if (s_lock != NULL || s_ws_tx_lock != NULL || s_events != NULL || s_cmd_q != NULL) {
+        agent_init_teardown();
     }
 
     s_lock = xSemaphoreCreateMutex();
@@ -1046,17 +1079,20 @@ status_t desktop_pet_agent_init(void)
     s_events = xEventGroupCreate();
     s_cmd_q = xQueueCreate(8, sizeof(agent_cmd_t));
     if (s_lock == NULL || s_ws_tx_lock == NULL || s_events == NULL || s_cmd_q == NULL) {
+        agent_init_teardown();
         return STATUS_NO_MEM;
     }
 
     if (xTaskCreate(agent_worker_task, "pet_agent", AGENT_TASK_STACK_BYTES, NULL, AGENT_TASK_PRIORITY, NULL) !=
         pdPASS) {
         LOG_ERROR("agent: worker create failed");
+        agent_init_teardown();
         return STATUS_FAIL;
     }
 
     agent_fill_ids();
     agent_set_state(DESKTOP_PET_AGENT_STATE_IDLE);
+    s_inited = true;
     LOG_INFO("agent: init uri=%s", CONFIG_DESKTOP_PET_AGENT_WS_URI);
     return STATUS_OK;
 }

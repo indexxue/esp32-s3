@@ -1,13 +1,13 @@
 /**
- * @file desktop_pet_ui.c
+ * @file ui.c
  * @brief LVGL port: GC9A01 flush, IT7259, pet_view, GPIO0 debug Rec/Play overlay.
  */
 
-#include "desktop_pet_ui.h"
+#include "ui.h"
 
+#include "agent.h"
+#include "audio.h"
 #include "board.h"
-#include "desktop_pet_agent.h"
-#include "desktop_pet_audio.h"
 #include "gc9a01.h"
 #include "i2c.h"
 #include "it7259.h"
@@ -89,6 +89,11 @@ static void *ui_alloc_buf(size_t nbytes)
 static void *ui_alloc_psram(size_t nbytes)
 {
     return ui_alloc_buf(nbytes);
+}
+
+static void ui_free_psram(void *p)
+{
+    heap_caps_free(p);
 }
 
 #if DESKTOP_PET_ENABLE_TOUCH
@@ -456,6 +461,9 @@ static void ui_intent_hook(const pet_intent_t *in)
         } else {
             led_scene_run(LED_SCENE_ID_TRIGGER);
         }
+    } else if (in->id == PET_INTENT_MOTOR || in->id == PET_INTENT_SFX) {
+        /* 量产路径暂未接 TB6612 / 音效；显式吞掉避免误以为已驱动。 */
+        (void)in;
     }
 }
 
@@ -663,7 +671,7 @@ static void ui_screen_pet_create(void)
         pet_core_init(NULL);
         LOG_WARN("pet pack missing (%s); fallback body", pet_fs_root());
     }
-    pet_view_set_alloc(ui_alloc_psram, free);
+    pet_view_set_alloc(ui_alloc_psram, ui_free_psram);
     pet_view_set_intent_hook(ui_intent_hook);
     pet_view_create(scr);
     ui_debug_overlay_create(scr);
@@ -728,12 +736,20 @@ status_t desktop_pet_ui_start(void)
     s_buf2 = (uint8_t *)ui_alloc_buf(buf_bytes);
     if ((s_buf1 == NULL) || (s_buf2 == NULL)) {
         LOG_ERROR("desktop_pet_ui: draw buffer alloc failed (%u bytes each)", (unsigned)buf_bytes);
+        heap_caps_free(s_buf1);
+        heap_caps_free(s_buf2);
+        s_buf1 = NULL;
+        s_buf2 = NULL;
         return STATUS_FAIL;
     }
 
     s_disp = lv_display_create(UI_HOR_RES, UI_VER_RES);
     if (s_disp == NULL) {
         LOG_ERROR("desktop_pet_ui: lv_display_create failed");
+        heap_caps_free(s_buf1);
+        heap_caps_free(s_buf2);
+        s_buf1 = NULL;
+        s_buf2 = NULL;
         return STATUS_FAIL;
     }
 
@@ -760,23 +776,27 @@ status_t desktop_pet_ui_start(void)
 
     if (esp_timer_create(&tick_args, &s_tick_timer) != ESP_OK) {
         LOG_ERROR("desktop_pet_ui: tick timer create failed");
+        s_tick_timer = NULL;
         return STATUS_FAIL;
     }
     if (esp_timer_start_periodic(s_tick_timer, UI_TICK_PERIOD_MS * 1000ULL) != ESP_OK) {
         LOG_ERROR("desktop_pet_ui: tick timer start failed");
+        (void)esp_timer_delete(s_tick_timer);
+        s_tick_timer = NULL;
         return STATUS_FAIL;
     }
 
-#if DESKTOP_PET_ENABLE_AUDIO
-    if (desktop_pet_audio_init() != STATUS_OK) {
-        LOG_WARN("desktop_pet_audio_init failed (Rec button limited)");
-    }
-#endif
+    /* audio 在 start.c 独立初始化，避免 LCD 失败时会话无麦。 */
 
     ui_screen_pet_create();
 
     if (xTaskCreate(ui_task, "pet_ui", UI_TASK_STACK_WORDS, NULL, UI_TASK_PRIORITY, NULL) != pdPASS) {
         LOG_ERROR("desktop_pet_ui: task create failed");
+        if (s_tick_timer != NULL) {
+            (void)esp_timer_stop(s_tick_timer);
+            (void)esp_timer_delete(s_tick_timer);
+            s_tick_timer = NULL;
+        }
         return STATUS_FAIL;
     }
 
