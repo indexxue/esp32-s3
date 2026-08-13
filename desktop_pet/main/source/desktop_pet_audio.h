@@ -48,6 +48,31 @@ const int16_t *desktop_pet_audio_pcm_data(void);
  */
 status_t desktop_pet_audio_save_to_sd(char *out_path, size_t out_path_len);
 
+/**
+ * 流式采音（Z1-3）：与 debug Rec/Play 互斥。
+ * 不写 PSRAM 大缓冲；由调用方周期性 `stream_read_mono`。
+ */
+status_t desktop_pet_audio_stream_start(void);
+status_t desktop_pet_audio_stream_stop(void);
+bool desktop_pet_audio_is_streaming(void);
+
+/**
+ * 读 mono PCM（已选声道 + 去直流）。
+ * @param out 输出缓冲
+ * @param samples 期望样点数
+ * @param timeout_ms I2S 读超时
+ * @param out_got 实际得到样点数（可 NULL）
+ */
+status_t desktop_pet_audio_stream_read_mono(int16_t *out, size_t samples, uint32_t timeout_ms, size_t *out_got);
+
+/**
+ * 流式播放（Z1-4）：与 Rec/stream 互斥。调用方写入 mono PCM。
+ */
+status_t desktop_pet_audio_playout_start(void);
+status_t desktop_pet_audio_playout_stop(void);
+bool desktop_pet_audio_is_playouting(void);
+status_t desktop_pet_audio_playout_write_mono(const int16_t *pcm, size_t samples, uint32_t timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif

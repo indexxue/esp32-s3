@@ -1,0 +1,7 @@
+# Apply after Component Manager refreshes managed_components:
+#   cd desktop_pet
+#   git apply --directory=managed_components/espressif__esp_websocket_client patches/esp_websocket_client_psram_stack.patch
+# Or re-do the two edits in esp_websocket_client.c:
+#   1) include freertos/idf_additions.h + esp_heap_caps.h
+#   2) xTaskCreatePinnedToCore -> xTaskCreatePinnedToCoreWithCaps(..., MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)
+#   3) vTaskDelete(NULL) at task end -> vTaskDeleteWithCaps(NULL)

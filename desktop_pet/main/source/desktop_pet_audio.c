@@ -20,6 +20,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -50,6 +51,11 @@ static bool s_ready;
 static bool s_recording;
 static bool s_playing;
 static bool s_paused;
+static bool s_streaming;
+static bool s_playouting;
+static int s_stream_use_right; /* -1 unknown, 0 L, 1 R */
+static uint64_t s_stream_energy_l;
+static uint64_t s_stream_energy_r;
 static size_t s_play_pos_samples;
 static TaskHandle_t s_rec_task;
 static TaskHandle_t s_play_task;
@@ -121,6 +127,62 @@ static void audio_pa_set(bool on)
     (void)GpioWritePin((s32_t)BOARD_DESKTOP_PET_PA_EN_PIN, level);
 }
 
+/**
+ * 全双工口：停采后若 RX 仍开着却无人读，DMA 溢出会拖死控制器（TX 写返回 OK 但无声）。
+ * 播放时关 RX；采音时开 RX。用标志避免重复 enable/disable（IDF 会打 E 日志）。
+ */
+static bool s_i2s_rx_on;
+
+static void audio_i2s_rx_set(bool on)
+{
+    esp_err_t err;
+
+    if (s_i2s_rx == NULL || s_i2s_rx_on == on) {
+        return;
+    }
+    if (on) {
+        err = i2s_channel_enable(s_i2s_rx);
+    } else {
+        err = i2s_channel_disable(s_i2s_rx);
+    }
+    if (err == ESP_OK) {
+        s_i2s_rx_on = on;
+    } else if (err == ESP_ERR_INVALID_STATE) {
+        /* 与硬件不同步时以目标状态为准，避免卡死。 */
+        s_i2s_rx_on = on;
+    } else {
+        LOG_WARN("audio: rx %s failed: %s", on ? "enable" : "disable", esp_err_to_name(err));
+    }
+}
+
+static void audio_i2s_prepare_playback(void)
+{
+    esp_err_t err;
+
+    /* 只关 RX，不要动 TX：关掉 TX 会断 MCLK，听写后的 TTS 容易假写无声。 */
+    audio_i2s_rx_set(false);
+    if (s_i2s_tx == NULL) {
+        return;
+    }
+    err = i2s_channel_enable(s_i2s_tx);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        LOG_WARN("audio: tx enable failed: %s", esp_err_to_name(err));
+    }
+}
+
+static void audio_i2s_prepare_capture(void)
+{
+    esp_err_t err;
+
+    if (s_i2s_tx != NULL) {
+        err = i2s_channel_enable(s_i2s_tx);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            LOG_WARN("audio: tx enable failed: %s", esp_err_to_name(err));
+        }
+    }
+    audio_i2s_rx_set(true);
+}
+
 static void audio_wait_task_end(TaskHandle_t *task)
 {
     int i;
@@ -167,6 +229,8 @@ static status_t audio_i2s_init(void)
     };
 
     chan_cfg.auto_clear = true;
+    chan_cfg.dma_desc_num = 8;
+    chan_cfg.dma_frame_num = 256;
     std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
     if (i2s_new_channel(&chan_cfg, &s_i2s_tx, &s_i2s_rx) != ESP_OK) {
@@ -423,7 +487,10 @@ status_t desktop_pet_audio_init(void)
         LOG_ERROR("audio: i2s RX enable failed");
         return STATUS_FAIL;
     }
+    s_i2s_rx_on = true;
     vTaskDelay(pdMS_TO_TICKS(20));
+    /* 默认关 RX：空闲无人读时溢出会拖死全双工；采音时再开。 */
+    audio_i2s_rx_set(false);
 
     ccfg.write = audio_i2c_write;
     ccfg.write_read = audio_i2c_write_read;
@@ -524,6 +591,14 @@ status_t desktop_pet_audio_record_start(void)
     if (s_recording) {
         return STATUS_OK;
     }
+    if (s_streaming) {
+        LOG_WARN("audio: record blocked, streaming");
+        return STATUS_INVALID_STATE;
+    }
+    if (s_playouting) {
+        LOG_WARN("audio: record blocked, playouting (wait for TTS)");
+        return STATUS_INVALID_STATE;
+    }
     if (desktop_pet_audio_play_stop() != STATUS_OK) {
         LOG_WARN("audio: play_stop before record failed");
     }
@@ -543,6 +618,7 @@ status_t desktop_pet_audio_record_start(void)
     }
     (void)es8311_set_mic_gain(&s_codec, AUDIO_MIC_GAIN_STEPS);
     (void)es8311_set_adc_volume(&s_codec, AUDIO_ADC_VOLUME_REG);
+    audio_i2s_prepare_capture();
     vTaskDelay(pdMS_TO_TICKS(50));
     audio_es8311_dump_regs();
 
@@ -585,7 +661,8 @@ status_t desktop_pet_audio_record_stop(void)
     audio_wait_task_end(&s_rec_task);
 
     (void)es8311_stop(&s_codec);
-    /* I2S 保持使能，维持 MCLK。 */
+    audio_i2s_rx_set(false);
+    /* TX 保持使能，维持 MCLK。 */
 
     LOG_INFO("audio: record stop, samples=%u (%.2fs)",
              (unsigned)s_pcm_len_samples,
@@ -638,6 +715,10 @@ status_t desktop_pet_audio_play_start(void)
         LOG_WARN("audio: play ignored, recording");
         return STATUS_FAIL;
     }
+    if (s_streaming || s_playouting) {
+        LOG_WARN("audio: play ignored, stream=%d playout=%d", (int)s_streaming, (int)s_playouting);
+        return STATUS_FAIL;
+    }
 
     if (s_playing && s_paused) {
         audio_pa_set(true);
@@ -661,6 +742,8 @@ status_t desktop_pet_audio_play_start(void)
 
     s_play_pos_samples = 0U;
     s_paused = false;
+
+    audio_i2s_prepare_playback();
 
     if (es8311_set_mode(&s_codec, ES8311_MODE_PLAYBACK) != ES8311_OK) {
         return STATUS_FAIL;
@@ -802,6 +885,270 @@ status_t desktop_pet_audio_save_to_sd(char *out_path, size_t out_path_len)
     LOG_INFO("audio: saved %s (%u bytes pcm)", path, (unsigned)pcm_bytes);
     if ((out_path != NULL) && (out_path_len > 0U)) {
         (void)snprintf(out_path, out_path_len, "%s", path);
+    }
+    return STATUS_OK;
+}
+
+status_t desktop_pet_audio_stream_start(void)
+{
+    int16_t drain[256];
+    int16_t warm[320 * 2];
+    int d;
+    size_t warm_need;
+    size_t warm_got = 0U;
+
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (s_streaming) {
+        return STATUS_OK;
+    }
+    if (s_recording || s_playing || s_playouting) {
+        LOG_WARN("audio: stream blocked, rec=%d play=%d playout=%d", (int)s_recording, (int)s_playing,
+                 (int)s_playouting);
+        return STATUS_INVALID_STATE;
+    }
+
+    if (es8311_set_mode(&s_codec, ES8311_MODE_CAPTURE) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    if (es8311_start(&s_codec) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    (void)es8311_set_mic_gain(&s_codec, AUDIO_MIC_GAIN_STEPS);
+    (void)es8311_set_adc_volume(&s_codec, AUDIO_ADC_VOLUME_REG);
+    audio_i2s_prepare_capture();
+    vTaskDelay(pdMS_TO_TICKS(30));
+
+    for (d = 0; d < 4; d++) {
+        size_t nbytes = 0U;
+        (void)i2s_channel_read(s_i2s_rx, drain, sizeof(drain), &nbytes, pdMS_TO_TICKS(40));
+    }
+
+    s_hpf_x1 = 0;
+    s_hpf_y1 = 0;
+    s_stream_use_right = -1;
+    s_stream_energy_l = 0U;
+    s_stream_energy_r = 0U;
+    warm_need = ((size_t)DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ * 80U) / 1000U;
+
+    while (warm_got < warm_need) {
+        size_t nbytes = 0U;
+        size_t frames;
+        size_t i;
+        size_t ask = warm_need - warm_got;
+
+        if (ask > 320U) {
+            ask = 320U;
+        }
+        if (i2s_channel_read(s_i2s_rx, warm, ask * 2U * sizeof(int16_t), &nbytes, pdMS_TO_TICKS(200)) != ESP_OK) {
+            break;
+        }
+        frames = nbytes / (sizeof(int16_t) * 2U);
+        for (i = 0U; i < frames; i++) {
+            const int16_t l = warm[i * 2U];
+            const int16_t r = warm[i * 2U + 1U];
+            const int32_t al = (l < 0) ? -(int32_t)l : (int32_t)l;
+            const int32_t ar = (r < 0) ? -(int32_t)r : (int32_t)r;
+
+            s_stream_energy_l += (uint64_t)al;
+            s_stream_energy_r += (uint64_t)ar;
+            warm_got++;
+        }
+    }
+
+    s_stream_use_right = (s_stream_energy_r > s_stream_energy_l) ? 1 : 0;
+    s_streaming = true;
+    LOG_INFO("audio: stream start channel=%s", s_stream_use_right ? "R" : "L");
+    return STATUS_OK;
+}
+
+status_t desktop_pet_audio_stream_stop(void)
+{
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (!s_streaming) {
+        return STATUS_OK;
+    }
+
+    s_streaming = false;
+    (void)es8311_stop(&s_codec);
+    /* 停采后立刻关 RX，避免无人读导致 DMA 溢出拖死 TX。 */
+    audio_i2s_rx_set(false);
+    LOG_INFO("audio: stream stop");
+    return STATUS_OK;
+}
+
+bool desktop_pet_audio_is_streaming(void)
+{
+    return s_streaming;
+}
+
+status_t desktop_pet_audio_stream_read_mono(int16_t *out, size_t samples, uint32_t timeout_ms, size_t *out_got)
+{
+    static int16_t s_stereo[AUDIO_CHUNK_SAMPLES * 2U];
+    size_t nbytes = 0U;
+    size_t frames;
+    size_t i;
+    size_t got = 0U;
+    size_t ask = samples;
+    esp_err_t err;
+
+    if (out_got != NULL) {
+        *out_got = 0U;
+    }
+    if (!s_ready || !s_streaming || out == NULL || samples == 0U) {
+        return STATUS_INVALID_ARG;
+    }
+    /* 与 debug Rec 相同块大小，避免一次读过大导致 I2S 超时。 */
+    if (ask > AUDIO_CHUNK_SAMPLES) {
+        ask = AUDIO_CHUNK_SAMPLES;
+    }
+
+    err = i2s_channel_read(s_i2s_rx, s_stereo, ask * 2U * sizeof(int16_t), &nbytes,
+                           pdMS_TO_TICKS(timeout_ms));
+    if (err != ESP_OK) {
+        return STATUS_TIMEOUT;
+    }
+    frames = nbytes / (sizeof(int16_t) * 2U);
+    if (frames > ask) {
+        frames = ask;
+    }
+
+    for (i = 0U; i < frames; i++) {
+        const int16_t l = s_stereo[i * 2U];
+        const int16_t r = s_stereo[i * 2U + 1U];
+        const int16_t sample = (s_stream_use_right != 0) ? r : l;
+
+        out[got++] = audio_dc_block(sample);
+    }
+
+    if (out_got != NULL) {
+        *out_got = got;
+    }
+    return (got > 0U) ? STATUS_OK : STATUS_FAIL;
+}
+
+status_t desktop_pet_audio_playout_start(void)
+{
+    uint8_t dac_vol = 0U;
+    uint8_t sdp_in = 0U;
+
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (s_playouting) {
+        return STATUS_OK;
+    }
+    if (s_recording || s_playing || s_streaming) {
+        LOG_WARN("audio: playout blocked, rec=%d play=%d stream=%d", (int)s_recording, (int)s_playing,
+                 (int)s_streaming);
+        return STATUS_INVALID_STATE;
+    }
+
+    audio_i2s_prepare_playback();
+
+    /* 强制停一下再起，避免 listen 后 running 状态导致 start 空操作。 */
+    (void)es8311_stop(&s_codec);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    if (es8311_set_mode(&s_codec, ES8311_MODE_PLAYBACK) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    if (es8311_start(&s_codec) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    (void)es8311_set_dac_volume(&s_codec, AUDIO_DAC_VOLUME_REG);
+    audio_pa_set(true);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    (void)es8311_read_reg(&s_codec, 0x32U, &dac_vol);
+    (void)es8311_read_reg(&s_codec, 0x09U, &sdp_in);
+    s_playouting = true;
+    LOG_INFO("audio: playout start dac=0x%02X sdp09=0x%02X", (unsigned)dac_vol, (unsigned)sdp_in);
+    return STATUS_OK;
+}
+
+status_t desktop_pet_audio_playout_stop(void)
+{
+    if (!s_ready) {
+        return STATUS_FAIL;
+    }
+    if (!s_playouting) {
+        return STATUS_OK;
+    }
+
+    s_playouting = false;
+    audio_pa_set(false);
+    (void)es8311_stop(&s_codec);
+    LOG_INFO("audio: playout stop");
+    return STATUS_OK;
+}
+
+bool desktop_pet_audio_is_playouting(void)
+{
+    return s_playouting;
+}
+
+status_t desktop_pet_audio_playout_write_mono(const int16_t *pcm, size_t samples, uint32_t timeout_ms)
+{
+    static int16_t s_stereo[AUDIO_CHUNK_SAMPLES * 2U];
+    static uint32_t s_write_frames;
+    size_t left = samples;
+    size_t off = 0U;
+    int32_t peak = 0;
+
+    if (!s_ready || !s_playouting || pcm == NULL || samples == 0U) {
+        return STATUS_INVALID_ARG;
+    }
+
+    for (size_t p = 0U; p < samples; p++) {
+        int32_t a = (pcm[p] < 0) ? -(int32_t)pcm[p] : (int32_t)pcm[p];
+
+        if (a > peak) {
+            peak = a;
+        }
+    }
+
+    while (left > 0U) {
+        size_t chunk = left;
+        size_t i;
+        size_t nbytes = 0U;
+        size_t want;
+        int retry;
+        esp_err_t err = ESP_FAIL;
+
+        if (chunk > AUDIO_CHUNK_SAMPLES) {
+            chunk = AUDIO_CHUNK_SAMPLES;
+        }
+        want = chunk * 2U * sizeof(int16_t);
+        for (i = 0U; i < chunk; i++) {
+            const int16_t s = pcm[off + i];
+
+            s_stereo[i * 2U] = s;
+            s_stereo[i * 2U + 1U] = s;
+        }
+        for (retry = 0; retry < 3; retry++) {
+            nbytes = 0U;
+            err = i2s_channel_write(s_i2s_tx, s_stereo, want, &nbytes, pdMS_TO_TICKS(timeout_ms));
+            if (err == ESP_OK && nbytes == want) {
+                break;
+            }
+        }
+        if (err != ESP_OK || nbytes != want) {
+            LOG_WARN("audio: playout write fail err=%s nbytes=%u/%u", esp_err_to_name(err), (unsigned)nbytes,
+                     (unsigned)want);
+            return STATUS_TIMEOUT;
+        }
+        off += chunk;
+        left -= chunk;
+    }
+
+    s_write_frames++;
+    if (s_write_frames <= 3U || (s_write_frames % 40U) == 0U) {
+        LOG_INFO("audio: playout pcm frames=%u samples=%u peak=%d", (unsigned)s_write_frames, (unsigned)samples,
+                 (int)peak);
     }
     return STATUS_OK;
 }

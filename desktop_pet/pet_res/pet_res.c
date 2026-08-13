@@ -1,0 +1,207 @@
+/**
+ * @file pet_res.c
+ * @brief Parse PETP pack.bin and RGBH frames. No JSON on device.
+ */
+
+#include "pet_res.h"
+
+#include "pet_fs.h"
+
+#include <string.h>
+
+#define PET_PACK_HDR_SIZE (20U)
+#define PET_RGBH_HDR_SIZE (12U)
+
+typedef struct {
+    uint8_t frame_count;
+    uint8_t fps;
+    char names[PET_RES_MAX_FRAMES][PET_RES_NAME_LEN];
+} pet_res_clip_t;
+
+static bool s_loaded;
+static pet_needs_cfg_t s_cfg;
+static pet_res_clip_t s_clips[PET_CLIP_COUNT];
+
+static uint16_t rd_u16(const uint8_t *p)
+{
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+static uint32_t rd_u32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+void pet_res_unload(void)
+{
+    (void)memset(s_clips, 0, sizeof(s_clips));
+    s_loaded = false;
+}
+
+bool pet_res_is_loaded(void)
+{
+    return s_loaded;
+}
+
+const pet_needs_cfg_t *pet_res_needs_cfg(void)
+{
+    return s_loaded ? &s_cfg : pet_core_default_cfg();
+}
+
+uint8_t pet_res_clip_frame_count(pet_clip_id_t clip)
+{
+    if (!s_loaded || (clip >= PET_CLIP_COUNT)) {
+        return 0U;
+    }
+    return s_clips[clip].frame_count;
+}
+
+uint8_t pet_res_clip_fps(pet_clip_id_t clip)
+{
+    if (!s_loaded || (clip >= PET_CLIP_COUNT)) {
+        return 0U;
+    }
+    return s_clips[clip].fps;
+}
+
+bool pet_res_load(void)
+{
+    uint8_t hdr[PET_PACK_HDR_SIZE];
+    FILE *fp;
+    uint16_t ver;
+    uint8_t clip_count;
+    uint8_t i;
+    uint8_t c;
+
+    pet_res_unload();
+    fp = pet_fs_open_read("pack.bin");
+    if (fp == NULL) {
+        return false;
+    }
+    if (fread(hdr, 1U, PET_PACK_HDR_SIZE, fp) != PET_PACK_HDR_SIZE) {
+        (void)fclose(fp);
+        return false;
+    }
+    if (memcmp(hdr, "PETP", 4) != 0) {
+        (void)fclose(fp);
+        return false;
+    }
+    ver = rd_u16(&hdr[4]);
+    if (ver != 1U) {
+        (void)fclose(fp);
+        return false;
+    }
+    s_cfg.hunger_decay_s = rd_u16(&hdr[8]);
+    s_cfg.mood_decay_s = rd_u16(&hdr[10]);
+    s_cfg.energy_decay_s = rd_u16(&hdr[12]);
+    s_cfg.energy_recover_s = rd_u16(&hdr[14]);
+    s_cfg.feed_hunger = hdr[16];
+    s_cfg.play_mood = hdr[17];
+    s_cfg.tap_mood = hdr[18];
+    clip_count = hdr[19];
+    if (clip_count > PET_RES_MAX_CLIPS) {
+        (void)fclose(fp);
+        return false;
+    }
+
+    for (i = 0U; i < clip_count; i++) {
+        uint8_t meta[4];
+        uint8_t clip_id;
+        uint8_t frames;
+        uint8_t fps;
+        uint8_t f;
+
+        if (fread(meta, 1U, 4U, fp) != 4U) {
+            (void)fclose(fp);
+            pet_res_unload();
+            return false;
+        }
+        clip_id = meta[0];
+        frames = meta[1];
+        fps = meta[2];
+        if ((clip_id >= PET_CLIP_COUNT) || (frames > PET_RES_MAX_FRAMES) || (frames == 0U)) {
+            (void)fclose(fp);
+            pet_res_unload();
+            return false;
+        }
+        s_clips[clip_id].frame_count = frames;
+        s_clips[clip_id].fps = (fps == 0U) ? 4U : fps;
+        for (f = 0U; f < frames; f++) {
+            if (fread(s_clips[clip_id].names[f], 1U, PET_RES_NAME_LEN, fp) != PET_RES_NAME_LEN) {
+                (void)fclose(fp);
+                pet_res_unload();
+                return false;
+            }
+            s_clips[clip_id].names[f][PET_RES_NAME_LEN - 1U] = '\0';
+        }
+    }
+    (void)fclose(fp);
+
+    /* Need at least idle so the body layer can run. */
+    if (s_clips[PET_CLIP_IDLE].frame_count == 0U) {
+        pet_res_unload();
+        return false;
+    }
+    for (c = 0U; c < (uint8_t)PET_CLIP_COUNT; c++) {
+        if (s_clips[c].frame_count == 0U) {
+            s_clips[c] = s_clips[PET_CLIP_IDLE];
+        }
+    }
+    s_loaded = true;
+    return true;
+}
+
+bool pet_res_load_frame(pet_clip_id_t clip, uint8_t frame_index,
+                        uint16_t *pixels, uint32_t pixel_cap,
+                        uint16_t *w, uint16_t *h)
+{
+    uint8_t hdr[PET_RGBH_HDR_SIZE];
+    FILE *fp;
+    uint16_t fw;
+    uint16_t fh;
+    uint32_t flags;
+    uint32_t need;
+    size_t got;
+    const char *rel;
+
+    if ((pixels == NULL) || (w == NULL) || (h == NULL) || !s_loaded) {
+        return false;
+    }
+    if ((clip >= PET_CLIP_COUNT) || (frame_index >= s_clips[clip].frame_count)) {
+        return false;
+    }
+    rel = s_clips[clip].names[frame_index];
+    fp = pet_fs_open_read(rel);
+    if (fp == NULL) {
+        return false;
+    }
+    if (fread(hdr, 1U, PET_RGBH_HDR_SIZE, fp) != PET_RGBH_HDR_SIZE) {
+        (void)fclose(fp);
+        return false;
+    }
+    if (memcmp(hdr, "RGBH", 4) != 0) {
+        (void)fclose(fp);
+        return false;
+    }
+    fw = rd_u16(&hdr[4]);
+    fh = rd_u16(&hdr[6]);
+    flags = rd_u32(&hdr[8]);
+    if ((fw == 0U) || (fh == 0U) || (fw > PET_RES_FRAME_MAX_W) || (fh > PET_RES_FRAME_MAX_H) ||
+        (flags != 0U)) {
+        (void)fclose(fp);
+        return false;
+    }
+    need = (uint32_t)fw * (uint32_t)fh;
+    if (need > pixel_cap) {
+        (void)fclose(fp);
+        return false;
+    }
+    got = fread(pixels, 2U, (size_t)need, fp);
+    (void)fclose(fp);
+    if (got != (size_t)need) {
+        return false;
+    }
+    *w = fw;
+    *h = fh;
+    return true;
+}

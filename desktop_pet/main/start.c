@@ -13,10 +13,13 @@
 #include "board.h"
 #include "button.h"
 #include "device_profile.h"
+#include "desktop_pet_agent.h"
 #include "desktop_pet_ui.h"
+#include "esp_system.h"
 #include "flexible_button.h"
 #include "led_scene.h"
 #include "log.h"
+#include "net_wifi.h"
 #include "nvs.h"
 #include "ota.h"
 
@@ -34,6 +37,44 @@
 #define WEB_CTRL_BOOT_TASK_STACK_WORDS (10240U)
 #define WEB_CTRL_BOOT_TASK_PRIORITY (3U)
 #endif
+
+#define WIFI_REPROV_REBOOT_DELAY_MS (500U)
+#define WIFI_REPROV_REBOOT_TASK_STACK_WORDS (2048U)
+#define WIFI_REPROV_REBOOT_TASK_PRIORITY (5U)
+
+static volatile bool s_wifi_reprov_pending;
+
+static void wifi_reprov_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(WIFI_REPROV_REBOOT_DELAY_MS));
+    esp_restart();
+}
+
+static void app_wifi_reprovision_from_button(void)
+{
+    if (s_wifi_reprov_pending) {
+        return;
+    }
+    s_wifi_reprov_pending = true;
+
+    LOG_INFO("BTN double-click: clear STA credentials, SoftAP reprovision");
+    if (device_profile_platform_wants(DEVICE_PLATFORM_MASK_LED)) {
+        led_scene_run(LED_SCENE_ID_PAIRING);
+    }
+
+    (void)net_wifi_sta_disconnect();
+    if (!nvs_web_ctrl_settings_clear_sta_credentials()) {
+        LOG_ERROR("clear STA credentials failed");
+        s_wifi_reprov_pending = false;
+        return;
+    }
+
+    if (xTaskCreate(wifi_reprov_reboot_task, "wifi_rb", WIFI_REPROV_REBOOT_TASK_STACK_WORDS, NULL,
+                    WIFI_REPROV_REBOOT_TASK_PRIORITY, NULL) != pdPASS) {
+        esp_restart();
+    }
+}
 
 static void app_idle_default(void)
 {
@@ -88,13 +129,11 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
 
     switch (event) {
     case BTN_EVENT_SINGLE_CLICK:
-        LOG_INFO("BTN single-click (hook app action here)");
+        LOG_INFO("BTN single-click: toggle debug overlay");
+        desktop_pet_ui_toggle_debug();
         break;
     case BTN_EVENT_DOUBLE_CLICK:
-        LOG_INFO("BTN double-click (hook WiFi reprovision here)");
-        break;
-    case BTN_EVENT_LONG_PRESS:
-        LOG_INFO("BTN long-press (hook slot switch here)");
+        app_wifi_reprovision_from_button();
         break;
     default:
         break;
@@ -219,6 +258,10 @@ static status_t app_init(void)
         LOG_WARN("desktop_pet_ui_start failed");
     }
 #endif
+
+    if (desktop_pet_agent_init() != STATUS_OK) {
+        LOG_WARN("desktop_pet_agent_init failed");
+    }
 
     LOG_INFO("%s ready lcd=%d touch=%d imu=%d audio=%d motor=%d sd=%d (platform_mask=0x%02lX)",
              product->name,

@@ -1,17 +1,24 @@
 /**
  * @file desktop_pet_ui.c
- * @brief LVGL → GC9A01 + IT7259 触摸；第一页 owo + pet。
+ * @brief LVGL port: GC9A01 flush, IT7259, pet_view, GPIO0 debug Rec/Play overlay.
  */
 
 #include "desktop_pet_ui.h"
 
 #include "board.h"
+#include "desktop_pet_agent.h"
 #include "desktop_pet_audio.h"
 #include "gc9a01.h"
 #include "i2c.h"
 #include "it7259.h"
+#include "led_scene.h"
 #include "log.h"
 #include "net_wifi.h"
+#include "pet_core.h"
+#include "pet_fs.h"
+#include "pet_res.h"
+#include "pet_view.h"
+#include "qmi8658a.h"
 #include "type.h"
 
 #include "esp_heap_caps.h"
@@ -25,6 +32,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define UI_HOR_RES (240)
 #define UI_VER_RES (240)
@@ -32,10 +41,15 @@
 #define UI_TASK_STACK_WORDS (8192U)
 #define UI_TASK_PRIORITY (4U)
 #define UI_TICK_PERIOD_MS (1U)
-#define UI_ANGLE_PERIOD_MS (100U)
-#define UI_ACCEL_LSB_PER_G (16384.0f)   /* ±2g */
-#define UI_GYRO_LSB_PER_DPS (16.0f)     /* ±2048 dps */
+#define UI_GESTURE_PERIOD_MS (100U)
+#define UI_ACCEL_LSB_PER_G (16384.0f)
+#define UI_GYRO_LSB_PER_DPS (16.0f)
 #define UI_RAD2DEG (57.2957795f)
+#define UI_SHAKE_G (1.85f)
+#define UI_SHAKE_HITS (3U)
+#define UI_SHAKE_COOLDOWN_MS (2000U)
+#define UI_FLIP_G (-0.55f)
+#define UI_FLIP_HITS (10U)
 
 static lv_display_t *s_disp;
 static lv_indev_t *s_indev;
@@ -43,16 +57,39 @@ static uint8_t *s_buf1;
 static uint8_t *s_buf2;
 static esp_timer_handle_t s_tick_timer;
 static bool s_started;
+static lv_obj_t *s_debug;
 static lv_obj_t *s_lbl_roll;
 static lv_obj_t *s_lbl_pitch;
 static lv_obj_t *s_lbl_yaw;
 static lv_obj_t *s_lbl_rec;
 static lv_obj_t *s_lbl_ip;
 static lv_obj_t *s_btn_rec_lbl;
+static lv_obj_t *s_btn_talk_lbl;
+static lv_obj_t *s_btn_conn_lbl;
 static float s_yaw_deg;
-static volatile int s_rec_req; /* 0=none 1=start 2=stop */
-static volatile int s_play_req; /* 0=none 1=play/resume 2=pause */
+static volatile int s_rec_req;
+static volatile int s_play_req;
+static volatile int s_debug_req;
+static bool s_debug_on;
 static bool s_play_shown;
+static uint8_t s_shake_hits;
+static uint8_t s_flip_hits;
+static uint32_t s_shake_cool_ms;
+
+static void *ui_alloc_buf(size_t nbytes)
+{
+    void *p = heap_caps_malloc(nbytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+    if (p == NULL) {
+        p = heap_caps_malloc(nbytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    return p;
+}
+
+static void *ui_alloc_psram(size_t nbytes)
+{
+    return ui_alloc_buf(nbytes);
+}
 
 #if DESKTOP_PET_ENABLE_TOUCH
 static it7259_t s_touch;
@@ -140,7 +177,6 @@ static void ui_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
             s_logged_press = false;
         }
     }
-    /* NO_POINT / BUSY：无新报点时保持上次按下态，避免连点丢失 */
 
     data->point.x = s_last_x;
     data->point.y = s_last_y;
@@ -173,7 +209,6 @@ static status_t ui_touch_init(void)
     tcfg.panel_h = UI_VER_RES;
     tcfg.disp_w = UI_HOR_RES;
     tcfg.disp_h = UI_VER_RES;
-    /* 触摸方向按实测不再取反（与显示 MX 分开处理） */
     tcfg.invert_x = false;
     tcfg.invert_y = false;
 
@@ -187,19 +222,6 @@ static status_t ui_touch_init(void)
     return STATUS_OK;
 }
 #endif /* DESKTOP_PET_ENABLE_TOUCH */
-
-static void ui_pet_btn_cb(lv_event_t *e)
-{
-    static unsigned face_i;
-    static const char *const faces[] = {"owo", "^_^", "-_-", "O_O"};
-    lv_obj_t *face = (lv_obj_t *)lv_event_get_user_data(e);
-
-    if (face == NULL) {
-        return;
-    }
-    face_i = (face_i + 1U) % (sizeof(faces) / sizeof(faces[0]));
-    lv_label_set_text(face, faces[face_i]);
-}
 
 static void ui_rec_status_set(const char *text, bool recording)
 {
@@ -227,16 +249,10 @@ static void ui_play_status_set(const char *text, bool playing)
 static void ui_rec_btn_cb(lv_event_t *e)
 {
     (void)e;
-    LOG_INFO("Rec button pressed (audio_ready=%d recording=%d)",
-             desktop_pet_audio_is_ready() ? 1 : 0,
-             desktop_pet_audio_is_recording() ? 1 : 0);
-
     if (!desktop_pet_audio_is_ready()) {
         ui_rec_status_set("Rec: N/A", false);
-        LOG_WARN("Rec ignored: audio not ready");
         return;
     }
-
     if (desktop_pet_audio_is_recording() || (s_rec_req == 1)) {
         s_rec_req = 2;
         ui_rec_status_set("Stopping...", true);
@@ -249,13 +265,6 @@ static void ui_rec_btn_cb(lv_event_t *e)
 static void ui_play_btn_cb(lv_event_t *e)
 {
     (void)e;
-    LOG_INFO("Play button pressed (ready=%d rec=%d play=%d pause=%d pcm=%u)",
-             desktop_pet_audio_is_ready() ? 1 : 0,
-             desktop_pet_audio_is_recording() ? 1 : 0,
-             desktop_pet_audio_is_playing() ? 1 : 0,
-             desktop_pet_audio_is_paused() ? 1 : 0,
-             (unsigned)desktop_pet_audio_pcm_bytes());
-
     if (!desktop_pet_audio_is_ready()) {
         ui_play_status_set("Play: N/A", false);
         return;
@@ -268,7 +277,6 @@ static void ui_play_btn_cb(lv_event_t *e)
         ui_play_status_set("No rec", false);
         return;
     }
-
     s_play_req = 1;
     ui_play_status_set("Starting...", true);
 }
@@ -276,65 +284,103 @@ static void ui_play_btn_cb(lv_event_t *e)
 static void ui_pause_btn_cb(lv_event_t *e)
 {
     (void)e;
-    LOG_INFO("Pause button pressed (play=%d pause=%d)",
-             desktop_pet_audio_is_playing() ? 1 : 0,
-             desktop_pet_audio_is_paused() ? 1 : 0);
-
     if (!desktop_pet_audio_is_playing()) {
         ui_play_status_set("Idle", false);
         return;
     }
-
     s_play_req = 2;
     ui_play_status_set("Pausing...", true);
+}
+
+static void ui_talk_status_set(bool listening)
+{
+    if (s_btn_talk_lbl != NULL) {
+        lv_label_set_text(s_btn_talk_lbl, listening ? "Stop" : "Talk");
+    }
+}
+
+static void ui_conn_status_set(desktop_pet_agent_state_t st)
+{
+    const char *txt = "Conn";
+
+    if (s_btn_conn_lbl == NULL) {
+        return;
+    }
+    switch (st) {
+    case DESKTOP_PET_AGENT_STATE_CONNECTING:
+        txt = "...";
+        break;
+    case DESKTOP_PET_AGENT_STATE_OPEN:
+        txt = "Disc";
+        break;
+    case DESKTOP_PET_AGENT_STATE_LISTENING:
+        txt = "Disc";
+        break;
+    case DESKTOP_PET_AGENT_STATE_SPEAKING:
+        txt = "Disc";
+        break;
+    case DESKTOP_PET_AGENT_STATE_ERROR:
+        txt = "Retry";
+        break;
+    default:
+        txt = "Conn";
+        break;
+    }
+    lv_label_set_text(s_btn_conn_lbl, txt);
 }
 
 static void ui_rec_poll_timer_cb(lv_timer_t *timer)
 {
     char buf[40];
+    desktop_pet_agent_state_t agent_st;
 
     (void)timer;
 
+    agent_st = desktop_pet_agent_get_state();
+    ui_talk_status_set(desktop_pet_agent_is_listen_active());
+    ui_conn_status_set(agent_st);
+
     if (s_rec_req == 1) {
         s_rec_req = 0;
-        if (desktop_pet_audio_record_start() != STATUS_OK) {
+        if (agent_st == DESKTOP_PET_AGENT_STATE_LISTENING || agent_st == DESKTOP_PET_AGENT_STATE_SPEAKING ||
+            desktop_pet_audio_is_playouting() || desktop_pet_audio_is_streaming()) {
+            ui_rec_status_set("Busy", false);
+            LOG_WARN("audio: Rec ignored, agent busy");
+        } else if (desktop_pet_audio_record_start() != STATUS_OK) {
             ui_rec_status_set("Rec fail", false);
             LOG_ERROR("audio record_start failed");
         } else {
             ui_rec_status_set("Recording...", true);
-            LOG_INFO("audio record_start ok");
         }
     } else if (s_rec_req == 2) {
         char path[64];
 
         s_rec_req = 0;
         (void)desktop_pet_audio_record_stop();
-        LOG_INFO("audio record_stop, bytes=%u", (unsigned)desktop_pet_audio_pcm_bytes());
         if (desktop_pet_audio_save_to_sd(path, sizeof(path)) == STATUS_OK) {
-            (void)snprintf(buf, sizeof(buf), "Saved");
-            ui_rec_status_set(buf, false);
+            ui_rec_status_set("Saved", false);
             LOG_INFO("audio saved: %s", path);
         } else {
             (void)snprintf(buf, sizeof(buf), "Idle %uB", (unsigned)desktop_pet_audio_pcm_bytes());
             ui_rec_status_set(buf, false);
-            LOG_WARN("audio save SD failed (card/FAT?)");
         }
     }
 
     if (s_play_req == 1) {
         s_play_req = 0;
-        if (desktop_pet_audio_play_start() != STATUS_OK) {
+        if (agent_st == DESKTOP_PET_AGENT_STATE_LISTENING || agent_st == DESKTOP_PET_AGENT_STATE_SPEAKING ||
+            desktop_pet_audio_is_playouting() || desktop_pet_audio_is_streaming()) {
+            ui_play_status_set("Busy", false);
+            LOG_WARN("audio: Play ignored, agent busy");
+        } else if (desktop_pet_audio_play_start() != STATUS_OK) {
             ui_play_status_set("Play fail", false);
-            LOG_ERROR("audio play_start failed");
         } else {
             ui_play_status_set("Playing", true);
-            LOG_INFO("audio play_start ok");
         }
     } else if (s_play_req == 2) {
         s_play_req = 0;
         (void)desktop_pet_audio_play_pause();
         ui_play_status_set("Paused", true);
-        LOG_INFO("audio play_pause");
     }
 
     if (!desktop_pet_audio_is_ready()) {
@@ -386,28 +432,60 @@ static void ui_ip_timer_cb(lv_timer_t *timer)
     lv_label_set_text(s_lbl_ip, buf);
 }
 
-static void ui_angle_timer_cb(lv_timer_t *timer)
+static void ui_apply_debug_visible(void)
 {
-    char buf[24];
-    qmi8658a_t *imu;
-    int16_t ax, ay, az, gx, gy, gz;
-    float ax_g, ay_g, az_g;
-    float roll, pitch;
-    float dt = (float)UI_ANGLE_PERIOD_MS / 1000.0f;
+    if (s_debug == NULL) {
+        return;
+    }
+    if (s_debug_on) {
+        lv_obj_remove_flag(s_debug, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_debug, LV_OBJ_FLAG_HIDDEN);
+    }
+    LOG_INFO("debug overlay %s", s_debug_on ? "on" : "off");
+}
 
+static void ui_intent_hook(const pet_intent_t *in)
+{
+    if (in == NULL) {
+        return;
+    }
+    if (in->id == PET_INTENT_LED) {
+        if (in->arg0 == 0) {
+            led_scene_run(LED_SCENE_ID_SUCCESS);
+        } else {
+            led_scene_run(LED_SCENE_ID_TRIGGER);
+        }
+    }
+}
+
+static void ui_gesture_timer_cb(lv_timer_t *timer)
+{
     (void)timer;
 
+    if (s_shake_cool_ms > UI_GESTURE_PERIOD_MS) {
+        s_shake_cool_ms -= UI_GESTURE_PERIOD_MS;
+    } else {
+        s_shake_cool_ms = 0U;
+    }
+
 #if !DESKTOP_PET_ENABLE_IMU
-    if (s_lbl_roll != NULL) {
+    if (s_debug_on && (s_lbl_roll != NULL)) {
         lv_label_set_text(s_lbl_roll, "R: --");
         lv_label_set_text(s_lbl_pitch, "P: --");
         lv_label_set_text(s_lbl_yaw, "Y: --");
     }
-    return;
 #else
+    {
+    qmi8658a_t *imu;
+    int16_t ax, ay, az, gx, gy, gz;
+    float ax_g, ay_g, az_g;
+    float mag;
+    char buf[24];
+
     imu = BoardQmi8658();
     if ((imu == NULL) || !imu->initialized) {
-        if (s_lbl_roll != NULL) {
+        if (s_debug_on && (s_lbl_roll != NULL)) {
             lv_label_set_text(s_lbl_roll, "R: --");
             lv_label_set_text(s_lbl_pitch, "P: --");
             lv_label_set_text(s_lbl_yaw, "Y: --");
@@ -422,17 +500,44 @@ static void ui_angle_timer_cb(lv_timer_t *timer)
     ax_g = (float)ax / UI_ACCEL_LSB_PER_G;
     ay_g = (float)ay / UI_ACCEL_LSB_PER_G;
     az_g = (float)az / UI_ACCEL_LSB_PER_G;
+    mag = sqrtf(ax_g * ax_g + ay_g * ay_g + az_g * az_g);
 
-    roll = atan2f(ay_g, az_g) * UI_RAD2DEG;
-    pitch = atan2f(-ax_g, sqrtf(ay_g * ay_g + az_g * az_g)) * UI_RAD2DEG;
-    s_yaw_deg += ((float)gz / UI_GYRO_LSB_PER_DPS) * dt;
-    if (s_yaw_deg > 180.0f) {
-        s_yaw_deg -= 360.0f;
-    } else if (s_yaw_deg < -180.0f) {
-        s_yaw_deg += 360.0f;
+    if (mag > UI_SHAKE_G) {
+        s_shake_hits++;
+        if ((s_shake_hits >= UI_SHAKE_HITS) && (s_shake_cool_ms == 0U) && !s_debug_on) {
+            s_shake_hits = 0U;
+            s_shake_cool_ms = UI_SHAKE_COOLDOWN_MS;
+            (void)pet_core_post(PET_EVT_IMU_SHAKE, 0);
+        }
+    } else {
+        s_shake_hits = 0U;
     }
 
-    if (s_lbl_roll != NULL) {
+    if (az_g < UI_FLIP_G) {
+        s_flip_hits++;
+        if ((s_flip_hits >= UI_FLIP_HITS) && !s_debug_on) {
+            s_flip_hits = 0U;
+            (void)pet_core_post(PET_EVT_IMU_FLIP, 0);
+        }
+    } else {
+        s_flip_hits = 0U;
+    }
+
+    if (!s_debug_on || (s_lbl_roll == NULL)) {
+        return;
+    }
+
+    {
+        float roll = atan2f(ay_g, az_g) * UI_RAD2DEG;
+        float pitch = atan2f(-ax_g, sqrtf(ay_g * ay_g + az_g * az_g)) * UI_RAD2DEG;
+        float dt = (float)UI_GESTURE_PERIOD_MS / 1000.0f;
+
+        s_yaw_deg += ((float)gz / UI_GYRO_LSB_PER_DPS) * dt;
+        if (s_yaw_deg > 180.0f) {
+            s_yaw_deg -= 360.0f;
+        } else if (s_yaw_deg < -180.0f) {
+            s_yaw_deg += 360.0f;
+        }
         (void)snprintf(buf, sizeof(buf), "R:%5.1f", (double)roll);
         lv_label_set_text(s_lbl_roll, buf);
         (void)snprintf(buf, sizeof(buf), "P:%5.1f", (double)pitch);
@@ -440,102 +545,144 @@ static void ui_angle_timer_cb(lv_timer_t *timer)
         (void)snprintf(buf, sizeof(buf), "Y:%5.1f", (double)s_yaw_deg);
         lv_label_set_text(s_lbl_yaw, buf);
     }
+    }
 #endif
 }
 
-static void ui_screen_home_create(void)
+static void ui_talk_btn_cb(lv_event_t *e)
 {
-    lv_obj_t *scr = lv_screen_active();
-    lv_obj_t *face;
-    lv_obj_t *btn;
-    lv_obj_t *btn_lbl;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+    (void)desktop_pet_agent_listen_toggle();
+}
+
+static void ui_conn_btn_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+    ui_conn_status_set(DESKTOP_PET_AGENT_STATE_CONNECTING);
+    (void)desktop_pet_agent_session_toggle();
+}
+
+static void ui_debug_overlay_create(lv_obj_t *parent)
+{
     lv_obj_t *btn_rec;
     lv_obj_t *btn_play;
     lv_obj_t *btn_pause;
+    lv_obj_t *btn_talk;
+    lv_obj_t *btn_conn;
     lv_obj_t *play_lbl;
     lv_obj_t *pause_lbl;
+    lv_obj_t *title;
 
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x202020), 0);
+    s_debug = lv_obj_create(parent);
+    lv_obj_remove_style_all(s_debug);
+    lv_obj_set_size(s_debug, UI_HOR_RES, UI_VER_RES);
+    lv_obj_set_style_bg_color(s_debug, lv_color_hex(0x101018), 0);
+    lv_obj_set_style_bg_opa(s_debug, LV_OPA_COVER, 0);
+    lv_obj_align(s_debug, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(s_debug, LV_OBJ_FLAG_HIDDEN);
 
-    /* 无背景色的三轴角度（R/P 加速度姿态，Y 为陀螺 Z 积分） */
-    s_lbl_roll = ui_angle_label_create(scr, "R:  0.0", 18);
-    s_lbl_pitch = ui_angle_label_create(scr, "P:  0.0", 36);
-    s_lbl_yaw = ui_angle_label_create(scr, "Y:  0.0", 54);
-    (void)lv_timer_create(ui_angle_timer_cb, UI_ANGLE_PERIOD_MS, NULL);
+    title = lv_label_create(s_debug);
+    lv_label_set_text(title, "DEBUG");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFAA66), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
 
-    s_lbl_rec = ui_angle_label_create(scr, "Idle", 72);
-    (void)lv_timer_create(ui_rec_poll_timer_cb, 500, NULL);
+    s_lbl_roll = ui_angle_label_create(s_debug, "R:  0.0", 28);
+    s_lbl_pitch = ui_angle_label_create(s_debug, "P:  0.0", 46);
+    s_lbl_yaw = ui_angle_label_create(s_debug, "Y:  0.0", 64);
+    s_lbl_rec = ui_angle_label_create(s_debug, "Idle", 82);
 
-    /* 底部无背景 IP（STA 优先，否则 SoftAP） */
-    s_lbl_ip = lv_label_create(scr);
+    s_lbl_ip = lv_label_create(s_debug);
     lv_label_set_text(s_lbl_ip, "IP: ---");
-    lv_obj_set_style_bg_opa(s_lbl_ip, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_lbl_ip, 0, 0);
-    lv_obj_set_style_pad_all(s_lbl_ip, 0, 0);
     lv_obj_set_style_text_color(s_lbl_ip, lv_color_hex(0xA0E0FF), 0);
 #if LV_FONT_MONTSERRAT_14
     lv_obj_set_style_text_font(s_lbl_ip, &lv_font_montserrat_14, 0);
 #endif
-    lv_obj_align(s_lbl_ip, LV_ALIGN_BOTTOM_MID, 0, -18);
+    lv_obj_align(s_lbl_ip, LV_ALIGN_BOTTOM_MID, 0, -8);
     (void)lv_timer_create(ui_ip_timer_cb, 1000, NULL);
     ui_ip_timer_cb(NULL);
 
-    face = lv_label_create(scr);
-    lv_label_set_text(face, "owo");
-#if LV_FONT_MONTSERRAT_24
-    lv_obj_set_style_text_font(face, &lv_font_montserrat_24, 0);
-#endif
-    lv_obj_set_style_text_color(face, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(face, LV_ALIGN_CENTER, 0, -20);
-
-    btn = lv_button_create(scr);
-    lv_obj_set_size(btn, 64, 32);
-    lv_obj_align(btn, LV_ALIGN_CENTER, -48, 28);
-    lv_obj_add_event_cb(btn, ui_pet_btn_cb, LV_EVENT_CLICKED, face);
-    btn_lbl = lv_label_create(btn);
-    lv_label_set_text(btn_lbl, "pet");
-    lv_obj_center(btn_lbl);
-
-    btn_rec = lv_button_create(scr);
+    btn_rec = lv_button_create(s_debug);
     lv_obj_set_size(btn_rec, 64, 32);
-    lv_obj_align(btn_rec, LV_ALIGN_CENTER, 48, 28);
-    lv_obj_add_flag(btn_rec, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(btn_rec, LV_ALIGN_CENTER, -40, -4);
     lv_obj_add_event_cb(btn_rec, ui_rec_btn_cb, LV_EVENT_PRESSED, NULL);
     s_btn_rec_lbl = lv_label_create(btn_rec);
     lv_label_set_text(s_btn_rec_lbl, "Rec");
     lv_obj_center(s_btn_rec_lbl);
 
-    btn_play = lv_button_create(scr);
+    btn_play = lv_button_create(s_debug);
     lv_obj_set_size(btn_play, 64, 32);
-    lv_obj_align(btn_play, LV_ALIGN_CENTER, -48, 68);
-    lv_obj_add_flag(btn_play, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(btn_play, LV_ALIGN_CENTER, 40, -4);
     lv_obj_add_event_cb(btn_play, ui_play_btn_cb, LV_EVENT_PRESSED, NULL);
     play_lbl = lv_label_create(btn_play);
     lv_label_set_text(play_lbl, "Play");
     lv_obj_center(play_lbl);
 
-    btn_pause = lv_button_create(scr);
+    btn_pause = lv_button_create(s_debug);
     lv_obj_set_size(btn_pause, 64, 32);
-    lv_obj_align(btn_pause, LV_ALIGN_CENTER, 48, 68);
-    lv_obj_add_flag(btn_pause, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(btn_pause, LV_ALIGN_CENTER, -40, 36);
     lv_obj_add_event_cb(btn_pause, ui_pause_btn_cb, LV_EVENT_PRESSED, NULL);
     pause_lbl = lv_label_create(btn_pause);
     lv_label_set_text(pause_lbl, "Pause");
     lv_obj_center(pause_lbl);
 
+    btn_talk = lv_button_create(s_debug);
+    lv_obj_set_size(btn_talk, 64, 32);
+    lv_obj_align(btn_talk, LV_ALIGN_CENTER, 40, 36);
+    lv_obj_add_event_cb(btn_talk, ui_talk_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_btn_talk_lbl = lv_label_create(btn_talk);
+    lv_label_set_text(s_btn_talk_lbl, "Talk");
+    lv_obj_center(s_btn_talk_lbl);
+
+    btn_conn = lv_button_create(s_debug);
+    lv_obj_set_size(btn_conn, 96, 32);
+    lv_obj_align(btn_conn, LV_ALIGN_CENTER, 0, 76);
+    lv_obj_add_event_cb(btn_conn, ui_conn_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_btn_conn_lbl = lv_label_create(btn_conn);
+    lv_label_set_text(s_btn_conn_lbl, "Conn");
+    lv_obj_center(s_btn_conn_lbl);
+
+    (void)lv_timer_create(ui_rec_poll_timer_cb, 500, NULL);
     if (!desktop_pet_audio_is_ready()) {
         ui_rec_status_set("Rec: N/A", false);
-    } else {
-        ui_rec_status_set("Idle", false);
     }
+}
+
+static void ui_screen_pet_create(void)
+{
+    lv_obj_t *scr = lv_screen_active();
+
+    pet_fs_set_root("/sdcard/pet");
+    if (pet_res_load()) {
+        pet_core_init(pet_res_needs_cfg());
+        LOG_INFO("pet pack loaded root=%s", pet_fs_root());
+    } else {
+        pet_core_init(NULL);
+        LOG_WARN("pet pack missing (%s); fallback body", pet_fs_root());
+    }
+    pet_view_set_alloc(ui_alloc_psram, free);
+    pet_view_set_intent_hook(ui_intent_hook);
+    pet_view_create(scr);
+    ui_debug_overlay_create(scr);
+    (void)lv_timer_create(ui_gesture_timer_cb, UI_GESTURE_PERIOD_MS, NULL);
 }
 
 static void ui_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        uint32_t delay_ms = lv_timer_handler();
+        uint32_t delay_ms;
 
+        if (s_debug_req != 0) {
+            s_debug_req = 0;
+            s_debug_on = !s_debug_on;
+            ui_apply_debug_visible();
+        }
+
+        delay_ms = lv_timer_handler();
         if (delay_ms > 50U) {
             delay_ms = 50U;
         }
@@ -546,14 +693,9 @@ static void ui_task(void *arg)
     }
 }
 
-static void *ui_alloc_buf(size_t nbytes)
+void desktop_pet_ui_toggle_debug(void)
 {
-    void *p = heap_caps_malloc(nbytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-
-    if (p == NULL) {
-        p = heap_caps_malloc(nbytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
-    return p;
+    s_debug_req = 1;
 }
 
 status_t desktop_pet_ui_start(void)
@@ -631,7 +773,7 @@ status_t desktop_pet_ui_start(void)
     }
 #endif
 
-    ui_screen_home_create();
+    ui_screen_pet_create();
 
     if (xTaskCreate(ui_task, "pet_ui", UI_TASK_STACK_WORDS, NULL, UI_TASK_PRIORITY, NULL) != pdPASS) {
         LOG_ERROR("desktop_pet_ui: task create failed");

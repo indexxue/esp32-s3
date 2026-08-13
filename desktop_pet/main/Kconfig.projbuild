@@ -1,0 +1,28 @@
+menu "Desktop Pet Xiaozhi Agent"
+
+config DESKTOP_PET_AGENT_ENABLE
+    bool "Enable Xiaozhi WebSocket agent (Z1-2 hello)"
+    default y
+    help
+        Connect to a xiaozhi-compatible server: WS handshake + hello.
+        Opus streaming comes in later slices.
+
+config DESKTOP_PET_AGENT_WS_URI
+    string "WebSocket URI"
+    depends on DESKTOP_PET_AGENT_ENABLE
+    default "ws://192.168.10.198:8000/xiaozhi/v1/"
+    help
+        LAN address of your xiaozhi-esp32-server. Do not use Docker internal 172.x.
+
+config DESKTOP_PET_AGENT_ACCESS_TOKEN
+    string "Bearer access token (empty if server auth disabled)"
+    depends on DESKTOP_PET_AGENT_ENABLE
+    default ""
+
+config DESKTOP_PET_AGENT_HELLO_TIMEOUT_MS
+    int "Hello reply timeout (ms)"
+    depends on DESKTOP_PET_AGENT_ENABLE
+    range 3000 30000
+    default 10000
+
+endmenu
