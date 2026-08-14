@@ -52,7 +52,7 @@
 | `PET_EVT_TOUCH_HOLD` | 长按身体 → 喂食 | view |
 | `PET_EVT_IMU_SHAKE` | 晃 → 玩 | 板端 IMU |
 | `PET_EVT_IMU_FLIP` | 翻转静置 → 睡 | 板端 IMU |
-| `PET_EVT_CARE_FEED` / `PLAY` / `SLEEP` / `WAKE` | 照料 | Dock / 键盘 / 手势 |
+| `PET_EVT_CARE_FEED` / `PLAY` / `SLEEP` / `WAKE` | 照料 | 左弧 / 键盘 / 手势 |
 | `PET_EVT_LISTEN` / `SPEAK` / `EMOTION` | 预留小智 | 对话页 / agent；`arg0` 可为 face id |
 
 `pet_core_post()` 非线程安全：只在 LVGL/`pet_view` 任务投递。
@@ -69,7 +69,7 @@
 | `PET_INTENT_LED` | 0=eat 1=play | `led_scene` |
 | `PET_INTENT_MOTOR` | 预留 | 未接 TB6612 |
 | `PET_INTENT_SFX` | 预留 | 未接 |
-| `PET_INTENT_OPEN_CHAT` | — | Dock「聊」；`pet_view` 直投 hook，不经 core |
+| `PET_INTENT_OPEN_CHAT` | — | 右侧「聊」；`pet_view` 直投 hook，不经 core |
 
 ---
 
@@ -195,11 +195,11 @@ version 1 包：无五官块，继续中心对齐。
 产品目标分层见 [`product.md`](product.md) §B / §C。摘要：
 
 ```
-Needs 三点 → 身体（无五官）→ Dock 喂/玩/睡/聊
+Needs 三点 → 身体（无五官）→ 左弧喂/玩/睡 + 右侧聊
 对话页 D：大身体 + 字幕 + 波形（独立页；五官预留）
 ```
 
-主界面：Needs 三点 + 底弧四钮；debug 覆盖层由 `DESKTOP_PET_ENABLE_DEBUG_UI` 隔离（默认关）。
+主界面：Needs + 左护理弧 + 右 Chat；可选 `theme/ui` 图标；debug 覆盖层由 `DESKTOP_PET_ENABLE_DEBUG_UI` 隔离（默认关）。
 
 ---
 
@@ -207,7 +207,7 @@ Needs 三点 → 身体（无五官）→ Dock 喂/玩/睡/聊
 
 - 本框架不实现 WebSocket / Opus / ESP-SR（见 [`cloud_asr.md`](cloud_asr.md)）。
 - agent 投 `PET_EVT_LISTEN` / `SPEAK` / `EMOTION`，由 `pet_core` 改 FACE/clip，**禁止**在 agent 里画表情。
-- GPIO0：默认不切 debug（`DESKTOP_PET_ENABLE_DEBUG_UI`）；产品单击语义另定（[`product.md`](product.md) §B）。
+- GPIO0：默认不切 debug（`DESKTOP_PET_ENABLE_DEBUG_UI`）；长按触摸校准；产品单击语义另定（[`product.md`](product.md) §B）。
 - `/sdcard/record/` 不进入 `pet_core`。
 
 ---
@@ -223,8 +223,8 @@ Needs 三点 → 身体（无五官）→ Dock 喂/玩/睡/聊
 
 ```powershell
 py -3 tools/pet_skin/run_gui.py
-# 或 CLI：绑定 assets/ 后打 pack + splash
-py -3 tools/pet_skin/cli.py --bind --splash
+# 或 CLI：绑定 assets/ 后打 pack + splash + UI icons
+py -3 tools/pet_skin/cli.py --bind --splash --theme-ui
 ```
 
 GUI 扩展：在 `tools/pet_skin/app/features/` 新增 `FeatureModule`，登记到 `registry.built_in_features()`；写盘只调用 `skin_core`。开机仅静态 splash。
@@ -235,9 +235,10 @@ GUI 扩展：在 `tools/pet_skin/app/features/` 新增 `FeatureModule`，登记�
 
 | 输入 | 效果 |
 |------|------|
-| Dock F / 长按身体 | 喂 |
-| Dock P / 晃一下 | 玩 |
-| Dock S / 翻转约 1 s | 睡 |
+| 左弧 F / 长按身体 | 喂 |
+| 左弧 P / 晃一下 | 玩 |
+| 左弧 S / 翻转约 1 s | 睡 |
 | 点身体 | poke（睡觉则先醒） |
 | GPIO0 单击 | 默认无动作；`DESKTOP_PET_ENABLE_DEBUG_UI=1` 时切 debug |
-| Dock C「聊」 | `PET_INTENT_OPEN_CHAT`（对话页待接） |
+| GPIO0 长按 | 触摸校准（进行中单击可取消） |
+| 右侧 C「聊」 | 对话页 D：进页连会话 / 单击听↔等答 / 45s；字幕接 STT·TTS |

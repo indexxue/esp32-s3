@@ -19,9 +19,9 @@
 #include "sd_cfg.h"
 #include "qmi8658a.h"
 #include "type.h"
+#include "agent.h"
 
 #if DESKTOP_PET_ENABLE_DEBUG_UI
-#include "agent.h"
 #include "audio.h"
 #include "net_wifi.h"
 #endif
@@ -78,6 +78,7 @@
 #define UI_CALIB_IDX_RIGHT (1U)
 #define UI_CALIB_IDX_BOT (2U)   /* Dock / 下 */
 #define UI_CALIB_IDX_LEFT (3U)
+#define UI_CHAT_CAPTION_MAX (96)
 
 static lv_display_t *s_disp;
 static lv_indev_t *s_indev;
@@ -105,6 +106,11 @@ static bool s_play_shown;
 static uint8_t s_shake_hits;
 static uint8_t s_flip_hits;
 static uint32_t s_shake_cool_ms;
+static desktop_pet_agent_state_t s_chat_agent_prev;
+static char s_chat_cap_pending[UI_CHAT_CAPTION_MAX];
+static volatile uint8_t s_chat_cap_pending_kind; /* 0=none 1=stt 2=tts 3=llm */
+static portMUX_TYPE s_chat_cap_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t s_chat_reconnect_cool; /* *100ms；WS 意外掉线后冷却再听 */
 
 static void *ui_alloc_buf(size_t nbytes)
 {
@@ -1156,17 +1162,151 @@ static void ui_intent_hook(const pet_intent_t *in)
             led_scene_run(LED_SCENE_ID_TRIGGER);
         }
     } else if (in->id == PET_INTENT_OPEN_CHAT) {
-        /* 对话页空壳在后续里程碑接入；先占位打点。 */
-        LOG_INFO("chat: OPEN_CHAT (page TBD)");
+        /* Chat surface opens inside pet_view; keep hook for LED/SFX later. */
+        (void)in;
     } else if (in->id == PET_INTENT_MOTOR || in->id == PET_INTENT_SFX) {
         /* 量产路径暂未接 TB6612 / 音效；显式吞掉避免误以为已驱动。 */
         (void)in;
     }
 }
 
+static void ui_chat_hook(pet_chat_act_t act)
+{
+    switch (act) {
+    case PET_CHAT_ACT_ENTER:
+        LOG_INFO("chat: enter → session");
+        s_chat_agent_prev = desktop_pet_agent_get_state();
+        s_chat_reconnect_cool = 0U;
+        (void)desktop_pet_agent_session_open();
+        break;
+    case PET_CHAT_ACT_LEAVE:
+        LOG_INFO("chat: leave → stop");
+        s_chat_reconnect_cool = 0U;
+        (void)desktop_pet_agent_session_close();
+        s_chat_agent_prev = DESKTOP_PET_AGENT_STATE_IDLE;
+        break;
+    case PET_CHAT_ACT_LISTEN_ON:
+        LOG_INFO("chat: tap → listen");
+        s_chat_reconnect_cool = 0U;
+        (void)desktop_pet_agent_listen_start();
+        break;
+    case PET_CHAT_ACT_LISTEN_OFF:
+        LOG_INFO("chat: tap → wait answer");
+        s_chat_reconnect_cool = 0U;
+        (void)desktop_pet_agent_listen_stop();
+        break;
+    default:
+        break;
+    }
+}
+
+static void ui_agent_ui_cb(desktop_pet_agent_ui_evt_t evt, const char *text)
+{
+    uint8_t kind = 0;
+
+    if (evt == DESKTOP_PET_AGENT_UI_STATE) {
+        return;
+    }
+    if ((text == NULL) || (text[0] == '\0')) {
+        return;
+    }
+    if (evt == DESKTOP_PET_AGENT_UI_STT) {
+        kind = 1U;
+    } else if (evt == DESKTOP_PET_AGENT_UI_TTS_TEXT) {
+        kind = 2U;
+    } else if (evt == DESKTOP_PET_AGENT_UI_LLM) {
+        kind = 3U;
+    } else if (evt == DESKTOP_PET_AGENT_UI_NET) {
+        kind = 4U;
+    } else {
+        return;
+    }
+    portENTER_CRITICAL(&s_chat_cap_mux);
+    strncpy(s_chat_cap_pending, text, sizeof(s_chat_cap_pending) - 1U);
+    s_chat_cap_pending[sizeof(s_chat_cap_pending) - 1U] = '\0';
+    s_chat_cap_pending_kind = kind;
+    portEXIT_CRITICAL(&s_chat_cap_mux);
+}
+
+static void ui_chat_sync(void)
+{
+    desktop_pet_agent_state_t st;
+    char cap[UI_CHAT_CAPTION_MAX];
+    uint8_t kind = 0;
+
+    if (!pet_view_chat_is_open()) {
+        return;
+    }
+
+    st = desktop_pet_agent_get_state();
+    if (st != s_chat_agent_prev) {
+        switch (st) {
+        case DESKTOP_PET_AGENT_STATE_CONNECTING:
+            pet_view_chat_set_mode(PET_CHAT_MODE_CONNECTING);
+            break;
+        case DESKTOP_PET_AGENT_STATE_LISTENING:
+            pet_view_chat_set_mode(PET_CHAT_MODE_LISTENING);
+            break;
+        case DESKTOP_PET_AGENT_STATE_SPEAKING:
+            pet_view_chat_set_mode(PET_CHAT_MODE_SPEAKING);
+            break;
+        case DESKTOP_PET_AGENT_STATE_OPEN:
+            /* PTT：OPEN 只表示会话就绪/等答，不自动进听。 */
+            if (!desktop_pet_agent_is_listen_active()) {
+                pet_view_chat_set_mode(PET_CHAT_MODE_IDLE);
+            }
+            break;
+        case DESKTOP_PET_AGENT_STATE_ERROR:
+            pet_view_chat_set_mode(PET_CHAT_MODE_IDLE);
+            /* 具体文案由 UI_NET 写入；无则兜底。 */
+            break;
+        case DESKTOP_PET_AGENT_STATE_IDLE:
+        default:
+            if (s_chat_agent_prev == DESKTOP_PET_AGENT_STATE_ERROR) {
+                /* 网络失败后留在就绪，不自动重连刷 connecting。 */
+                pet_view_chat_set_mode(PET_CHAT_MODE_IDLE);
+            } else if (s_chat_agent_prev == DESKTOP_PET_AGENT_STATE_LISTENING ||
+                       s_chat_agent_prev == DESKTOP_PET_AGENT_STATE_SPEAKING ||
+                       s_chat_agent_prev == DESKTOP_PET_AGENT_STATE_OPEN ||
+                       s_chat_agent_prev == DESKTOP_PET_AGENT_STATE_CONNECTING) {
+                pet_view_chat_set_mode(PET_CHAT_MODE_CONNECTING);
+                s_chat_reconnect_cool = 25U; /* 2.5s，避开 WS destroy 竞态 */
+            }
+            break;
+        }
+        s_chat_agent_prev = st;
+    }
+
+    if (s_chat_reconnect_cool > 0U) {
+        s_chat_reconnect_cool--;
+        if (s_chat_reconnect_cool == 0U && pet_view_chat_is_open()) {
+            desktop_pet_agent_state_t cur = desktop_pet_agent_get_state();
+
+            if (cur == DESKTOP_PET_AGENT_STATE_IDLE || cur == DESKTOP_PET_AGENT_STATE_ERROR) {
+                LOG_INFO("chat: ws lost → reconnect session");
+                (void)desktop_pet_agent_session_open();
+            }
+        }
+    }
+
+    portENTER_CRITICAL(&s_chat_cap_mux);
+    kind = s_chat_cap_pending_kind;
+    if (kind != 0U) {
+        memcpy(cap, s_chat_cap_pending, sizeof(cap));
+        s_chat_cap_pending_kind = 0U;
+    }
+    portEXIT_CRITICAL(&s_chat_cap_mux);
+    if (kind != 0U) {
+        pet_view_chat_set_caption(cap);
+        pet_view_chat_bump_idle();
+    }
+}
+
 static void ui_gesture_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
+
+    ui_chat_sync();
 
     if (s_shake_cool_ms > UI_GESTURE_PERIOD_MS) {
         s_shake_cool_ms -= UI_GESTURE_PERIOD_MS;
@@ -1398,6 +1538,8 @@ static void ui_screen_pet_create(void)
     }
     pet_view_set_alloc(ui_alloc_psram, ui_free_psram);
     pet_view_set_intent_hook(ui_intent_hook);
+    pet_view_set_chat_hook(ui_chat_hook);
+    desktop_pet_agent_set_ui_cb(ui_agent_ui_cb);
     pet_view_boot_start(scr, ui_on_pet_home);
 
     if (pet_res_load()) {

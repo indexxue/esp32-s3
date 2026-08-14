@@ -43,7 +43,7 @@
 #define AGENT_DOWNLINK_PRIORITY (6U)
 #define AGENT_PLAYOUT_PRIORITY (7U)
 #define AGENT_CAPTURE_PRIORITY (6U)
-#define AGENT_PCM_QUEUE_DEPTH (3U)
+#define AGENT_PCM_QUEUE_DEPTH (8U)
 #define AGENT_OPUS_PKT_MAX (DESKTOP_PET_OPUS_MAX_PACKET)
 #define AGENT_OPUS_Q_DEPTH (20U)
 #define AGENT_PLAY_Q_DEPTH (12U)
@@ -79,6 +79,7 @@ static volatile bool s_downlink_run;
 static volatile bool s_playout_run;
 static volatile bool s_tts_active;
 static volatile bool s_listen_want;
+static volatile bool s_listen_tx_armed; /* listen start 成功后才允许 Opus 上行 */
 static TaskHandle_t s_uplink_task;
 static TaskHandle_t s_capture_task;
 static TaskHandle_t s_downlink_task;
@@ -93,14 +94,17 @@ static int s_server_pcm_hz = 16000;
 
 typedef enum {
     AGENT_CMD_SESSION_TOGGLE = 1,
+    AGENT_CMD_SESSION_OPEN,
     AGENT_CMD_LISTEN_START,
     AGENT_CMD_LISTEN_STOP,
     AGENT_CMD_TTS_START,
     AGENT_CMD_TTS_STOP,
     AGENT_CMD_WS_GONE,
+    AGENT_CMD_SESSION_CLOSE,
 } agent_cmd_t;
 
 static bool s_inited;
+static desktop_pet_agent_ui_cb_t s_ui_cb;
 
 static QueueHandle_t agent_queue_create(UBaseType_t len, UBaseType_t item_size)
 {
@@ -141,9 +145,29 @@ static int agent_ws_send_bin(const void *data, int len, uint32_t timeout_ms)
     return n;
 }
 
+static void agent_notify_ui(desktop_pet_agent_ui_evt_t evt, const char *text)
+{
+    desktop_pet_agent_ui_cb_t cb = s_ui_cb;
+
+    if (cb != NULL) {
+        cb(evt, text);
+    }
+}
+
 static void agent_set_state(desktop_pet_agent_state_t st)
 {
     s_state = st;
+    agent_notify_ui(DESKTOP_PET_AGENT_UI_STATE, NULL);
+}
+
+/** 会话失败：停听意图 + ERROR + 字幕提示（可能非 LVGL 线程）。 */
+static void agent_fail_session(const char *caption)
+{
+    s_listen_want = false;
+    agent_set_state(DESKTOP_PET_AGENT_STATE_ERROR);
+    if ((caption != NULL) && (caption[0] != '\0')) {
+        agent_notify_ui(DESKTOP_PET_AGENT_UI_NET, caption);
+    }
 }
 
 static void agent_fill_ids(void)
@@ -164,6 +188,7 @@ static void agent_fill_ids(void)
 static void agent_stop_uplink(void)
 {
     s_uplink_run = false;
+    s_listen_tx_armed = false;
     for (int i = 0; i < 80 && (s_uplink_task != NULL || s_capture_task != NULL); i++) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -192,6 +217,13 @@ static void agent_stop_downlink(void)
     desktop_pet_opus_dec_deinit();
 }
 
+static void agent_mute_uplink_fast(void)
+{
+    /* WS 回调里立刻禁发，避免 TTS 下行时仍 send_bin 把连接写爆。 */
+    s_listen_tx_armed = false;
+    s_uplink_run = false;
+}
+
 static void agent_destroy_ws(void)
 {
     agent_stop_uplink();
@@ -200,8 +232,11 @@ static void agent_destroy_ws(void)
         return;
     }
 
-    (void)esp_websocket_client_close(s_ws, pdMS_TO_TICKS(2000));
-    (void)esp_websocket_client_stop(s_ws);
+    /* 已断开时只 destroy，避免 stop() 卡满 network_timeout（曾见 ~10s）。 */
+    if (esp_websocket_client_is_connected(s_ws)) {
+        (void)esp_websocket_client_close(s_ws, pdMS_TO_TICKS(200));
+        (void)esp_websocket_client_stop(s_ws);
+    }
     (void)esp_websocket_client_destroy(s_ws);
     s_ws = NULL;
 }
@@ -256,7 +291,11 @@ static void agent_capture_task(void *arg)
         }
         if (st != STATUS_OK || got == 0U) {
             read_fail++;
-            vTaskDelay(pdMS_TO_TICKS(5));
+            if ((read_fail % 100U) == 1U) {
+                LOG_WARN("agent: capture read_fail=%u", (unsigned)read_fail);
+            }
+            /* 等下一截 PCM，避免 2ms 空转抢 CPU 拖垮 WiFi TX。 */
+            vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
         acc += got;
@@ -309,11 +348,18 @@ static void agent_uplink_task(void *arg)
         if (!s_uplink_run) {
             break;
         }
-        /* 短超时：发不出就丢本帧，绝不能长时间堵住采音。 */
-        if (agent_ws_send_bin(s_opus_pkt, (int)opus_len, 80U) < 0) {
+        if (!s_listen_tx_armed) {
+            continue;
+        }
+        /*
+         * 短超时丢帧；managed websocket 已改：wlen==0 不再 abort。
+         * 超时过长会堵编码队列（drop 飙升），多轮后更易雪崩。
+         */
+        if (agent_ws_send_bin(s_opus_pkt, (int)opus_len, 400U) <= 0) {
             send_fail++;
-            if ((send_fail % 20U) == 1U) {
-                LOG_WARN("agent: opus send fail count=%u", (unsigned)send_fail);
+            if ((send_fail % 10U) == 1U) {
+                LOG_WARN("agent: opus send fail/drop count=%u connected=%d", (unsigned)send_fail,
+                         (s_ws != NULL) ? (int)esp_websocket_client_is_connected(s_ws) : 0);
             }
             continue;
         }
@@ -331,6 +377,9 @@ static void agent_uplink_task(void *arg)
 static status_t agent_start_listening(void)
 {
     status_t st;
+
+    /* 多轮后必须先清净下行/播放，再开采，避免 I2S/队列残留把上行拖死。 */
+    agent_stop_downlink();
 
     if (desktop_pet_opus_enc_init() != STATUS_OK) {
         return STATUS_FAIL;
@@ -354,6 +403,18 @@ static status_t agent_start_listening(void)
         xQueueReset(s_pcm_q);
     }
 
+    /*
+     * 必须先 listen start，再开上行。
+     * 否则服务端在未 listen 时收到 Opus，易直接掐断（表现为 transport_poll_write / 客户端断开）。
+     */
+    s_listen_tx_armed = false;
+    if (agent_send_listen("start") != STATUS_OK) {
+        (void)desktop_pet_audio_stream_stop();
+        desktop_pet_opus_enc_deinit();
+        return STATUS_FAIL;
+    }
+    vTaskDelay(pdMS_TO_TICKS(40));
+
     s_uplink_run = true;
     if (xTaskCreate(agent_capture_task, "pet_cap", AGENT_CAPTURE_STACK_BYTES, NULL, AGENT_CAPTURE_PRIORITY,
                     &s_capture_task) != pdPASS) {
@@ -376,16 +437,7 @@ static status_t agent_start_listening(void)
         return STATUS_FAIL;
     }
 
-    if (agent_send_listen("start") != STATUS_OK) {
-        s_uplink_run = false;
-        for (int i = 0; i < 80 && (s_uplink_task != NULL || s_capture_task != NULL); i++) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-        (void)desktop_pet_audio_stream_stop();
-        desktop_pet_opus_enc_deinit();
-        return STATUS_FAIL;
-    }
-
+    s_listen_tx_armed = true;
     agent_set_state(DESKTOP_PET_AGENT_STATE_LISTENING);
     LOG_INFO("agent: LISTENING");
     return STATUS_OK;
@@ -539,9 +591,9 @@ static void agent_downlink_task(void *arg)
 
 static status_t agent_tts_start(void)
 {
+    /* 半双工：说前硬停上行，避免听写任务/锁残留。 */
+    agent_stop_uplink();
     if (s_state == DESKTOP_PET_AGENT_STATE_LISTENING) {
-        /* 与 stop_listening 相同：先停上行再发 stop。 */
-        agent_stop_uplink();
         (void)agent_send_listen("stop");
         agent_set_state(DESKTOP_PET_AGENT_STATE_OPEN);
     }
@@ -646,7 +698,7 @@ static status_t agent_post_cmd(agent_cmd_t cmd)
     }
     /* STOP 必须送达：清队列后重投（启停冲突时以停止为准）。 */
     if (cmd == AGENT_CMD_LISTEN_STOP || cmd == AGENT_CMD_TTS_STOP || cmd == AGENT_CMD_SESSION_TOGGLE ||
-        cmd == AGENT_CMD_WS_GONE) {
+        cmd == AGENT_CMD_WS_GONE || cmd == AGENT_CMD_SESSION_CLOSE) {
         xQueueReset(s_cmd_q);
         if (xQueueSend(s_cmd_q, &cmd, 0) == pdTRUE) {
             return STATUS_OK;
@@ -734,12 +786,19 @@ static void agent_handle_text(const char *data, int len)
         text = cJSON_GetObjectItemCaseSensitive(root, "text");
         if (cJSON_IsString(text) && text->valuestring != NULL) {
             LOG_INFO("agent: STT \"%s\"", text->valuestring);
+            agent_notify_ui(DESKTOP_PET_AGENT_UI_STT, text->valuestring);
         }
     } else if (strcmp(type->valuestring, "tts") == 0) {
         state = cJSON_GetObjectItemCaseSensitive(root, "state");
+        text = cJSON_GetObjectItemCaseSensitive(root, "text");
+        if (cJSON_IsString(text) && text->valuestring != NULL && text->valuestring[0] != '\0') {
+            agent_notify_ui(DESKTOP_PET_AGENT_UI_TTS_TEXT, text->valuestring);
+        }
         if (cJSON_IsString(state) && state->valuestring != NULL) {
             LOG_INFO("agent: tts state=%s", state->valuestring);
             if (strcmp(state->valuestring, "start") == 0) {
+                /* 半双工：一收到 tts start 立刻停上行，再交给 worker 做 listen stop / 播报。 */
+                agent_mute_uplink_fast();
                 s_tts_active = true;
                 if (s_opus_q == NULL) {
                     s_opus_q = agent_queue_create(AGENT_OPUS_Q_DEPTH, sizeof(agent_opus_pkt_t));
@@ -755,6 +814,7 @@ static void agent_handle_text(const char *data, int len)
         text = cJSON_GetObjectItemCaseSensitive(root, "text");
         if (cJSON_IsString(text) && text->valuestring != NULL) {
             LOG_INFO("agent: LLM \"%s\"", text->valuestring);
+            agent_notify_ui(DESKTOP_PET_AGENT_UI_LLM, text->valuestring);
         } else {
             LOG_INFO("agent: rx type=llm");
         }
@@ -797,6 +857,10 @@ static void agent_ws_event(void *handler_args, esp_event_base_t base, int32_t ev
         if (data->op_code == WS_TRANSPORT_OPCODES_TEXT) {
             agent_handle_text(data->data_ptr, data->data_len);
         } else if (data->op_code == WS_TRANSPORT_OPCODES_BINARY) {
+            /* 下行音频到来时若仍在听，先静音上行（防半双工抢写）。 */
+            if (s_listen_tx_armed || (s_state == DESKTOP_PET_AGENT_STATE_LISTENING)) {
+                agent_mute_uplink_fast();
+            }
             /* 仅完整帧入队；分片无拼包缓冲，丢弃避免坏 Opus。 */
             if (data->payload_offset == 0 && data->data_len == data->payload_len) {
                 agent_enqueue_opus((const uint8_t *)data->data_ptr, data->data_len);
@@ -810,11 +874,11 @@ static void agent_ws_event(void *handler_args, esp_event_base_t base, int32_t ev
     case WEBSOCKET_EVENT_DISCONNECTED:
     case WEBSOCKET_EVENT_CLOSED:
         LOG_WARN("agent: ws closed/disconnected");
-        s_uplink_run = false;
+        agent_mute_uplink_fast();
         s_tts_active = false;
         s_downlink_run = false;
         s_playout_run = false;
-        s_listen_want = false;
+        /* 勿清 s_listen_want：对话页仍开着时要靠它自动重连进听。 */
         if (s_state == DESKTOP_PET_AGENT_STATE_CONNECTING) {
             (void)xEventGroupSetBits(s_events, AGENT_FAIL_BIT);
         } else if (s_state == DESKTOP_PET_AGENT_STATE_OPEN || s_state == DESKTOP_PET_AGENT_STATE_LISTENING ||
@@ -848,7 +912,7 @@ static status_t agent_open_session(void)
 
     if (!net_wifi_sta_has_ipv4()) {
         LOG_ERROR("agent: STA has no IPv4 (join LAN WiFi first)");
-        agent_set_state(DESKTOP_PET_AGENT_STATE_ERROR);
+        agent_fail_session("no WiFi — join LAN");
         return STATUS_INVALID_STATE;
     }
 
@@ -868,7 +932,7 @@ static status_t agent_open_session(void)
                  "Client-Id: %s\r\n",
                  CONFIG_DESKTOP_PET_AGENT_ACCESS_TOKEN, s_device_id, s_client_id);
     if (n <= 0 || (size_t)n >= sizeof(s_headers)) {
-        agent_set_state(DESKTOP_PET_AGENT_STATE_ERROR);
+        agent_fail_session("connect fail");
         return STATUS_FAIL;
     }
 
@@ -880,6 +944,12 @@ static status_t agent_open_session(void)
     cfg.reconnect_timeout_ms = 10000;
     cfg.network_timeout_ms = 10000;
     cfg.disable_auto_reconnect = true;
+    cfg.disable_pingpong_discon = true;
+    cfg.ping_interval_sec = 30;
+    cfg.keep_alive_enable = true;
+    cfg.keep_alive_idle = 5;
+    cfg.keep_alive_interval = 3;
+    cfg.keep_alive_count = 3;
 
     LOG_INFO("agent: connecting %s device_id=%s free_int=%u largest_int=%u", CONFIG_DESKTOP_PET_AGENT_WS_URI,
              s_device_id, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
@@ -888,7 +958,7 @@ static status_t agent_open_session(void)
     s_ws = esp_websocket_client_init(&cfg);
     if (s_ws == NULL) {
         LOG_ERROR("agent: ws init failed");
-        agent_set_state(DESKTOP_PET_AGENT_STATE_ERROR);
+        agent_fail_session("connect fail");
         return STATUS_NO_MEM;
     }
 
@@ -896,7 +966,7 @@ static status_t agent_open_session(void)
     if (err != ESP_OK) {
         LOG_ERROR("agent: register events: %s", esp_err_to_name(err));
         agent_destroy_ws();
-        agent_set_state(DESKTOP_PET_AGENT_STATE_ERROR);
+        agent_fail_session("connect fail");
         return err;
     }
 
@@ -904,7 +974,7 @@ static status_t agent_open_session(void)
     if (err != ESP_OK) {
         LOG_ERROR("agent: ws start: %s", esp_err_to_name(err));
         agent_destroy_ws();
-        agent_set_state(DESKTOP_PET_AGENT_STATE_ERROR);
+        agent_fail_session("connect fail");
         return err;
     }
 
@@ -913,7 +983,7 @@ static status_t agent_open_session(void)
     if ((bits & AGENT_HELLO_BIT) == 0U) {
         LOG_ERROR("agent: hello timeout/fail");
         agent_destroy_ws();
-        agent_set_state(DESKTOP_PET_AGENT_STATE_ERROR);
+        agent_fail_session("server timeout");
         return STATUS_TIMEOUT;
     }
 
@@ -982,6 +1052,23 @@ static void agent_worker_task(void *arg)
             }
             break;
 
+        case AGENT_CMD_SESSION_OPEN:
+            if (s_state == DESKTOP_PET_AGENT_STATE_OPEN || s_state == DESKTOP_PET_AGENT_STATE_LISTENING ||
+                s_state == DESKTOP_PET_AGENT_STATE_SPEAKING || s_state == DESKTOP_PET_AGENT_STATE_CONNECTING) {
+                break;
+            }
+            {
+                status_t st = agent_open_session();
+                if (st != STATUS_OK) {
+                    LOG_WARN("agent: session open %s", status_to_str(st));
+                }
+            }
+            break;
+
+        case AGENT_CMD_SESSION_CLOSE:
+            agent_close_session();
+            break;
+
         case AGENT_CMD_LISTEN_START:
             if (!s_listen_want) {
                 LOG_INFO("agent: listen start cancelled");
@@ -991,12 +1078,19 @@ static void agent_worker_task(void *arg)
                 break;
             }
             if (s_state == DESKTOP_PET_AGENT_STATE_SPEAKING) {
-                agent_tts_stop();
+                /* 打断：立刻停播，勿等 TTS 队列排空。 */
+                s_tts_active = false;
+                agent_stop_downlink();
+                if (s_state == DESKTOP_PET_AGENT_STATE_SPEAKING) {
+                    agent_set_state(DESKTOP_PET_AGENT_STATE_OPEN);
+                }
             }
             if (s_state != DESKTOP_PET_AGENT_STATE_OPEN) {
                 status_t st = agent_open_session();
                 if (st != STATUS_OK) {
                     LOG_WARN("agent: listen needs session: %s", status_to_str(st));
+                    s_listen_want = false;
+                    /* agent_open_session 已发 NET 字幕；保持 ERROR。 */
                     break;
                 }
             }
@@ -1004,6 +1098,8 @@ static void agent_worker_task(void *arg)
                 status_t st = agent_start_listening();
                 if (st != STATUS_OK) {
                     LOG_WARN("agent: listen start failed %s", status_to_str(st));
+                    s_listen_want = false;
+                    agent_notify_ui(DESKTOP_PET_AGENT_UI_NET, "listen fail");
                 }
             } else if (!s_listen_want) {
                 LOG_INFO("agent: listen start cancelled before uplink");
@@ -1026,12 +1122,24 @@ static void agent_worker_task(void *arg)
             break;
 
         case AGENT_CMD_WS_GONE:
+            s_listen_want = false;
             agent_stop_uplink();
             agent_stop_downlink();
+            if (s_ws != NULL) {
+                if (esp_websocket_client_is_connected(s_ws)) {
+                    (void)esp_websocket_client_close(s_ws, pdMS_TO_TICKS(200));
+                    (void)esp_websocket_client_stop(s_ws);
+                }
+                (void)esp_websocket_client_destroy(s_ws);
+                s_ws = NULL;
+            }
             s_session_id[0] = '\0';
             s_hello_sent = false;
             agent_set_state(DESKTOP_PET_AGENT_STATE_IDLE);
-            LOG_INFO("agent: session IDLE (ws gone)");
+            agent_notify_ui(DESKTOP_PET_AGENT_UI_NET, "disconnected");
+            LOG_INFO("agent: session IDLE (ws gone) free_int=%u largest=%u",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
             break;
 
         default:
@@ -1083,8 +1191,8 @@ status_t desktop_pet_agent_init(void)
         return STATUS_NO_MEM;
     }
 
-    if (xTaskCreate(agent_worker_task, "pet_agent", AGENT_TASK_STACK_BYTES, NULL, AGENT_TASK_PRIORITY, NULL) !=
-        pdPASS) {
+    if (xTaskCreateWithCaps(agent_worker_task, "pet_agent", AGENT_TASK_STACK_BYTES, NULL, AGENT_TASK_PRIORITY, NULL,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         LOG_ERROR("agent: worker create failed");
         agent_init_teardown();
         return STATUS_FAIL;
@@ -1100,6 +1208,17 @@ status_t desktop_pet_agent_init(void)
 status_t desktop_pet_agent_session_toggle(void)
 {
     return agent_post_cmd(AGENT_CMD_SESSION_TOGGLE);
+}
+
+status_t desktop_pet_agent_session_open(void)
+{
+    return agent_post_cmd(AGENT_CMD_SESSION_OPEN);
+}
+
+status_t desktop_pet_agent_session_close(void)
+{
+    s_listen_want = false;
+    return agent_post_cmd(AGENT_CMD_SESSION_CLOSE);
 }
 
 status_t desktop_pet_agent_listen_start(void)
@@ -1153,6 +1272,11 @@ status_t desktop_pet_agent_copy_session_id(char *buf, size_t buf_len)
     return STATUS_OK;
 }
 
+void desktop_pet_agent_set_ui_cb(desktop_pet_agent_ui_cb_t cb)
+{
+    s_ui_cb = cb;
+}
+
 #else /* !CONFIG_DESKTOP_PET_AGENT_ENABLE */
 
 status_t desktop_pet_agent_init(void)
@@ -1161,6 +1285,16 @@ status_t desktop_pet_agent_init(void)
 }
 
 status_t desktop_pet_agent_session_toggle(void)
+{
+    return STATUS_NOT_SUPPORTED;
+}
+
+status_t desktop_pet_agent_session_open(void)
+{
+    return STATUS_NOT_SUPPORTED;
+}
+
+status_t desktop_pet_agent_session_close(void)
 {
     return STATUS_NOT_SUPPORTED;
 }
@@ -1202,6 +1336,11 @@ status_t desktop_pet_agent_copy_session_id(char *buf, size_t buf_len)
     }
     buf[0] = '\0';
     return STATUS_OK;
+}
+
+void desktop_pet_agent_set_ui_cb(desktop_pet_agent_ui_cb_t cb)
+{
+    (void)cb;
 }
 
 #endif /* CONFIG_DESKTOP_PET_AGENT_ENABLE */

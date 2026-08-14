@@ -132,6 +132,7 @@ static void audio_pa_set(bool on)
  * 播放时关 RX；采音时开 RX。用标志避免重复 enable/disable（IDF 会打 E 日志）。
  */
 static bool s_i2s_rx_on;
+static bool s_i2s_tx_on;
 
 static void audio_i2s_rx_set(bool on)
 {
@@ -155,31 +156,36 @@ static void audio_i2s_rx_set(bool on)
     }
 }
 
-static void audio_i2s_prepare_playback(void)
+static void audio_i2s_tx_ensure(void)
 {
     esp_err_t err;
 
-    /* 只关 RX，不要动 TX：关掉 TX 会断 MCLK，听写后的 TTS 容易假写无声。 */
-    audio_i2s_rx_set(false);
-    if (s_i2s_tx == NULL) {
+    if (s_i2s_tx == NULL || s_i2s_tx_on) {
         return;
     }
     err = i2s_channel_enable(s_i2s_tx);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+    if (err == ESP_OK) {
+        s_i2s_tx_on = true;
+    } else if (err == ESP_ERR_INVALID_STATE) {
+        s_i2s_tx_on = true;
+    } else {
         LOG_WARN("audio: tx enable failed: %s", esp_err_to_name(err));
     }
 }
 
+static void audio_i2s_prepare_playback(void)
+{
+    /* 只关 RX，不要动 TX：关掉 TX 会断 MCLK，听写后的 TTS 容易假写无声。 */
+    audio_i2s_rx_set(false);
+    audio_i2s_tx_ensure();
+}
+
 static void audio_i2s_prepare_capture(void)
 {
-    esp_err_t err;
-
-    if (s_i2s_tx != NULL) {
-        err = i2s_channel_enable(s_i2s_tx);
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            LOG_WARN("audio: tx enable failed: %s", esp_err_to_name(err));
-        }
-    }
+    /* 多轮听↔说后强制 RX 复位，清 DMA 残留，减轻 read_fail / 假断连。 */
+    audio_i2s_rx_set(false);
+    audio_i2s_tx_ensure();
+    vTaskDelay(pdMS_TO_TICKS(5));
     audio_i2s_rx_set(true);
 }
 
@@ -485,6 +491,7 @@ status_t desktop_pet_audio_init(void)
         LOG_ERROR("audio: i2s TX enable failed");
         return STATUS_FAIL;
     }
+    s_i2s_tx_on = true;
     if (i2s_channel_enable(s_i2s_rx) != ESP_OK) {
         LOG_ERROR("audio: i2s RX enable failed");
         return STATUS_FAIL;

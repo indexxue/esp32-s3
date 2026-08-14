@@ -1,6 +1,7 @@
 /**
  * @file pet_view.c
  * @brief Round-screen compositor: body, Needs, left care arc, right Chat.
+ *        Chat surface D: tap toggle listen/wait overlay.
  *        Face overlay is reserved: PET_VIEW_ENABLE_FACE=0 does not draw 五官.
  */
 
@@ -45,10 +46,14 @@
 #define PET_UI_ICON_PIXELS \
     ((uint32_t)PET_RES_UI_ICON_MAX_W * (uint32_t)PET_RES_UI_ICON_MAX_H)
 #define PET_HINT_FADE_MS (2800U)
+#define PET_CHAT_IDLE_MS (45000U)
+#define PET_CHAT_WAVE_BARS (5)
+#define PET_CHAT_CAPTION_MAX (96)
 
 static pet_view_alloc_fn s_alloc;
 static pet_view_free_fn s_free;
 static pet_view_intent_hook_t s_intent_hook;
+static pet_view_chat_hook_t s_chat_hook;
 static pet_view_boot_done_fn s_boot_done;
 static lv_obj_t *s_boot_parent;
 static lv_obj_t *s_splash_layer;
@@ -79,6 +84,26 @@ static lv_obj_t *s_need_m;
 static lv_obj_t *s_need_e;
 static lv_obj_t *s_pack_hint;
 static lv_timer_t *s_hint_timer;
+static lv_obj_t *s_body_hit;
+static lv_obj_t *s_care_f;
+static lv_obj_t *s_care_p;
+static lv_obj_t *s_care_s;
+static lv_obj_t *s_chat_btn;
+static lv_obj_t *s_home_parent;
+
+static lv_obj_t *s_chat_layer;
+static lv_obj_t *s_chat_back;
+static lv_obj_t *s_chat_mode;
+static lv_obj_t *s_chat_caption;
+static lv_obj_t *s_chat_cap_box;
+static lv_obj_t *s_chat_wave[PET_CHAT_WAVE_BARS];
+static bool s_chat_open;
+static bool s_chat_listen_on;
+static bool s_chat_listen_ui_pending;
+static pet_chat_mode_t s_chat_mode_id;
+static uint32_t s_chat_idle_ms;
+static uint8_t s_chat_wave_phase;
+static char s_chat_caption_buf[PET_CHAT_CAPTION_MAX];
 
 static lv_image_dsc_t s_img_dsc[2];
 static uint16_t *s_pix[2];
@@ -436,29 +461,237 @@ static void drain_intents(void)
     }
 }
 
+static void chat_bump_idle(void)
+{
+    s_chat_idle_ms = 0U;
+}
+
+static void chat_set_home_chrome_visible(bool visible)
+{
+    if (visible) {
+        if (s_need_h != NULL) {
+            lv_obj_remove_flag(s_need_h, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_need_m != NULL) {
+            lv_obj_remove_flag(s_need_m, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_need_e != NULL) {
+            lv_obj_remove_flag(s_need_e, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_care_f != NULL) {
+            lv_obj_remove_flag(s_care_f, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_care_p != NULL) {
+            lv_obj_remove_flag(s_care_p, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_care_s != NULL) {
+            lv_obj_remove_flag(s_care_s, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_chat_btn != NULL) {
+            lv_obj_remove_flag(s_chat_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else {
+        if (s_need_h != NULL) {
+            lv_obj_add_flag(s_need_h, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_need_m != NULL) {
+            lv_obj_add_flag(s_need_m, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_need_e != NULL) {
+            lv_obj_add_flag(s_need_e, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_care_f != NULL) {
+            lv_obj_add_flag(s_care_f, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_care_p != NULL) {
+            lv_obj_add_flag(s_care_p, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_care_s != NULL) {
+            lv_obj_add_flag(s_care_s, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_chat_btn != NULL) {
+            lv_obj_add_flag(s_chat_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_pack_hint != NULL) {
+            lv_obj_add_flag(s_pack_hint, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+static void chat_apply_wave_visible(bool on)
+{
+    int i;
+
+    for (i = 0; i < PET_CHAT_WAVE_BARS; i++) {
+        if (s_chat_wave[i] == NULL) {
+            continue;
+        }
+        if (on) {
+            lv_obj_remove_flag(s_chat_wave[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_chat_wave[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+static void chat_apply_mode_ui(pet_chat_mode_t mode)
+{
+    const char *label = "ready";
+    uint32_t color = 0x7A849CU;
+
+    s_chat_mode_id = mode;
+    switch (mode) {
+    case PET_CHAT_MODE_CONNECTING:
+        label = "connecting";
+        color = 0xE0B060U;
+        break;
+    case PET_CHAT_MODE_LISTENING:
+        label = "listen";
+        color = 0x7EC8FFU;
+        break;
+    case PET_CHAT_MODE_SPEAKING:
+        label = "speak";
+        color = 0x6DD6A0U;
+        break;
+    case PET_CHAT_MODE_IDLE:
+    default:
+        label = "ready";
+        color = 0x7A849CU;
+        break;
+    }
+    if (s_chat_mode != NULL) {
+        lv_label_set_text(s_chat_mode, label);
+        lv_obj_set_style_text_color(s_chat_mode, lv_color_hex(color), 0);
+    }
+    chat_apply_wave_visible(mode == PET_CHAT_MODE_LISTENING);
+}
+
+static void chat_set_caption_internal(const char *utf8)
+{
+    const char *show = "...";
+
+    if ((utf8 != NULL) && (utf8[0] != '\0')) {
+        strncpy(s_chat_caption_buf, utf8, sizeof(s_chat_caption_buf) - 1U);
+        s_chat_caption_buf[sizeof(s_chat_caption_buf) - 1U] = '\0';
+        show = s_chat_caption_buf;
+    } else {
+        s_chat_caption_buf[0] = '\0';
+    }
+    if (s_chat_caption != NULL) {
+        lv_label_set_text(s_chat_caption, show);
+        if (show[0] == '.' && show[1] == '.' && show[2] == '.' && show[3] == '\0') {
+            lv_obj_set_style_text_color(s_chat_caption, lv_color_hex(0x6A7388), 0);
+        } else {
+            lv_obj_set_style_text_color(s_chat_caption, lv_color_hex(0xDCE6F8), 0);
+        }
+    }
+}
+
+static void chat_close_internal(bool notify)
+{
+    if (!s_chat_open) {
+        return;
+    }
+    s_chat_open = false;
+    s_chat_listen_on = false;
+    s_chat_listen_ui_pending = false;
+    s_chat_idle_ms = 0U;
+    if (s_chat_layer != NULL) {
+        lv_obj_add_flag(s_chat_layer, LV_OBJ_FLAG_HIDDEN);
+    }
+    chat_set_home_chrome_visible(true);
+    if (s_home_parent != NULL) {
+        lv_obj_set_style_bg_color(s_home_parent, lv_color_hex(0x202020), 0);
+    }
+    chat_apply_mode_ui(PET_CHAT_MODE_IDLE);
+    if (notify && (s_chat_hook != NULL)) {
+        s_chat_hook(PET_CHAT_ACT_LEAVE);
+    }
+}
+
+static void chat_open_internal(void)
+{
+    if (s_chat_open) {
+        return;
+    }
+    if (s_chat_layer == NULL) {
+        return;
+    }
+    s_chat_open = true;
+    s_chat_listen_on = false;
+    s_chat_listen_ui_pending = false;
+    chat_bump_idle();
+    chat_set_home_chrome_visible(false);
+    if (s_home_parent != NULL) {
+        lv_obj_set_style_bg_color(s_home_parent, lv_color_hex(0x141820), 0);
+    }
+    lv_obj_remove_flag(s_chat_layer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_chat_layer);
+    if (s_body_hit != NULL) {
+        lv_obj_move_foreground(s_body_hit);
+    }
+    chat_set_caption_internal("tap to talk");
+    chat_apply_mode_ui(PET_CHAT_MODE_CONNECTING);
+    if (s_chat_hook != NULL) {
+        s_chat_hook(PET_CHAT_ACT_ENTER);
+    }
+}
+
+static void chat_toggle_listen(void)
+{
+    if (!s_chat_open) {
+        return;
+    }
+    chat_bump_idle();
+    if (s_chat_listen_on) {
+        s_chat_listen_on = false;
+        s_chat_listen_ui_pending = false;
+        chat_set_caption_internal("tap to talk");
+        if (s_chat_hook != NULL) {
+            s_chat_hook(PET_CHAT_ACT_LISTEN_OFF);
+        }
+    } else {
+        s_chat_listen_on = true;
+        s_chat_listen_ui_pending = true;
+        (void)pet_core_post(PET_EVT_LISTEN, 0);
+        if (s_chat_hook != NULL) {
+            s_chat_hook(PET_CHAT_ACT_LISTEN_ON);
+        }
+    }
+}
+
+static void chat_back_cb(lv_event_t *e)
+{
+    (void)e;
+    chat_close_internal(true);
+}
+
 static void care_cb(lv_event_t *e)
 {
     pet_evt_id_t id = (pet_evt_id_t)(uintptr_t)lv_event_get_user_data(e);
 
+    if (s_chat_open) {
+        return;
+    }
     (void)pet_core_post(id, 0);
 }
 
 static void chat_cb(lv_event_t *e)
 {
-    pet_intent_t in;
-
     (void)e;
-    in.id = PET_INTENT_OPEN_CHAT;
-    in.arg0 = 0;
-    in.arg1 = 0;
-    if (s_intent_hook != NULL) {
-        s_intent_hook(&in);
-    }
+    chat_open_internal();
 }
 
 static void body_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
+
+    if (s_chat_open) {
+        if (code == LV_EVENT_CLICKED) {
+            chat_toggle_listen();
+        }
+        return;
+    }
 
     if (code == LV_EVENT_PRESSED) {
         s_pressing = true;
@@ -470,6 +703,122 @@ static void body_event_cb(lv_event_t *e)
         }
         s_pressing = false;
         s_hold_sent = false;
+    }
+}
+
+static void chat_tick_wave(void)
+{
+    static const int16_t k_h[PET_CHAT_WAVE_BARS] = {10, 18, 24, 14, 20};
+    int i;
+
+    if (!s_chat_open || (s_chat_mode_id != PET_CHAT_MODE_LISTENING)) {
+        return;
+    }
+    s_chat_wave_phase++;
+    for (i = 0; i < PET_CHAT_WAVE_BARS; i++) {
+        int16_t h;
+        int16_t phase;
+
+        if (s_chat_wave[i] == NULL) {
+            continue;
+        }
+        phase = (int16_t)((s_chat_wave_phase + (uint8_t)(i * 3U)) & 7U);
+        h = (int16_t)(k_h[i] - (phase < 4 ? phase : (8 - phase)));
+        if (h < 6) {
+            h = 6;
+        }
+        lv_obj_set_height(s_chat_wave[i], h);
+    }
+}
+
+static void chat_create_layer(lv_obj_t *parent)
+{
+    lv_obj_t *row;
+    int i;
+    static const int16_t k_h[PET_CHAT_WAVE_BARS] = {10, 18, 24, 14, 20};
+
+    s_chat_layer = lv_obj_create(parent);
+    lv_obj_remove_style_all(s_chat_layer);
+    lv_obj_set_size(s_chat_layer, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(s_chat_layer, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(s_chat_layer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_chat_layer, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_chat_layer, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_chat_back = lv_button_create(s_chat_layer);
+    lv_obj_remove_style_all(s_chat_back);
+    lv_obj_set_size(s_chat_back, PET_DOCK_BTN_SIZE, PET_DOCK_BTN_SIZE);
+    lv_obj_set_style_radius(s_chat_back, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(s_chat_back, LV_OPA_30, 0);
+    lv_obj_set_style_bg_color(s_chat_back, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(s_chat_back, LV_ALIGN_TOP_LEFT, 16, 16);
+    lv_obj_set_ext_click_area(s_chat_back, PET_DOCK_BTN_EXT_CLICK);
+    lv_obj_add_event_cb(s_chat_back, chat_back_cb, LV_EVENT_CLICKED, NULL);
+    {
+        lv_obj_t *lbl = lv_label_create(s_chat_back);
+
+        lv_label_set_text(lbl, "<");
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xE8EAF0), 0);
+#if LV_FONT_MONTSERRAT_14
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+#endif
+        lv_obj_center(lbl);
+        lv_obj_remove_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    s_chat_mode = lv_label_create(s_chat_layer);
+    lv_label_set_text(s_chat_mode, "listen");
+    lv_obj_set_style_text_color(s_chat_mode, lv_color_hex(0x7EC8FF), 0);
+#if LV_FONT_MONTSERRAT_14
+    lv_obj_set_style_text_font(s_chat_mode, &lv_font_montserrat_14, 0);
+#endif
+    lv_obj_align(s_chat_mode, LV_ALIGN_TOP_MID, 0, 22);
+    lv_obj_remove_flag(s_chat_mode, LV_OBJ_FLAG_CLICKABLE);
+
+    s_chat_cap_box = lv_obj_create(s_chat_layer);
+    lv_obj_remove_style_all(s_chat_cap_box);
+    lv_obj_set_size(s_chat_cap_box, 196, 40);
+    lv_obj_set_style_radius(s_chat_cap_box, 12, 0);
+    lv_obj_set_style_bg_opa(s_chat_cap_box, LV_OPA_50, 0);
+    lv_obj_set_style_bg_color(s_chat_cap_box, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_pad_hor(s_chat_cap_box, 8, 0);
+    lv_obj_set_style_pad_ver(s_chat_cap_box, 6, 0);
+    lv_obj_align(s_chat_cap_box, LV_ALIGN_BOTTOM_MID, 0, -48);
+    lv_obj_remove_flag(s_chat_cap_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_chat_cap_box, LV_OBJ_FLAG_CLICKABLE);
+
+    s_chat_caption = lv_label_create(s_chat_cap_box);
+    lv_label_set_long_mode(s_chat_caption, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_chat_caption, 180);
+    lv_obj_set_style_text_align(s_chat_caption, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(s_chat_caption, lv_color_hex(0xDCE6F8), 0);
+#if LV_FONT_MONTSERRAT_14
+    lv_obj_set_style_text_font(s_chat_caption, &lv_font_montserrat_14, 0);
+#endif
+    lv_label_set_text(s_chat_caption, "...");
+    lv_obj_center(s_chat_caption);
+    lv_obj_remove_flag(s_chat_caption, LV_OBJ_FLAG_CLICKABLE);
+
+    row = lv_obj_create(s_chat_layer);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, 40, 28);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 3, 0);
+    lv_obj_align(row, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    for (i = 0; i < PET_CHAT_WAVE_BARS; i++) {
+        s_chat_wave[i] = lv_obj_create(row);
+        lv_obj_remove_style_all(s_chat_wave[i]);
+        lv_obj_set_size(s_chat_wave[i], 4, k_h[i]);
+        lv_obj_set_style_radius(s_chat_wave[i], 2, 0);
+        lv_obj_set_style_bg_opa(s_chat_wave[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(s_chat_wave[i], lv_color_hex(0x7EC8FF), 0);
+        lv_obj_remove_flag(s_chat_wave[i], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_chat_wave[i], LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -689,6 +1038,11 @@ void pet_view_set_intent_hook(pet_view_intent_hook_t hook)
     s_intent_hook = hook;
 }
 
+void pet_view_set_chat_hook(pet_view_chat_hook_t hook)
+{
+    s_chat_hook = hook;
+}
+
 void pet_view_boot_start(lv_obj_t *parent, pet_view_boot_done_fn on_home)
 {
     uint16_t w = 0;
@@ -770,10 +1124,6 @@ void pet_view_boot_pack_done(void)
 void pet_view_create(lv_obj_t *parent)
 {
     lv_obj_t *hit;
-    lv_obj_t *care_f;
-    lv_obj_t *care_p;
-    lv_obj_t *care_s;
-    lv_obj_t *chat;
     uint32_t bytes = PET_BODY_PIXELS * 2U;
 
     if (parent == NULL) {
@@ -844,6 +1194,8 @@ void pet_view_create(lv_obj_t *parent)
     lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(hit, body_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(hit, body_event_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(hit, body_event_cb, LV_EVENT_CLICKED, NULL);
+    s_body_hit = hit;
 
     /* Needs：顶中三点，间距 8，绿/蓝/黄 = 饥饿/心情/精力 */
     {
@@ -870,16 +1222,19 @@ void pet_view_create(lv_obj_t *parent)
     }
 
     /* 左侧护理弧 F/P/S（独立、间距加大）；右侧 Chat */
-    care_f = make_care_btn(parent, "F", PET_CARE_ARC_X_WING, -PET_CARE_ARC_Y, PET_EVT_CARE_FEED,
-                           PET_UI_ICON_FEED);
-    care_p = make_care_btn(parent, "P", PET_CARE_ARC_X_MID, 0, PET_EVT_CARE_PLAY, PET_UI_ICON_PLAY);
-    care_s = make_care_btn(parent, "S", PET_CARE_ARC_X_WING, PET_CARE_ARC_Y, PET_EVT_CARE_SLEEP,
-                           PET_UI_ICON_SLEEP);
-    chat = make_chat_btn(parent);
-    lv_obj_move_foreground(care_f);
-    lv_obj_move_foreground(care_p);
-    lv_obj_move_foreground(care_s);
-    lv_obj_move_foreground(chat);
+    s_care_f = make_care_btn(parent, "F", PET_CARE_ARC_X_WING, -PET_CARE_ARC_Y, PET_EVT_CARE_FEED,
+                             PET_UI_ICON_FEED);
+    s_care_p = make_care_btn(parent, "P", PET_CARE_ARC_X_MID, 0, PET_EVT_CARE_PLAY, PET_UI_ICON_PLAY);
+    s_care_s = make_care_btn(parent, "S", PET_CARE_ARC_X_WING, PET_CARE_ARC_Y, PET_EVT_CARE_SLEEP,
+                             PET_UI_ICON_SLEEP);
+    s_chat_btn = make_chat_btn(parent);
+    lv_obj_move_foreground(s_care_f);
+    lv_obj_move_foreground(s_care_p);
+    lv_obj_move_foreground(s_care_s);
+    lv_obj_move_foreground(s_chat_btn);
+
+    s_home_parent = parent;
+    chat_create_layer(parent);
 
     apply_face(PET_FACE_IDLE);
     apply_hud();
@@ -901,7 +1256,20 @@ void pet_view_poll(void)
         drain_intents();
     }
 
-    if (s_pressing) {
+    if (s_chat_open) {
+        if (s_chat_listen_ui_pending) {
+            s_chat_listen_ui_pending = false;
+            if (s_chat_listen_on) {
+                chat_apply_mode_ui(PET_CHAT_MODE_LISTENING);
+                chat_set_caption_internal(NULL);
+            }
+        }
+        s_chat_idle_ms += PET_VIEW_POLL_MS;
+        chat_tick_wave();
+        if (s_chat_idle_ms >= PET_CHAT_IDLE_MS) {
+            chat_close_internal(true);
+        }
+    } else if (s_pressing) {
         s_press_ms += PET_VIEW_POLL_MS;
         if (!s_hold_sent && (s_press_ms >= PET_VIEW_HOLD_MS)) {
             s_hold_sent = true;
@@ -922,4 +1290,55 @@ void pet_view_poll(void)
         apply_face(s_shown_face);
     }
 #endif
+}
+
+bool pet_view_chat_is_open(void)
+{
+    return s_chat_open;
+}
+
+void pet_view_chat_close(void)
+{
+    chat_close_internal(true);
+}
+
+void pet_view_chat_set_mode(pet_chat_mode_t mode)
+{
+    if (!s_chat_open) {
+        return;
+    }
+    if (mode == s_chat_mode_id) {
+        return;
+    }
+    chat_apply_mode_ui(mode);
+    if ((mode == PET_CHAT_MODE_LISTENING) || (mode == PET_CHAT_MODE_SPEAKING) ||
+        (mode == PET_CHAT_MODE_CONNECTING)) {
+        chat_bump_idle();
+    }
+    if (mode == PET_CHAT_MODE_SPEAKING) {
+        /* 进入说态后本地听开关复位，下一击可打断再听。 */
+        s_chat_listen_on = false;
+        s_chat_listen_ui_pending = false;
+        (void)pet_core_post(PET_EVT_SPEAK, 0);
+    } else if (mode == PET_CHAT_MODE_IDLE) {
+        s_chat_listen_on = false;
+        s_chat_listen_ui_pending = false;
+    } else if (mode == PET_CHAT_MODE_LISTENING) {
+        (void)pet_core_post(PET_EVT_LISTEN, 0);
+    }
+}
+
+void pet_view_chat_set_caption(const char *utf8)
+{
+    chat_set_caption_internal(utf8);
+    if (s_chat_open && (utf8 != NULL) && (utf8[0] != '\0')) {
+        chat_bump_idle();
+    }
+}
+
+void pet_view_chat_bump_idle(void)
+{
+    if (s_chat_open) {
+        chat_bump_idle();
+    }
 }

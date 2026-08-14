@@ -17,11 +17,15 @@ desktop_pet — ESP32-S3 桌宠（LVGL UI + 板级驱动）
   idf -Project desktop_pet -p PORT flash monitor
 
 板端 LVGL UI（默认）：
-  BoardInit 后启动 desktop_pet_ui：拓麻哥奇主界面（Needs 三点 + 身体 + 左侧护理弧 + 右侧聊；五官预留、不显示）
-  触摸：点身体 poke；长按喂食；左弧 F/P/S = 喂/玩/睡；右侧 C = 聊（有 theme/ui 图标则用图，否则字母）
+  BoardInit 后启动 desktop_pet_ui：拓麻哥奇主界面
+    Needs 顶中三点 + 身体 + 左侧护理弧 F/P/S + 右侧 Chat(C)；五官预留、不显示
+  触摸：点身体 poke；长按喂食
+    左弧 F/P/S = 喂/玩/睡；右侧 C = 聊（→对话页 D：进听出停、字幕、打断、45s）
+    有 `/sdcard/pet/theme/ui/{feed,play,sleep,chat}.bin` 则显示图标，否则字母
   IMU：晃一下玩、翻转约 1s 睡觉
   GPIO0 单击：默认无动作（debug 覆盖层已隔离；`DESKTOP_PET_ENABLE_DEBUG_UI=1` 可恢复 Rec/Play/Conn/Talk）
   GPIO0 双击：清除已存 STA，重启进入 SoftAP 配网（SSID ESP32-WebCtrl / esp32web1 → http://192.168.4.1/provision）
+  GPIO0 长按：触摸校准（见下）
   DEBUG 页（可选）：Conn 小智 WS 开/关；Talk 开始/结束听（Opus 上行）
   成功日志：`hello ok` → `LISTENING` → 周期性 `uplink frames=`；说话后可能有 `STT "..."`
   资源包：`/sdcard/config` + `/sdcard/pet/`；网页 `GET /` 可上传 `pet.zip` 覆盖皮肤并重启
@@ -33,8 +37,18 @@ desktop_pet — ESP32-S3 桌宠（LVGL UI + 板级驱动）
   若 `idf.py reconfigure` 后 WS 又报 Error create websocket task：对 stock
   managed 组件重新应用 patches/esp_websocket_client_psram_stack.patch
   （任务栈改到 PSRAM；见 patch 头注释）。当前树内 managed 文件已含该改动。
-  若点击偏移：长按 GPIO0 → 确认 Needs↑/Dock↓ → 三轮 Needs/Right/Dock/Left 写入 NVS
   Agent URI：menuconfig「Desktop Pet Xiaozhi Agent」或 sdkconfig.defaults 中 CONFIG_DESKTOP_PET_AGENT_WS_URI
+
+触摸校准（NVS `touch_cal`，线性 Q16）：
+  入口：长按 GPIO0，或网页 `GET /`「触摸校准」/ API
+  流程：先确认 Needs=上 / Dock 方向=下（点中央）→ 三轮×四向（Needs/Right/Dock/Left）共 12 点
+  单击 GPIO0：校准进行中可取消；网页可清除已存校准
+  说明：正方向与主界面一致；若仅按钮难点，优先查热区（身体 vs 侧键），勿盲目改轴
+
+皮肤 / 按键图标（可选）：
+  `pet/theme/ui/{feed,play,sleep,chat}.bin` — RGBH ≤32×32；工具 Theme 面板或
+  `py -3 tools/pet_skin/cli.py --theme-ui`（PNG：assets/ui_feed|ui_play|ui_sleep|ui_chat.*）
+  Theme 支持「图片+背景色」或「纯色」；设置写入 pack.json → theme.ui
 
 Web（AP/STA 同一 HTTP）：
   SoftAP 默认 http://192.168.4.1/ ；STA 用设备 DHCP IP
@@ -53,7 +67,7 @@ LVGL PC 模拟器（仅本机下载，不入库）：
   powershell -ExecutionPolicy Bypass -File .\tools\setup_lvgl_sim.ps1
   py -3 tools\pet_skin\run_gui.py
   # 依赖：py -3 -m pip install -r tools\pet_skin\requirements.txt
-  # 或 CLI：py -3 tools\pet_skin\cli.py --splash
+  # 或 CLI：py -3 tools\pet_skin\cli.py --bind --splash --theme-ui
   powershell -ExecutionPolicy Bypass -File .\tools\pet_sim\install_into_lvgl_sim.ps1
   产物目录 tools\lvgl_sim\（已在 .gitignore）
   用 Visual Studio 打开其中 LVGL.sln，跑 LvglWindowsSimulator（240×240）

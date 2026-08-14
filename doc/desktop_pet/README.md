@@ -18,4 +18,4 @@
 - 皮肤工具：[`tools/pet_skin/README.md`](../../tools/pet_skin/README.md)
 - AI 出图方案：[`skin_ai_asset_brief.md`](skin_ai_asset_brief.md)
 - 工程说明：[`desktop_pet/README.txt`](../../desktop_pet/README.txt)
-- **从哪开干**：见 [`product.md`](product.md) §E
+- **从哪开干**：见 [`product.md`](product.md) §E（当前建议：对话页 D）

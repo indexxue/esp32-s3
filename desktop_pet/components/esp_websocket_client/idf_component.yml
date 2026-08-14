@@ -1,0 +1,5 @@
+﻿dependencies:
+  idf:
+    version: '>=5.0'
+description: WebSocket client (desktop_pet fork: keep conn on send timeout)
+version: 1.8.0-pet1

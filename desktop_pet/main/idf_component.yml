@@ -3,7 +3,9 @@ dependencies:
   lvgl/lvgl:
     version: "^9.2.0"
     public: true
-  espressif/esp_websocket_client: "^1.7.0"
+  # 本地 fork：send timeout(wlen==0) 不断开，避免 Opus 上行偶发掐会话。
+  espressif/esp_websocket_client:
+    path: ../components/esp_websocket_client
   78/esp-opus: "^1.0.5"
   idf:
     version: ">=5.5.0"

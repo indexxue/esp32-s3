@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>desktop_pet · 对话页预览（框架 D）</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1c2030;
+    --ink: #e8eaf0;
+    --muted: #8b93a7;
+    --accent: #7ec8ff;
+    --line: #2a3148;
+    --bezel: #0a0b10;
+    --safe: rgba(255, 120, 80, 0.35);
+    --screen-bg: #202020;
+    --ok: #6dd6a0;
+    --warn: #e0b060;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font: 14px/1.45 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(900px 500px at 18% -10%, #243056 0%, transparent 55%),
+      radial-gradient(700px 420px at 100% 0%, #1a2830 0%, transparent 50%),
+      var(--bg);
+  }
+  .wrap {
+    display: grid;
+    grid-template-columns: minmax(300px, 380px) 1fr;
+    gap: 20px;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 22px 18px 48px;
+  }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+  h1 { margin: 0 0 6px; font-size: 18px; font-weight: 650; letter-spacing: 0.02em; }
+  .sub { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+  .sub a { color: var(--accent); }
+  .panel {
+    background: color-mix(in srgb, var(--panel) 92%, black);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+  .panel h2 {
+    margin: 0 0 10px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: #151925;
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 7px 11px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover { border-color: #3d4766; }
+  button.active {
+    border-color: var(--accent);
+    color: #081018;
+    background: var(--accent);
+    font-weight: 650;
+  }
+  button.ghost { background: transparent; color: var(--muted); }
+  label.chk {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+  }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .notes {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .notes li { margin: 5px 0; }
+  .notes code {
+    font: 12px/1 ui-monospace, Consolas, monospace;
+    color: #c9d4ff;
+    background: #0f1320;
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .checklist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .checklist li {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin: 8px 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .checklist input { margin-top: 3px; accent-color: var(--accent); }
+  .meta {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .hint {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #121722;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .hint strong { color: var(--ink); font-weight: 600; }
+
+  .stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    min-height: 520px;
+  }
+  .bezel {
+    position: relative;
+    padding: 18px;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 35% 28%, #2a2f3d, #0c0e14 62%, #050608 100%);
+    box-shadow:
+      0 0 0 1px #33384a,
+      0 18px 40px rgba(0,0,0,.45),
+      inset 0 1px 0 rgba(255,255,255,.06);
+    transform-origin: center center;
+  }
+  .screen {
+    position: relative;
+    width: 240px;
+    height: 240px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--screen-bg);
+    image-rendering: pixelated;
+  }
+  .guides {
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+  }
+  .guides .cross {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(to right, transparent 119px, rgba(126,200,255,.35) 119px, rgba(126,200,255,.35) 121px, transparent 121px),
+      linear-gradient(to bottom, transparent 119px, rgba(126,200,255,.35) 119px, rgba(126,200,255,.35) 121px, transparent 121px);
+  }
+  .guides .safe-ring {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 200px; height: 200px;
+    margin: -100px 0 0 -100px;
+    border: 1px dashed var(--safe);
+    border-radius: 50%;
+  }
+
+  /* ===== Home entry (left care + right chat) ===== */
+  .page { position: absolute; inset: 0; display: none; }
+  .page.on { display: block; }
+
+  .home {
+    background: #202020;
+  }
+  .home .needs {
+    position: absolute;
+    left: 50%; top: 18px;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 7px;
+    z-index: 2;
+  }
+  .home .needs b {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: block;
+  }
+  .home .needs b:nth-child(1) { background: #6dd6a0; }
+  .home .needs b:nth-child(2) { background: #7ec8ff; }
+  .home .needs b:nth-child(3) { background: #e0b060; }
+  .home .body {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 150px; height: 150px;
+    margin: -75px 0 0 -75px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #5bb8d8, #3a8fb0);
+  }
+  .home .care {
+    position: absolute;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: #3a3a44;
+    color: #e8eaf0;
+    display: grid;
+    place-items: center;
+    font: 600 11px/1 "Segoe UI", "PingFang SC", sans-serif;
+    z-index: 2;
+  }
+  .home .care.f { left: 36px; top: 58px; }   /* wing up ~ x=-84 y=-62 */
+  .home .care.p { left: 16px; top: 106px; }  /* mid  ~ x=-104 y=0 */
+  .home .care.s { left: 36px; top: 154px; }  /* wing down */
+  .home .chat-btn {
+    position: absolute;
+    right: 10px; top: 106px;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: #3a5570;
+    box-shadow: inset 0 0 0 1px rgba(126, 200, 255, 0.65);
+    color: #dceeff;
+    display: grid;
+    place-items: center;
+    font: 600 11px/1 "Segoe UI", "PingFang SC", sans-serif;
+    cursor: pointer;
+    z-index: 2;
+  }
+  .home .chat-btn:hover { filter: brightness(1.12); }
+
+  /* ===== Chat D ===== */
+  .chat {
+    background: #141820;
+    color: #e8eaf0;
+  }
+  .chat .back {
+    position: absolute;
+    left: 16px; top: 16px;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.1);
+    display: grid;
+    place-items: center;
+    font: 13px/1 sans-serif;
+    cursor: pointer;
+    z-index: 4;
+    user-select: none;
+  }
+  .chat .back:hover { background: rgba(255,255,255,.16); }
+  .chat .mode {
+    position: absolute;
+    left: 0; right: 0;
+    top: 22px;
+    text-align: center;
+    font: 600 11px/1 "Segoe UI", "PingFang SC", sans-serif;
+    color: #9aa3b8;
+    letter-spacing: 0.04em;
+    z-index: 3;
+    pointer-events: none;
+  }
+  .chat[data-mode="connecting"] .mode { color: var(--warn); }
+  .chat[data-mode="listening"] .mode { color: var(--accent); }
+  .chat[data-mode="speaking"] .mode { color: var(--ok); }
+  .chat[data-mode="idle"] .mode { color: #7a849c; }
+
+  .chat .pet {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 132px; height: 132px;
+    margin: -66px 0 0 -66px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #5bb8d8, #3a8fb0);
+    cursor: pointer;
+    z-index: 1;
+    transition: transform .18s ease, box-shadow .18s ease;
+  }
+  .chat .pet:hover { transform: scale(1.02); }
+  .chat .pet:active { transform: scale(0.98); }
+  .chat[data-mode="speaking"] .pet {
+    box-shadow: 0 0 0 3px rgba(109, 214, 160, 0.35);
+  }
+  .chat[data-mode="listening"] .pet {
+    box-shadow: 0 0 0 3px rgba(126, 200, 255, 0.28);
+  }
+  .chat .pet-hint {
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%, 58px);
+    font: 9px/1 "Segoe UI", "PingFang SC", sans-serif;
+    color: rgba(220, 230, 248, 0.55);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .2s;
+    z-index: 2;
+    white-space: nowrap;
+  }
+  .chat[data-mode="speaking"] .pet-hint { opacity: 1; }
+
+  .chat .caption {
+    position: absolute;
+    left: 22px; right: 22px;
+    bottom: 52px;
+    min-height: 34px;
+    max-height: 48px;
+    border-radius: 12px;
+    background: rgba(0,0,0,.42);
+    padding: 7px 10px;
+    font: 10px/1.35 "Segoe UI", "PingFang SC", sans-serif;
+    color: #dce6f8;
+    text-align: center;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    z-index: 3;
+    transition: opacity .2s;
+  }
+  .chat .caption.empty {
+    color: #6a7388;
+  }
+
+  .chat .wave {
+    position: absolute;
+    left: 50%; bottom: 16px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 26px;
+    z-index: 3;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s;
+  }
+  .chat[data-mode="listening"] .wave { opacity: 1; }
+  .chat .wave span {
+    width: 4px;
+    border-radius: 2px;
+    background: #7ec8ff;
+    animation: wave 0.9s ease-in-out infinite;
+    transform-origin: bottom center;
+  }
+  .chat .wave span:nth-child(1) { height: 10px; animation-delay: 0s; }
+  .chat .wave span:nth-child(2) { height: 18px; animation-delay: .1s; }
+  .chat .wave span:nth-child(3) { height: 24px; animation-delay: .2s; }
+  .chat .wave span:nth-child(4) { height: 14px; animation-delay: .3s; }
+  .chat .wave span:nth-child(5) { height: 20px; animation-delay: .15s; }
+  @keyframes wave {
+    0%, 100% { transform: scaleY(.55); opacity: .55; }
+    50% { transform: scaleY(1); opacity: 1; }
+  }
+
+  /* Layout variants within D */
+  .chat.v-compact .pet {
+    width: 118px; height: 118px;
+    margin: -59px 0 0 -59px;
+  }
+  .chat.v-compact .caption { bottom: 48px; }
+  .chat.v-tall-caption .caption {
+    bottom: 46px;
+    min-height: 42px;
+    max-height: 56px;
+    -webkit-line-clamp: 3;
+  }
+  .chat.v-wave-side .wave {
+    left: auto; right: 28px;
+    bottom: 22px;
+    transform: none;
+  }
+  .chat.v-wave-side .caption { right: 52px; }
+
+  .caption-out {
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+    max-width: 460px;
+  }
+  .caption-out strong { color: var(--ink); font-weight: 600; }
+
+  .sim-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    max-width: 520px;
+  }
+  .timer {
+    font: 12px/1 ui-monospace, Consolas, monospace;
+    color: var(--muted);
+  }
+  .timer.warn { color: var(--warn); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <aside>
+      <h1>对话页预览 · 框架 D</h1>
+      <p class="sub">
+        产品约定：语音优先 · 进入即听 · 离开即停 · 当前一轮字幕。<br />
+        文档 <a href="../../doc/desktop_pet/product.md">product.md §C</a> ·
+        <a href="index.html">总预览</a>
+      </p>
+
+      <div class="panel">
+        <h2>画面</h2>
+        <div class="row" id="pageBtns">
+          <button type="button" data-page="home">主界面入口</button>
+          <button type="button" data-page="chat" class="active">对话页 D</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>会话状态（模拟）</h2>
+        <div class="row" id="modeBtns">
+          <button type="button" data-mode="connecting">连接中</button>
+          <button type="button" data-mode="listening" class="active">听</button>
+          <button type="button" data-mode="speaking">说</button>
+          <button type="button" data-mode="idle">空闲</button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button type="button" id="btnEnter" class="ghost">模拟「进页即听」</button>
+          <button type="button" id="btnCycle" class="ghost">跑一轮听→说→听</button>
+          <button type="button" id="btnTimeout" class="ghost">模拟 45s 超时</button>
+        </div>
+        <p class="hint">
+          <strong>屏上操作：</strong>点身体 = TTS 中断重讲（回听）；点 ← = 离开即停回主界面。
+        </p>
+        <div class="meta" id="meta">mode=listening · idle_left=45s</div>
+      </div>
+
+      <div class="panel">
+        <h2>布局微调（仍属 D）</h2>
+        <div class="row" id="layoutBtns">
+          <button type="button" data-layout="base" class="active">基准</button>
+          <button type="button" data-layout="compact">宠略小</button>
+          <button type="button" data-layout="tall">字幕加高</button>
+          <button type="button" data-layout="wave-side">波形靠右</button>
+        </div>
+        <ul class="notes" style="margin-top:10px">
+          <li>无 Needs、无照料 Dock（与主界面隔离）。</li>
+          <li>五官预留，本预览不画眼/嘴。</li>
+          <li>字幕只展当前一轮（听=STT，说=助手句）。</li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <h2>评估清单</h2>
+        <ul class="checklist" id="checklist">
+          <li><input type="checkbox" /> 大宠为主体，一眼仍是「宠」而不是聊天框</li>
+          <li><input type="checkbox" /> 顶中模式字（听/说/连接中）够克制、可读</li>
+          <li><input type="checkbox" /> 左上返回命中区够大、不挡宠</li>
+          <li><input type="checkbox" /> 字幕条位置/高度适合 1～2 行中文</li>
+          <li><input type="checkbox" /> 听时波形明确；说时波形收起不抢戏</li>
+          <li><input type="checkbox" /> 点脸「中断重讲」可发现（说态有 hint）</li>
+          <li><input type="checkbox" /> 从主界面右侧 C 进入路径清楚</li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <h2>调试叠加</h2>
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="chkCross" /> 十字</label>
+          <label class="chk"><input type="checkbox" id="chkSafe" checked /> 安全圆 ø200</label>
+        </div>
+        <div style="margin-top:12px">
+          <label class="chk" style="width:100%; justify-content:space-between">
+            放大预览
+            <span id="scaleVal">2.0×</span>
+          </label>
+          <input type="range" id="scale" min="1" max="3" step="0.25" value="2" />
+        </div>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <div class="bezel" id="bezel">
+        <div class="screen" id="screen">
+          <div class="page home" id="home">
+            <div class="needs"><b></b><b></b><b></b></div>
+            <div class="body"></div>
+            <div class="care f">F</div>
+            <div class="care p">P</div>
+            <div class="care s">S</div>
+            <div class="chat-btn" id="gotoChat" title="进入对话页">C</div>
+          </div>
+
+          <div class="page chat on" id="chat" data-mode="listening">
+            <div class="back" id="btnBack" title="离开即停">←</div>
+            <div class="mode" id="modeLabel">正在听…</div>
+            <div class="pet" id="petBody" title="点按：中断重讲"></div>
+            <div class="pet-hint">点我打断</div>
+            <div class="caption empty" id="captionBar">说点什么吧…</div>
+            <div class="wave" id="wave">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+
+          <div class="guides" id="guides">
+            <div class="cross" id="gCross" hidden></div>
+            <div class="safe-ring" id="gSafe"></div>
+          </div>
+        </div>
+      </div>
+
+      <p class="caption-out" id="captionOut">
+        <strong>对话框架 D</strong> — 语音优先：大身体 + 当前一轮字幕 + 听时波形。
+      </p>
+      <div class="sim-bar">
+        <span class="timer" id="idleTimer">无活动倒计时 45s</span>
+      </div>
+    </main>
+  </div>
+
+<script>
+(function () {
+  const MODE_COPY = {
+    connecting: { label: "连接中…", caption: "正在连接助手…", empty: true },
+    listening:  { label: "正在听…", caption: "今天天气怎么样", empty: false },
+    speaking:   { label: "正在说…", caption: "晴天，适合晒太阳～", empty: false },
+    idle:       { label: "待命", caption: "说点什么吧…", empty: true },
+  };
+
+  const LAYOUT_CLASS = {
+    base: "",
+    compact: "v-compact",
+    tall: "v-tall-caption",
+    "wave-side": "v-wave-side",
+  };
+
+  const pageCaptions = {
+    home: ["主界面入口", "左弧 F/P/S + 右侧 C「聊」→ 对话 D（对齐现网 pet_view）。"],
+    chat: ["对话框架 D", "语音优先：大身体 + 当前一轮字幕 + 听时波形。"],
+  };
+
+  const chat = document.getElementById("chat");
+  const home = document.getElementById("home");
+  const modeLabel = document.getElementById("modeLabel");
+  const captionBar = document.getElementById("captionBar");
+  const meta = document.getElementById("meta");
+  const captionOut = document.getElementById("captionOut");
+  const idleTimerEl = document.getElementById("idleTimer");
+  const bezel = document.getElementById("bezel");
+  const scale = document.getElementById("scale");
+  const scaleVal = document.getElementById("scaleVal");
+
+  let mode = "listening";
+  let idleLeft = 45;
+  let idleHandle = null;
+  let cycleHandle = null;
+  let page = "chat";
+
+  function setPage(id) {
+    page = id;
+    home.classList.toggle("on", id === "home");
+    chat.classList.toggle("on", id === "chat");
+    document.querySelectorAll("#pageBtns [data-page]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.page === id);
+    });
+    const c = pageCaptions[id] || [id, ""];
+    captionOut.innerHTML = "<strong>" + c[0] + "</strong> — " + c[1];
+    if (id === "chat") {
+      bumpIdle();
+    } else {
+      stopIdle();
+      stopCycle();
+    }
+    updateMeta();
+  }
+
+  function applyMode(next, opts) {
+    opts = opts || {};
+    mode = next;
+    const copy = MODE_COPY[next] || MODE_COPY.idle;
+    chat.setAttribute("data-mode", next);
+    modeLabel.textContent = copy.label;
+    if (!opts.keepCaption) {
+      captionBar.textContent = copy.caption;
+      captionBar.classList.toggle("empty", !!copy.empty);
+    }
+    document.querySelectorAll("#modeBtns [data-mode]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.mode === next);
+    });
+    if (page === "chat") {
+      bumpIdle();
+    }
+    updateMeta();
+  }
+
+  function updateMeta() {
+    meta.textContent =
+      "page=" + page + " · mode=" + mode + " · idle_left=" + idleLeft + "s · 240×240";
+  }
+
+  function stopIdle() {
+    if (idleHandle) {
+      clearInterval(idleHandle);
+      idleHandle = null;
+    }
+  }
+
+  function stopCycle() {
+    if (cycleHandle) {
+      clearTimeout(cycleHandle);
+      cycleHandle = null;
+    }
+  }
+
+  function bumpIdle() {
+    stopIdle();
+    idleLeft = 45;
+    idleTimerEl.textContent = "无活动倒计时 " + idleLeft + "s";
+    idleTimerEl.classList.remove("warn");
+    updateMeta();
+    idleHandle = setInterval(() => {
+      if (page !== "chat") return;
+      idleLeft -= 1;
+      idleTimerEl.textContent = "无活动倒计时 " + idleLeft + "s";
+      idleTimerEl.classList.toggle("warn", idleLeft <= 10);
+      updateMeta();
+      if (idleLeft <= 0) {
+        stopIdle();
+        leaveChat("45s 无活动 → 离开即停");
+      }
+    }, 1000);
+  }
+
+  function leaveChat(reason) {
+    stopCycle();
+    applyMode("idle", { keepCaption: true });
+    captionBar.textContent = reason || "已离开会话";
+    captionBar.classList.add("empty");
+    setPage("home");
+    idleTimerEl.textContent = "已回主界面（离开即停）";
+    idleTimerEl.classList.remove("warn");
+  }
+
+  function tapToggle() {
+    if (page !== "chat") return;
+    stopCycle();
+    if (mode === "listening") {
+      applyMode("idle");
+      captionBar.textContent = "等待回答…";
+      captionBar.classList.remove("empty");
+      cycleHandle = setTimeout(() => {
+        applyMode("speaking");
+        captionBar.textContent = "晴天，适合晒太阳～";
+        cycleHandle = setTimeout(() => {
+          applyMode("idle");
+          captionBar.textContent = "tap to talk";
+          captionBar.classList.add("empty");
+          cycleHandle = null;
+        }, 2200);
+      }, 900);
+    } else {
+      applyMode("listening");
+      captionBar.textContent = "正在听…";
+      captionBar.classList.remove("empty");
+    }
+  }
+
+  function runCycle() {
+    stopCycle();
+    setPage("chat");
+    applyMode("connecting");
+    captionBar.textContent = "tap to talk";
+    captionBar.classList.add("empty");
+    cycleHandle = setTimeout(() => {
+      applyMode("idle");
+      cycleHandle = setTimeout(() => {
+        applyMode("listening");
+        captionBar.textContent = "今天天气怎么样";
+        captionBar.classList.remove("empty");
+        cycleHandle = setTimeout(() => {
+          applyMode("idle");
+          captionBar.textContent = "等待回答…";
+          cycleHandle = setTimeout(() => {
+            applyMode("speaking");
+            captionBar.textContent = "晴天，适合晒太阳～";
+            cycleHandle = setTimeout(() => {
+              applyMode("idle");
+              captionBar.textContent = "tap to talk";
+              captionBar.classList.add("empty");
+              cycleHandle = null;
+            }, 2200);
+          }, 800);
+        }, 1400);
+      }, 600);
+    }, 800);
+  }
+
+  document.querySelectorAll("#pageBtns [data-page]").forEach((b) => {
+    b.addEventListener("click", () => setPage(b.dataset.page));
+  });
+  document.querySelectorAll("#modeBtns [data-mode]").forEach((b) => {
+    b.addEventListener("click", () => {
+      stopCycle();
+      setPage("chat");
+      applyMode(b.dataset.mode);
+    });
+  });
+  document.querySelectorAll("#layoutBtns [data-layout]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const id = b.dataset.layout;
+      chat.classList.remove("v-compact", "v-tall-caption", "v-wave-side");
+      const cls = LAYOUT_CLASS[id];
+      if (cls) chat.classList.add(cls);
+      document.querySelectorAll("#layoutBtns [data-layout]").forEach((x) => {
+        x.classList.toggle("active", x === b);
+      });
+    });
+  });
+
+  document.getElementById("gotoChat").addEventListener("click", () => {
+    setPage("chat");
+    applyMode("idle");
+    captionBar.textContent = "tap to talk";
+    captionBar.classList.add("empty");
+  });
+  document.getElementById("btnBack").addEventListener("click", () => {
+    leaveChat("← 离开即停");
+  });
+  document.getElementById("petBody").addEventListener("click", tapToggle);
+  document.getElementById("btnEnter").addEventListener("click", () => {
+    stopCycle();
+    setPage("chat");
+    applyMode("idle");
+    captionBar.textContent = "tap to talk";
+    captionBar.classList.add("empty");
+  });
+  document.getElementById("btnCycle").addEventListener("click", runCycle);
+  document.getElementById("btnTimeout").addEventListener("click", () => {
+    stopCycle();
+    setPage("chat");
+    idleLeft = 3;
+    idleTimerEl.textContent = "无活动倒计时 " + idleLeft + "s（快进）";
+    idleTimerEl.classList.add("warn");
+    updateMeta();
+    stopIdle();
+    idleHandle = setInterval(() => {
+      idleLeft -= 1;
+      idleTimerEl.textContent = "无活动倒计时 " + idleLeft + "s（快进）";
+      updateMeta();
+      if (idleLeft <= 0) {
+        stopIdle();
+        leaveChat("45s 无活动 → 离开即停");
+      }
+    }, 700);
+  });
+
+  const gCross = document.getElementById("gCross");
+  const gSafe = document.getElementById("gSafe");
+  document.getElementById("chkCross").addEventListener("change", (e) => {
+    gCross.hidden = !e.target.checked;
+  });
+  document.getElementById("chkSafe").addEventListener("change", (e) => {
+    gSafe.hidden = !e.target.checked;
+  });
+
+  function applyScale() {
+    const v = parseFloat(scale.value, 10);
+    scaleVal.textContent = v.toFixed(2).replace(/\.?0+$/, "") + "×";
+    bezel.style.transform = "scale(" + v + ")";
+  }
+  scale.addEventListener("input", applyScale);
+  applyScale();
+
+  applyMode("idle");
+  bumpIdle();
+})();
+</script>
+</body>
+</html>

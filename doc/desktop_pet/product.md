@@ -3,7 +3,7 @@
 **版本**：0.4（卡根 `/sdcard/config` 上电读取）  
 **日期**：2026-08-14  
 **入口**：[`README.md`](README.md) · 术语 [`CONTEXT.md`](CONTEXT.md) · 引擎 [`framework.md`](framework.md) · 语音 [`cloud_asr.md`](cloud_asr.md)  
-**预览**：[`tools/pet_ui_preview/index.html`](../../tools/pet_ui_preview/index.html)
+**预览**：[`tools/pet_ui_preview/index.html`](../../tools/pet_ui_preview/index.html) · 对话页评估 [`chat.html`](../../tools/pet_ui_preview/chat.html)
 
 本文合并原皮肤包 / 主界面 / 对话页约定与 ADR-0001～0004。
 
@@ -64,9 +64,10 @@ Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/fon
 
 | 能力 | 状态 |
 |------|------|
-| `skin_core.py` | 唯一写盘核心（bind/check、色盘 / 图片身体 / splash） |
-| `cli.py` | `--bind` / `--import` / `--check` / `--splash` / `--zip` |
-| Qt GUI `run_gui.py` | Splash / Design / Pack / Body；Pack 可 Export zip |
+| `skin_core.py` | 唯一写盘核心（bind/check、身体 / splash / theme UI） |
+| `cli.py` | `--bind` / `--import` / `--check` / `--splash` / `--theme-ui` / `--zip` |
+| Qt GUI `run_gui.py` | Splash / Design / Pack / Body / **Theme**；Pack 可 Export zip |
+| Theme UI 图标 | `theme/ui/*.bin`；图片+背景色或纯色；缺图字母 fallback |
 | 网页换肤 | 设备 `GET /` 上传 `pet.zip` → 覆盖 `/sdcard/pet/` → 重启 |
 | 教程 | [`tools/pet_skin/README.md`](../../tools/pet_skin/README.md) |
 
@@ -84,24 +85,28 @@ Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/fon
 ```
 背景 #202020
   身体 RGBH（ø140–160）
-  身体热区（tap / hold→喂）
+  身体热区（tap / hold→喂；收窄避开侧键）
   Needs 三点（顶中）
   异常短提示（可选淡出）
-  Dock：喂 / 玩 / 睡 / 聊（底弧）
+  左侧护理弧：喂 / 玩 / 睡（独立圆钮，中钮更靠外）
+  右侧 Chat：聊（独立圆钮）
 ```
 五官 LVGL 叠加与表情演出：**预留，本阶段固件不创建、不显示**。
 
-### B.3 Needs / Dock / 文案
+### B.3 Needs / 照料 / Chat / 文案
 
 - Needs：顶中三点，绿/蓝/黄 = 饥饿/心情/精力。
-- Dock：ø≈28、间距≈8；顺序喂→玩→睡→聊；聊样式区分。
+- 照料弧：ø≈28；左弧 F→P→S（喂/玩/睡）；可选 `theme/ui/{feed,play,sleep}.bin`。
+- Chat：右侧独立 C；可选 `theme/ui/chat.bin`；样式与照料区分。
+- 缺图标时字母 fallback；热区 `ext_click_area` 外扩，身体热区与侧键错开。
 - 默认无常显状态句；`NO PACK` 等短提示后淡出。
-- Debug 覆盖层非产品；GPIO0 原切 debug 语义作废后另定。
-- **五官 / 表情（预留，暂不做）**：`PET_FACE_*`、`PET_INTENT_FACE`、`PET_EVT_EMOTION`、`pack.bin` 五官锚点仍保留；`pet_view` **不叠眼/嘴/眉**。换肤只换身体。落地时见 [`framework.md`](framework.md) §6.4。
+- Debug 覆盖层非产品；GPIO0 单击默认无动作（见工程 README）。
+- 触摸校准：GPIO0 长按 / 网页；Needs↑ Dock↓ 确认后 12 点写入 NVS（见工程 README）。
+- **五官 / 表情（预留，暂不做）**：`PET_FACE_*`、`PET_INTENT_FACE`、`PET_EVT_EMOTION`、`pack.bin` 五官锚点仍保留；`pet_view` **不叠眼/嘴/眉**。换肤只换身体（+可选按键图标）。落地时见 [`framework.md`](framework.md) §6.4。
 
 ### B.4 延后
 
-Care Feedback（移动/跟随等）；Dock 图标像素稿。
+Care Feedback（移动/跟随等）；Chat 图标皮肤打磨；对话页中文字体（`pet/font`）。
 
 五官叠加 / 表情演出 / 眨眼：**暂不做**（引擎口预留，固件不画）。作者侧 Design 锚点可继续写 `pack.json`，设备本阶段忽略。
 
@@ -113,22 +118,22 @@ Care Feedback（移动/跟随等）；Dock 图标像素稿。
 
 ```
 左上返回
-顶中模式字（听/说/连接中）
-大宠身体（可点：中断重讲；五官预留不显示）
+顶中模式字（听/说/连接中/就绪）
+大宠身体（单击切换听↔等答；说中单击打断再听）
 字幕条（当前一轮）
 波形（听时动）
 ```
 
-无 Needs、无照料 Dock。
+无 Needs、无照料 Dock。可交互评估稿：[`tools/pet_ui_preview/chat.html`](../../tools/pet_ui_preview/chat.html)。
 
 ### C.2 生命周期
 
 | 事件 | 行为 |
 |------|------|
-| 进页（Dock「聊」） | **进入即听** |
+| 进页（右侧「聊」） | **只连会话**（不自动听）；提示 tap to talk |
+| 单击宠身体 | **切换**：未听→开始听；听中→停听等答（`listen stop` → STT/LLM/TTS）；说中→打断再听 |
 | 返回 / 可选 GPIO0 | **离开即停**（停听停播结束会话） |
 | ≈45s 无活动 | 同上（听/说/STT 重置计时） |
-| TTS 中说话或点脸 | **中断重讲** → 停播回听 |
 
 字幕：听=STT，说=助手当前句；不滚长历史。「助手再说一遍」未约定。
 
@@ -146,7 +151,10 @@ Care Feedback（移动/跟随等）；Dock 图标像素稿。
 
 ### D.2 主界面构图 — accepted
 
-宠为主体；Needs 三点；底弧四钮；无常显状态字；无产品 debug 页。五官 LVGL 叠加为后续项，本阶段不显示。
+宠为主体；Needs 三点；**左弧照料三钮 + 右侧 Chat**；无常显状态字；无产品 debug 页。
+可选 `theme/ui` 按键图标。五官 LVGL 叠加为后续项，本阶段不显示。
+
+（历史「底弧四钮」已废弃，以本节与 §B 为准。）
 
 ### D.5 五官锚点 + 分件旋转 — accepted（显示延后）
 
@@ -160,17 +168,19 @@ Care Feedback（移动/跟随等）；Dock 图标像素稿。
 
 ### D.4 对话 D 交互 — accepted
 
-进入即听；离开即停；可打断/点脸重讲；当前一轮字幕；45s 超时。
+进入只连会话；单击切换听/等答；离开即停；当前一轮字幕；45s 超时。
 
 ---
 
 ## E. 实现顺序（建议）
 
-1. `pet_skin` 写出 splash；固件 splash + Gate。
-2. `pet_view`：三点 Needs、四钮 Dock、去常显状态字；去/隔离 debug。
-3. 对话页空壳 → 接 agent（进听出停、字幕、打断、45s）。
-4. **五官/表情（预留）**：`pet_view` 打开叠加 + 锚点应用；此前固件只画身体。
-5. Care Feedback / 图标 / 历史页等专项。
+1. ~~`pet_skin` 写出 splash；固件 splash + Gate。~~ **已完成**
+2. ~~`pet_view`：Needs、照料弧 + Chat、字母/图标、热区；隔离 debug；触摸校准。~~ **已完成（主界面骨架）**
+3. ~~对话页空壳 → 接 agent（单击听↔等答、字幕、45s）。~~ **已完成骨架**（换肤/中文字体后续）
+4. 补齐 `ui_chat` 图标与皮肤包打磨；板测校准一次并固化 NVS（量产可预写或出厂向导）。
+5. **五官/表情（预留）**：`pet_view` 打开叠加 + 锚点应用；此前固件只画身体。
+6. Care Feedback / 历史页等专项。
+7. 对话页换肤 / `pet/font` 中文字幕字体。
 
 ## F. 变更规则
 
