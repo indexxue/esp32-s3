@@ -30,6 +30,7 @@
     pack.bin
     body/*.bin          ← RGBH 身体帧
     boot/splash.bin     ← 开机单帧 RGBH（可选）
+    theme/ui/*.bin      ← 按键图标 RGBH（可选；缺则字母 F/P/S/C）
   record/               ← 运行时（固件写；目录可缺）
 ```
 
@@ -43,10 +44,11 @@
 | `pet/pack.bin` | `PETP` | 色块身体 + 默认 needs |
 | `pet/body/<name>.bin` | `RGBH` | fallback |
 | `pet/boot/splash.bin` | `RGBH`，建议 240×240 | LVGL 开机 fallback |
+| `pet/theme/ui/{feed,play,sleep,chat}.bin` | `RGBH`，28×28（≤32） | 护理/聊按钮图标；缺则字母 |
 
 `config` 首版键：`version`、`content_root`、`record_root`。未知键保留在内存。凡键名以 `_root` 结尾且值为相对路径的，上电后扫描该目录（深度 2）并记下文件名与大小。
 
-Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/font/`、`pet/theme/`、`pet/boot/anim/`。
+Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/font/`、`pet/theme/` 下除 `ui/` 外、`pet/boot/anim/`。
 
 ### A.4 开机（视觉 C）
 

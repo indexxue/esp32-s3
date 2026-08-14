@@ -1,6 +1,6 @@
 /**
  * @file pet_view.c
- * @brief Round-screen compositor: body, Needs dots, Dock (product §B).
+ * @brief Round-screen compositor: body, Needs, left care arc, right Chat.
  *        Face overlay is reserved: PET_VIEW_ENABLE_FACE=0 does not draw 五官.
  */
 
@@ -33,6 +33,17 @@
 #define PET_NEED_DOT_GAP (8)
 #define PET_DOCK_BTN_SIZE (28)
 #define PET_DOCK_BTN_GAP (8)
+/* Body 热区收窄，给左侧护理弧 / 右侧 Chat 留空 */
+#define PET_BODY_HIT_W (120)
+#define PET_BODY_HIT_H (118)
+#define PET_BODY_HIT_Y (-22)
+#define PET_DOCK_BTN_EXT_CLICK (16)
+/* 左侧护理弧：相对圆心偏移（中钮更靠外，呈弧） */
+#define PET_CARE_ARC_X_MID (-104)
+#define PET_CARE_ARC_X_WING (-84)
+#define PET_CARE_ARC_Y (62)
+#define PET_UI_ICON_PIXELS \
+    ((uint32_t)PET_RES_UI_ICON_MAX_W * (uint32_t)PET_RES_UI_ICON_MAX_H)
 #define PET_HINT_FADE_MS (2800U)
 
 static pet_view_alloc_fn s_alloc;
@@ -76,6 +87,9 @@ static uint16_t s_frame_w;
 static uint16_t s_frame_h;
 static pet_clip_id_t s_shown_clip;
 static uint8_t s_frame_idx;
+static lv_image_dsc_t s_ui_icon_dsc[PET_UI_ICON_COUNT];
+static uint16_t *s_ui_icon_pix[PET_UI_ICON_COUNT];
+static bool s_ui_icon_ok[PET_UI_ICON_COUNT];
 static uint32_t s_frame_acc_ms;
 static pet_face_id_t s_shown_face;
 static uint8_t s_tick_div;
@@ -472,11 +486,43 @@ static lv_obj_t *make_need_dot(lv_obj_t *parent, int32_t x_ofs, uint32_t color)
     lv_obj_set_style_border_color(dot, lv_color_hex(0x000000), 0);
     lv_obj_set_style_border_opa(dot, LV_OPA_40, 0);
     lv_obj_align(dot, LV_ALIGN_TOP_MID, x_ofs, 20);
+    lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
     return dot;
 }
 
-static lv_obj_t *make_dock_btn(lv_obj_t *parent, const char *title, int32_t x, pet_evt_id_t evt,
-                               bool chat_style)
+static void apply_btn_icon(lv_obj_t *btn, lv_obj_t *lbl, pet_ui_icon_id_t id)
+{
+    uint16_t w = 0;
+    uint16_t h = 0;
+    lv_obj_t *img;
+
+    if ((btn == NULL) || (lbl == NULL) || (id >= PET_UI_ICON_COUNT)) {
+        return;
+    }
+    if (!s_ui_icon_ok[id]) {
+        if (s_ui_icon_pix[id] == NULL) {
+            s_ui_icon_pix[id] = (uint16_t *)view_alloc(PET_UI_ICON_PIXELS * 2U);
+        }
+        if (s_ui_icon_pix[id] == NULL) {
+            return;
+        }
+        if (!pet_res_load_ui_icon(id, s_ui_icon_pix[id], PET_UI_ICON_PIXELS, &w, &h)) {
+            return;
+        }
+        fill_img_dsc(&s_ui_icon_dsc[id], s_ui_icon_pix[id], w, h);
+        s_ui_icon_ok[id] = true;
+    }
+
+    img = lv_image_create(btn);
+    lv_image_set_src(img, &s_ui_icon_dsc[id]);
+    lv_obj_set_size(img, (int32_t)s_ui_icon_dsc[id].header.w, (int32_t)s_ui_icon_dsc[id].header.h);
+    lv_obj_center(img);
+    lv_obj_remove_flag(img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+}
+
+static lv_obj_t *make_care_btn(lv_obj_t *parent, const char *title, int32_t x, int32_t y,
+                               pet_evt_id_t evt, pet_ui_icon_id_t icon)
 {
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_t *lbl;
@@ -485,28 +531,49 @@ static lv_obj_t *make_dock_btn(lv_obj_t *parent, const char *title, int32_t x, p
     lv_obj_set_size(btn, PET_DOCK_BTN_SIZE, PET_DOCK_BTN_SIZE);
     lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    if (chat_style) {
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x3A5570), 0);
-        lv_obj_set_style_border_width(btn, 1, 0);
-        lv_obj_set_style_border_color(btn, lv_color_hex(0x7EC8FF), 0);
-        lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
-    } else {
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x3A3A44), 0);
-        lv_obj_set_style_border_width(btn, 0, 0);
-    }
-    lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, x, -14);
-    if (chat_style) {
-        lv_obj_add_event_cb(btn, chat_cb, LV_EVENT_CLICKED, NULL);
-    } else {
-        lv_obj_add_event_cb(btn, care_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)evt);
-    }
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x3A3A44), 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_align(btn, LV_ALIGN_CENTER, x, y);
+    lv_obj_set_ext_click_area(btn, PET_DOCK_BTN_EXT_CLICK);
+    lv_obj_add_event_cb(btn, care_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)evt);
     lbl = lv_label_create(btn);
     lv_label_set_text(lbl, title);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(chat_style ? 0xDCEEFFU : 0xE8EAF0U), 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xE8EAF0), 0);
 #if LV_FONT_MONTSERRAT_14
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
 #endif
     lv_obj_center(lbl);
+    lv_obj_remove_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    apply_btn_icon(btn, lbl, icon);
+    return btn;
+}
+
+/* Chat 独立到圆屏右侧；有 theme/ui/chat.bin 则用图标，否则字母 C */
+static lv_obj_t *make_chat_btn(lv_obj_t *parent)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_t *lbl;
+
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, PET_DOCK_BTN_SIZE, PET_DOCK_BTN_SIZE);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x3A5570), 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(0x7EC8FF), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
+    lv_obj_align(btn, LV_ALIGN_RIGHT_MID, -10, 0);
+    lv_obj_set_ext_click_area(btn, PET_DOCK_BTN_EXT_CLICK);
+    lv_obj_add_event_cb(btn, chat_cb, LV_EVENT_CLICKED, NULL);
+    lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, "C");
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xDCEEFF), 0);
+#if LV_FONT_MONTSERRAT_14
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+#endif
+    lv_obj_center(lbl);
+    lv_obj_remove_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    apply_btn_icon(btn, lbl, PET_UI_ICON_CHAT);
     return btn;
 }
 
@@ -531,6 +598,7 @@ static lv_obj_t *make_eye(lv_obj_t *parent, int32_t x)
     lv_obj_set_style_bg_opa(eye, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(eye, LV_RADIUS_CIRCLE, 0);
     lv_obj_align(eye, LV_ALIGN_CENTER, x, -8);
+    lv_obj_remove_flag(eye, LV_OBJ_FLAG_CLICKABLE);
 
     pupil = lv_obj_create(eye);
     lv_obj_remove_style_all(pupil);
@@ -539,6 +607,7 @@ static lv_obj_t *make_eye(lv_obj_t *parent, int32_t x)
     lv_obj_set_style_bg_opa(pupil, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(pupil, LV_RADIUS_CIRCLE, 0);
     lv_obj_center(pupil);
+    lv_obj_remove_flag(pupil, LV_OBJ_FLAG_CLICKABLE);
     if (x < 0) {
         s_pupil_l = pupil;
     } else {
@@ -701,8 +770,10 @@ void pet_view_boot_pack_done(void)
 void pet_view_create(lv_obj_t *parent)
 {
     lv_obj_t *hit;
-    lv_obj_t *dock;
-    int32_t dock_span;
+    lv_obj_t *care_f;
+    lv_obj_t *care_p;
+    lv_obj_t *care_s;
+    lv_obj_t *chat;
     uint32_t bytes = PET_BODY_PIXELS * 2U;
 
     if (parent == NULL) {
@@ -726,10 +797,12 @@ void pet_view_create(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_body_fallback, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(s_body_fallback, LV_RADIUS_CIRCLE, 0);
     lv_obj_align(s_body_fallback, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_remove_flag(s_body_fallback, LV_OBJ_FLAG_CLICKABLE);
 
     s_body_img = lv_image_create(parent);
     lv_obj_align(s_body_img, LV_ALIGN_CENTER, 0, -6);
     lv_obj_add_flag(s_body_img, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_body_img, LV_OBJ_FLAG_CLICKABLE);
 
 #if PET_VIEW_ENABLE_FACE
     s_eye_l = make_eye(parent, -18);
@@ -742,6 +815,7 @@ void pet_view_create(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_brow_l, LV_OPA_COVER, 0);
     lv_obj_align(s_brow_l, LV_ALIGN_CENTER, -18, -24);
     lv_obj_add_flag(s_brow_l, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_brow_l, LV_OBJ_FLAG_CLICKABLE);
 
     s_brow_r = lv_obj_create(parent);
     lv_obj_remove_style_all(s_brow_r);
@@ -750,6 +824,7 @@ void pet_view_create(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_brow_r, LV_OPA_COVER, 0);
     lv_obj_align(s_brow_r, LV_ALIGN_CENTER, 18, -24);
     lv_obj_add_flag(s_brow_r, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_brow_r, LV_OBJ_FLAG_CLICKABLE);
 
     s_mouth = lv_obj_create(parent);
     lv_obj_remove_style_all(s_mouth);
@@ -758,13 +833,14 @@ void pet_view_create(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_mouth, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(s_mouth, 6, 0);
     lv_obj_align(s_mouth, LV_ALIGN_CENTER, 0, 28);
+    lv_obj_remove_flag(s_mouth, LV_OBJ_FLAG_CLICKABLE);
 #endif
 
     hit = lv_obj_create(parent);
     lv_obj_remove_style_all(hit);
-    lv_obj_set_size(hit, 150, 150);
+    lv_obj_set_size(hit, PET_BODY_HIT_W, PET_BODY_HIT_H);
     lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
-    lv_obj_align(hit, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_align(hit, LV_ALIGN_CENTER, 0, PET_BODY_HIT_Y);
     lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(hit, body_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(hit, body_event_cb, LV_EVENT_RELEASED, NULL);
@@ -793,22 +869,17 @@ void pet_view_create(lv_obj_t *parent)
         lv_timer_set_repeat_count(s_hint_timer, 1);
     }
 
-    /* Dock 底弧四钮：喂/玩/睡/聊；ø28 间距 8（无中文字体用 F/P/S/C） */
-    dock_span = PET_DOCK_BTN_SIZE + PET_DOCK_BTN_GAP;
-    dock = lv_obj_create(parent);
-    lv_obj_remove_style_all(dock);
-    lv_obj_set_size(dock, (4 * PET_DOCK_BTN_SIZE) + (3 * PET_DOCK_BTN_GAP) + 16,
-                    PET_DOCK_BTN_SIZE + 10);
-    lv_obj_set_style_bg_color(dock, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(dock, LV_OPA_30, 0);
-    lv_obj_set_style_radius(dock, 999, 0);
-    lv_obj_align(dock, LV_ALIGN_BOTTOM_MID, 0, -9);
-    lv_obj_remove_flag(dock, LV_OBJ_FLAG_CLICKABLE);
-
-    (void)make_dock_btn(parent, "F", (int32_t)(-3 * dock_span / 2), PET_EVT_CARE_FEED, false);
-    (void)make_dock_btn(parent, "P", (int32_t)(-dock_span / 2), PET_EVT_CARE_PLAY, false);
-    (void)make_dock_btn(parent, "S", (int32_t)(dock_span / 2), PET_EVT_CARE_SLEEP, false);
-    (void)make_dock_btn(parent, "C", (int32_t)(3 * dock_span / 2), PET_EVT_CARE_WAKE, true);
+    /* 左侧护理弧 F/P/S（独立、间距加大）；右侧 Chat */
+    care_f = make_care_btn(parent, "F", PET_CARE_ARC_X_WING, -PET_CARE_ARC_Y, PET_EVT_CARE_FEED,
+                           PET_UI_ICON_FEED);
+    care_p = make_care_btn(parent, "P", PET_CARE_ARC_X_MID, 0, PET_EVT_CARE_PLAY, PET_UI_ICON_PLAY);
+    care_s = make_care_btn(parent, "S", PET_CARE_ARC_X_WING, PET_CARE_ARC_Y, PET_EVT_CARE_SLEEP,
+                           PET_UI_ICON_SLEEP);
+    chat = make_chat_btn(parent);
+    lv_obj_move_foreground(care_f);
+    lv_obj_move_foreground(care_p);
+    lv_obj_move_foreground(care_s);
+    lv_obj_move_foreground(chat);
 
     apply_face(PET_FACE_IDLE);
     apply_hud();

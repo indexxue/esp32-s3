@@ -236,6 +236,32 @@ bool nvs_servo_calib_get(nvs_servo_calib_t *out);
 bool nvs_servo_calib_set(const nvs_servo_calib_t *cfg);
 bool nvs_servo_calib_delete(void);
 
+/* -------------------------------------------------------------------------- */
+/* 触摸屏线性校准：x' = (ax_q16 * x + bx_q16) >> 16（Y 同理）                    */
+/* -------------------------------------------------------------------------- */
+
+#define NVS_TOUCH_CALIB_MAGIC 0x54434C31u /* "TCL1" LE */
+#define NVS_TOUCH_CALIB_Q16   (65536)
+#define NVS_TOUCH_CALIB_SCALE_MIN_Q16 (45875)  /* ~0.70 */
+#define NVS_TOUCH_CALIB_SCALE_MAX_Q16 (95027)  /* ~1.45：圆屏贴边点偏里时常见 */
+#define NVS_TOUCH_CALIB_OFFSET_MAX_PX (100)
+
+typedef struct __attribute__((packed)) {
+    uint32_t magic;
+    uint8_t  valid; /* 1 = 已校准并应用 */
+    uint8_t  reserved[3];
+    int32_t  ax_q16;
+    int32_t  bx_q16;
+    int32_t  ay_q16;
+    int32_t  by_q16;
+} nvs_touch_calib_t;
+
+void nvs_touch_calib_default(nvs_touch_calib_t *out);
+bool nvs_touch_calib_validate(const nvs_touch_calib_t *cfg);
+bool nvs_touch_calib_get(nvs_touch_calib_t *out);
+bool nvs_touch_calib_set(const nvs_touch_calib_t *cfg);
+bool nvs_touch_calib_delete(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -53,7 +53,7 @@ class PackPanel(QWidget):
         btn_check.clicked.connect(self._check)
         btn_build = QPushButton("Build pack.bin")
         btn_build.clicked.connect(self._build)
-        btn_both = QPushButton("Build pack + splash")
+        btn_both = QPushButton("Build pack + splash + UI icons")
         btn_both.clicked.connect(self._build_both)
         btn_zip = QPushButton("Export zip…")
         btn_zip.clicked.connect(self._export_zip)
@@ -162,6 +162,9 @@ class PackPanel(QWidget):
             self.ctx.info(skin_core.build_pack(cfg, self.ctx.out_dir, self.ctx.cfg_path))
             self.ctx.info(
                 skin_core.build_splash_from_cfg(self.ctx.out_dir, cfg, self.ctx.cfg_path.parent)
+            )
+            self.ctx.info(
+                skin_core.build_theme_ui_icons(self.ctx.out_dir, self.ctx.cfg_path.parent, cfg)
             )
         except Exception as exc:  # noqa: BLE001
             self.ctx.info(f"pack+splash error: {exc}")

@@ -17,6 +17,7 @@ from skin_core import (
     bind_assets,
     build_pack,
     build_splash,
+    build_theme_ui_icons,
     check_pack,
     check_has_errors,
     export_skin_zip,
@@ -101,6 +102,11 @@ def main() -> None:
     ap.add_argument("--cfg", type=Path, default=DEFAULT_CFG, help="pack.json path")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help="output pet/ root")
     ap.add_argument(
+        "--theme-ui",
+        action="store_true",
+        help="Write theme/ui/{feed,play,sleep,chat}.bin from assets/ui_*.* (skip missing)",
+    )
+    ap.add_argument(
         "--zip",
         nargs="?",
         const="",
@@ -158,6 +164,9 @@ def main() -> None:
             size = args.size if args.size is not None else size_cfg
         body = parse_rgb(args.body_color) if args.body_color else idle_color_from_cfg(cfg)
         print(build_splash(out_dir, src, fit, body, cfg, bg, size))
+
+    if args.theme_ui:
+        print(build_theme_ui_icons(out_dir, base, cfg))
 
     if args.zip is not None:
         zpath = Path(args.zip) if args.zip else (out_dir.parent / "pet.zip")

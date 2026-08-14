@@ -17,8 +17,8 @@ desktop_pet — ESP32-S3 桌宠（LVGL UI + 板级驱动）
   idf -Project desktop_pet -p PORT flash monitor
 
 板端 LVGL UI（默认）：
-  BoardInit 后启动 desktop_pet_ui：拓麻哥奇主界面（Needs 三点 + 身体 + 底弧四钮；五官预留、不显示）
-  触摸：点身体 poke；长按喂食；Dock F/P/S/C = 喂/玩/睡/聊（聊→对话页，首版占位）
+  BoardInit 后启动 desktop_pet_ui：拓麻哥奇主界面（Needs 三点 + 身体 + 左侧护理弧 + 右侧聊；五官预留、不显示）
+  触摸：点身体 poke；长按喂食；左弧 F/P/S = 喂/玩/睡；右侧 C = 聊（有 theme/ui 图标则用图，否则字母）
   IMU：晃一下玩、翻转约 1s 睡觉
   GPIO0 单击：默认无动作（debug 覆盖层已隔离；`DESKTOP_PET_ENABLE_DEBUG_UI=1` 可恢复 Rec/Play/Conn/Talk）
   GPIO0 双击：清除已存 STA，重启进入 SoftAP 配网（SSID ESP32-WebCtrl / esp32web1 → http://192.168.4.1/provision）
@@ -33,7 +33,7 @@ desktop_pet — ESP32-S3 桌宠（LVGL UI + 板级驱动）
   若 `idf.py reconfigure` 后 WS 又报 Error create websocket task：对 stock
   managed 组件重新应用 patches/esp_websocket_client_psram_stack.patch
   （任务栈改到 PSRAM；见 patch 头注释）。当前树内 managed 文件已含该改动。
-  若点击偏移：改 ui.c 里 it7259 panel/swap/invert 配置
+  若点击偏移：长按 GPIO0 → 确认 Needs↑/Dock↓ → 三轮 Needs/Right/Dock/Left 写入 NVS
   Agent URI：menuconfig「Desktop Pet Xiaozhi Agent」或 sdkconfig.defaults 中 CONFIG_DESKTOP_PET_AGENT_WS_URI
 
 Web（AP/STA 同一 HTTP）：

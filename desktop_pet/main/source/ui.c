@@ -11,6 +11,7 @@
 #include "it7259.h"
 #include "led_scene.h"
 #include "log.h"
+#include "nvs.h"
 #include "pet_core.h"
 #include "pet_fs.h"
 #include "pet_res.h"
@@ -54,6 +55,29 @@
 #define UI_SHAKE_COOLDOWN_MS (2000U)
 #define UI_FLIP_G (-0.55f)
 #define UI_FLIP_HITS (10U)
+#define UI_CALIB_POINTS (4U)
+#define UI_CALIB_ROUNDS (3U)
+/* 相对产品 UI：Needs=上、Dock=下；十字略内收便于点准 */
+#define UI_CALIB_EDGE (36)
+#define UI_CALIB_MARK (32)
+#define UI_CALIB_DOT (10)
+#define UI_CALIB_TIMER_MS (20U)
+#define UI_CALIB_MIN_SAMPLES (1U)
+#define UI_CALIB_MAX_SAMPLES (24U)
+#define UI_CALIB_END_MS (700U)
+#define UI_CALIB_MIN_SPAN (90)
+#define UI_CALIB_FIT_MAX_RESID (22)
+#define UI_CALIB_EVT_NONE (0U)
+#define UI_CALIB_EVT_RELEASE (1U)
+#define UI_CALIB_REQ_NONE (0)
+#define UI_CALIB_REQ_START (1)
+#define UI_CALIB_REQ_CANCEL (2)
+#define UI_CALIB_REQ_RESET (3)
+
+#define UI_CALIB_IDX_TOP (0U)   /* Needs / 上 */
+#define UI_CALIB_IDX_RIGHT (1U)
+#define UI_CALIB_IDX_BOT (2U)   /* Dock / 下 */
+#define UI_CALIB_IDX_LEFT (3U)
 
 static lv_display_t *s_disp;
 static lv_indev_t *s_indev;
@@ -107,7 +131,42 @@ static it7259_t s_touch;
 static bool s_touch_ok;
 static int16_t s_last_x;
 static int16_t s_last_y;
+static int16_t s_raw_x;
+static int16_t s_raw_y;
 static bool s_last_pressed;
+static nvs_touch_calib_t s_calib;
+static bool s_calib_apply;
+static volatile int s_calib_req;
+static volatile uint8_t s_calib_step;
+static volatile bool s_calib_running;
+static lv_obj_t *s_calib_layer;
+static lv_obj_t *s_calib_mark;
+static lv_obj_t *s_calib_lbl;
+static lv_obj_t *s_calib_orient_lbl[5];
+static lv_timer_t *s_calib_timer;
+static uint8_t s_calib_st;
+static uint8_t s_calib_idx;
+static uint8_t s_calib_round;
+static uint8_t s_calib_nsamp;
+static bool s_calib_orient_tap;
+static volatile uint8_t s_calib_evt;
+static int32_t s_calib_sum_x;
+static int32_t s_calib_sum_y;
+static int32_t s_calib_end_ms;
+static int16_t s_calib_raw_x[UI_CALIB_POINTS];
+static int16_t s_calib_raw_y[UI_CALIB_POINTS];
+static int16_t s_calib_samp_x[UI_CALIB_POINTS][UI_CALIB_ROUNDS];
+static int16_t s_calib_samp_y[UI_CALIB_POINTS][UI_CALIB_ROUNDS];
+/* 0=上 1=右 2=下 3=左 */
+static const int16_t s_calib_tx[UI_CALIB_POINTS] = {
+    (int16_t)(UI_HOR_RES / 2), (int16_t)(UI_HOR_RES - UI_CALIB_EDGE), (int16_t)(UI_HOR_RES / 2),
+    UI_CALIB_EDGE
+};
+static const int16_t s_calib_ty[UI_CALIB_POINTS] = {
+    UI_CALIB_EDGE, (int16_t)(UI_VER_RES / 2), (int16_t)(UI_VER_RES - UI_CALIB_EDGE),
+    (int16_t)(UI_VER_RES / 2)
+};
+static const char *const s_calib_dir[UI_CALIB_POINTS] = {"Needs", "Right", "Dock", "Left"};
 #endif
 
 static void ui_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
@@ -161,6 +220,35 @@ static int ui_touch_i2c_write_read(uint8_t addr7,
     return 0;
 }
 
+enum {
+    UI_CALIB_ST_IDLE = 0,
+    UI_CALIB_ST_ORIENT,
+    UI_CALIB_ST_WAIT_UP,
+    UI_CALIB_ST_WAIT_DOWN,
+    UI_CALIB_ST_HOLD,
+    UI_CALIB_ST_END,
+};
+
+static void ui_calib_add_sample(int16_t x, int16_t y);
+static void ui_calib_on_press_edge(void);
+static void ui_calib_on_release_edge(void);
+static void ui_calib_set_mark(uint8_t idx);
+static void ui_calib_enter_points(void);
+
+static int16_t ui_calib_map_axis(int16_t v, int32_t a_q16, int32_t b_q16, int16_t maxv)
+{
+    int32_t out;
+
+    out = (int32_t)(((int64_t)a_q16 * (int64_t)v + (int64_t)b_q16) >> 16);
+    if (out < 0) {
+        out = 0;
+    }
+    if (out > (int32_t)maxv) {
+        out = (int32_t)maxv;
+    }
+    return (int16_t)out;
+}
+
 static void ui_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
     it7259_point_t pt;
@@ -177,14 +265,44 @@ static void ui_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 
     st = it7259_read_point(&s_touch, &pt);
     if (st == IT7259_OK) {
+        bool was_pressed = s_last_pressed;
+
         s_last_pressed = pt.pressed;
-        s_last_x = pt.x;
-        s_last_y = pt.y;
+        s_raw_x = pt.x;
+        s_raw_y = pt.y;
+        if (s_calib.valid && s_calib_apply) {
+            s_last_x = ui_calib_map_axis(pt.x, s_calib.ax_q16, s_calib.bx_q16,
+                                        (int16_t)(UI_HOR_RES - 1));
+            s_last_y = ui_calib_map_axis(pt.y, s_calib.ay_q16, s_calib.by_q16,
+                                        (int16_t)(UI_VER_RES - 1));
+        } else {
+            s_last_x = pt.x;
+            s_last_y = pt.y;
+        }
         if (pt.pressed && !s_logged_press) {
-            LOG_INFO("touch down @ %d,%d", (int)s_last_x, (int)s_last_y);
+            LOG_INFO("touch down @ %d,%d raw=%d,%d", (int)s_last_x, (int)s_last_y,
+                     (int)s_raw_x, (int)s_raw_y);
             s_logged_press = true;
         }
         if (!pt.pressed) {
+            s_logged_press = false;
+        }
+        if (s_calib_running) {
+            if (pt.pressed && !was_pressed) {
+                ui_calib_on_press_edge();
+            } else if (!pt.pressed && was_pressed) {
+                ui_calib_on_release_edge();
+            } else if (pt.pressed && (s_calib_st == UI_CALIB_ST_HOLD)) {
+                ui_calib_add_sample(s_raw_x, s_raw_y);
+            }
+        }
+    } else if (st == IT7259_ERROR_NO_POINT) {
+        if (s_last_pressed && s_calib_running) {
+            s_last_pressed = false;
+            s_logged_press = false;
+            ui_calib_on_release_edge();
+        } else {
+            s_last_pressed = false;
             s_logged_press = false;
         }
     }
@@ -229,8 +347,576 @@ static status_t ui_touch_init(void)
     }
 
     s_touch_ok = true;
-    LOG_INFO("IT7259 touch ready (poll)");
+    nvs_touch_calib_default(&s_calib);
+    s_calib_apply = false;
+    if (nvs_touch_calib_get(&s_calib) && (s_calib.valid != 0U)) {
+        s_calib_apply = true;
+        LOG_INFO("IT7259 touch ready (poll) calib ax=%d bx=%d ay=%d by=%d", (int)s_calib.ax_q16,
+                 (int)s_calib.bx_q16, (int)s_calib.ay_q16, (int)s_calib.by_q16);
+    } else {
+        nvs_touch_calib_default(&s_calib);
+        LOG_INFO("IT7259 touch ready (poll, no calib)");
+    }
     return STATUS_OK;
+}
+
+static void ui_calib_overlay_destroy(void)
+{
+    if (s_calib_timer != NULL) {
+        lv_timer_delete(s_calib_timer);
+        s_calib_timer = NULL;
+    }
+    if (s_calib_layer != NULL) {
+        lv_obj_delete(s_calib_layer);
+        s_calib_layer = NULL;
+        s_calib_mark = NULL;
+        s_calib_lbl = NULL;
+        (void)memset(s_calib_orient_lbl, 0, sizeof(s_calib_orient_lbl));
+    }
+    s_calib_st = UI_CALIB_ST_IDLE;
+    s_calib_running = false;
+    s_calib_step = 0U;
+    s_calib_apply = (s_calib.valid != 0U);
+}
+
+static void ui_calib_orient_clear(void)
+{
+    uint8_t i;
+
+    for (i = 0U; i < 5U; i++) {
+        if (s_calib_orient_lbl[i] != NULL) {
+            lv_obj_delete(s_calib_orient_lbl[i]);
+            s_calib_orient_lbl[i] = NULL;
+        }
+    }
+}
+
+static lv_obj_t *ui_calib_make_label(lv_obj_t *parent, const char *txt, lv_align_t align, int32_t x_ofs,
+                                     int32_t y_ofs, uint32_t color)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+
+    lv_label_set_text(lbl, txt);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
+#if LV_FONT_MONTSERRAT_14
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+#endif
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(lbl, align, x_ofs, y_ofs);
+    return lbl;
+}
+
+/** 正方向确认：Needs=上、Dock=下（与主界面一致）；点中央开始 12 点校准 */
+static void ui_calib_show_orient(void)
+{
+    ui_calib_orient_clear();
+    if (s_calib_mark != NULL) {
+        lv_obj_add_flag(s_calib_mark, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_calib_lbl != NULL) {
+        lv_obj_add_flag(s_calib_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    s_calib_orient_lbl[0] =
+        ui_calib_make_label(s_calib_layer, "NEEDS\n(up)", LV_ALIGN_TOP_MID, 0, 10, 0x7CFF9A);
+    s_calib_orient_lbl[1] =
+        ui_calib_make_label(s_calib_layer, "DOCK\n(down)", LV_ALIGN_BOTTOM_MID, 0, -10, 0xFFAA66);
+    s_calib_orient_lbl[2] = ui_calib_make_label(s_calib_layer, "L", LV_ALIGN_LEFT_MID, 14, 0, 0xA0E0FF);
+    s_calib_orient_lbl[3] = ui_calib_make_label(s_calib_layer, "R", LV_ALIGN_RIGHT_MID, -14, 0, 0xA0E0FF);
+    s_calib_orient_lbl[4] = ui_calib_make_label(s_calib_layer, "Align DOCK at bottom\nTap center",
+                                                LV_ALIGN_CENTER, 0, 0, 0xE8EEF7);
+    s_calib_st = UI_CALIB_ST_ORIENT;
+    LOG_INFO("touch calib orient: Needs=up Dock=down (LVGL Y+ toward Dock)");
+}
+
+static void ui_calib_enter_points(void)
+{
+    ui_calib_orient_clear();
+    if (s_calib_lbl != NULL) {
+        lv_obj_remove_flag(s_calib_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_calib_mark != NULL) {
+        lv_obj_remove_flag(s_calib_mark, LV_OBJ_FLAG_HIDDEN);
+    }
+    s_calib_idx = 0U;
+    s_calib_round = 0U;
+    s_calib_st = UI_CALIB_ST_WAIT_UP;
+    ui_calib_set_mark(0U);
+    LOG_INFO("touch calib points start (Needs->Right->Dock->Left) x3");
+}
+
+static bool ui_calib_center_ok(int16_t rx, int16_t ry)
+{
+    int16_t dx = (int16_t)(rx - (int16_t)(UI_HOR_RES / 2));
+    int16_t dy = (int16_t)(ry - (int16_t)(UI_VER_RES / 2));
+
+    if (dx < 0) {
+        dx = (int16_t)(-dx);
+    }
+    if (dy < 0) {
+        dy = (int16_t)(-dy);
+    }
+    return (dx <= 50) && (dy <= 50);
+}
+
+static void ui_calib_set_mark(uint8_t idx)
+{
+    char buf[28];
+    uint8_t tap;
+    uint8_t total;
+
+    if (idx >= UI_CALIB_POINTS) {
+        return;
+    }
+    s_calib_step = (uint8_t)(s_calib_round * UI_CALIB_POINTS + idx);
+    tap = (uint8_t)(s_calib_step + 1U);
+    total = (uint8_t)(UI_CALIB_ROUNDS * UI_CALIB_POINTS);
+    if (s_calib_mark != NULL) {
+        lv_obj_set_pos(s_calib_mark, (int32_t)s_calib_tx[idx] - (UI_CALIB_MARK / 2),
+                       (int32_t)s_calib_ty[idx] - (UI_CALIB_MARK / 2));
+        lv_obj_remove_flag(s_calib_mark, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_calib_lbl != NULL) {
+        (void)snprintf(buf, sizeof(buf), "%s %u/%u", s_calib_dir[idx], (unsigned)tap,
+                       (unsigned)total);
+        lv_label_set_text(s_calib_lbl, buf);
+        lv_obj_set_style_text_color(s_calib_lbl, lv_color_hex(0xE8EEF7), 0);
+    }
+}
+
+static void ui_calib_add_sample(int16_t x, int16_t y)
+{
+    if (s_calib_nsamp >= UI_CALIB_MAX_SAMPLES) {
+        return;
+    }
+    s_calib_sum_x += x;
+    s_calib_sum_y += y;
+    s_calib_nsamp++;
+}
+
+/** 校准中未映射：必须点在该边附近（防把 Top 误当成 Right） */
+static bool ui_calib_side_ok(uint8_t idx, int16_t rx, int16_t ry)
+{
+    int16_t dx = (int16_t)(rx - (int16_t)(UI_HOR_RES / 2));
+    int16_t dy = (int16_t)(ry - (int16_t)(UI_VER_RES / 2));
+
+    if (dx < 0) {
+        dx = (int16_t)(-dx);
+    }
+    if (dy < 0) {
+        dy = (int16_t)(-dy);
+    }
+
+    switch (idx) {
+    case UI_CALIB_IDX_TOP:
+        return (ry <= 70) && (dx <= 55);
+    case UI_CALIB_IDX_RIGHT:
+        return (rx >= 180) && (dy <= 45);
+    case UI_CALIB_IDX_BOT:
+        return (ry >= 170) && (dx <= 55);
+    case UI_CALIB_IDX_LEFT:
+        return (rx <= 80) && (dy <= 45);
+    default:
+        return false;
+    }
+}
+
+static int16_t ui_calib_median3(int16_t a, int16_t b, int16_t c)
+{
+    if (a > b) {
+        int16_t t = a;
+        a = b;
+        b = t;
+    }
+    if (b > c) {
+        int16_t t = b;
+        b = c;
+        c = t;
+    }
+    if (a > b) {
+        int16_t t = a;
+        a = b;
+        b = t;
+    }
+    (void)a;
+    (void)c;
+    return b;
+}
+
+static void ui_calib_average_rounds(void)
+{
+    uint8_t i;
+
+    for (i = 0U; i < UI_CALIB_POINTS; i++) {
+        s_calib_raw_x[i] = ui_calib_median3(s_calib_samp_x[i][0], s_calib_samp_x[i][1],
+                                            s_calib_samp_x[i][2]);
+        s_calib_raw_y[i] = ui_calib_median3(s_calib_samp_y[i][0], s_calib_samp_y[i][1],
+                                            s_calib_samp_y[i][2]);
+        LOG_INFO("touch calib avg %s raw=%d,%d", s_calib_dir[i], (int)s_calib_raw_x[i],
+                 (int)s_calib_raw_y[i]);
+    }
+}
+
+/** 左右定 X 缩放+偏移，上下定 Y（匹配圆屏极限 raw 与逻辑边不一致） */
+static bool ui_calib_fit_scale_offset(int32_t *ax_q16, int32_t *bx_q16, int32_t *ay_q16,
+                                      int32_t *by_q16)
+{
+    int32_t dx_raw;
+    int32_t dy_raw;
+    int32_t dx_tgt;
+    int32_t dy_tgt;
+    int64_t ax;
+    int64_t ay;
+    int64_t bx;
+    int64_t by;
+
+    dx_raw = (int32_t)s_calib_raw_x[UI_CALIB_IDX_RIGHT] - (int32_t)s_calib_raw_x[UI_CALIB_IDX_LEFT];
+    dy_raw = (int32_t)s_calib_raw_y[UI_CALIB_IDX_BOT] - (int32_t)s_calib_raw_y[UI_CALIB_IDX_TOP];
+    if (dx_raw < 0) {
+        dx_raw = -dx_raw;
+    }
+    if (dy_raw < 0) {
+        dy_raw = -dy_raw;
+    }
+    if ((dx_raw < UI_CALIB_MIN_SPAN) || (dy_raw < UI_CALIB_MIN_SPAN)) {
+        LOG_WARN("touch calib span too small dx=%d dy=%d", (int)dx_raw, (int)dy_raw);
+        return false;
+    }
+
+    dx_raw = (int32_t)s_calib_raw_x[UI_CALIB_IDX_RIGHT] - (int32_t)s_calib_raw_x[UI_CALIB_IDX_LEFT];
+    dy_raw = (int32_t)s_calib_raw_y[UI_CALIB_IDX_BOT] - (int32_t)s_calib_raw_y[UI_CALIB_IDX_TOP];
+    dx_tgt = (int32_t)s_calib_tx[UI_CALIB_IDX_RIGHT] - (int32_t)s_calib_tx[UI_CALIB_IDX_LEFT];
+    dy_tgt = (int32_t)s_calib_ty[UI_CALIB_IDX_BOT] - (int32_t)s_calib_ty[UI_CALIB_IDX_TOP];
+
+    ax = (((int64_t)dx_tgt) << 16) / (int64_t)dx_raw;
+    ay = (((int64_t)dy_tgt) << 16) / (int64_t)dy_raw;
+    bx = (((int64_t)s_calib_tx[UI_CALIB_IDX_LEFT]) << 16) - ax * (int64_t)s_calib_raw_x[UI_CALIB_IDX_LEFT];
+    by = (((int64_t)s_calib_ty[UI_CALIB_IDX_TOP]) << 16) - ay * (int64_t)s_calib_raw_y[UI_CALIB_IDX_TOP];
+
+    if ((ax < NVS_TOUCH_CALIB_SCALE_MIN_Q16) || (ax > NVS_TOUCH_CALIB_SCALE_MAX_Q16) ||
+        (ay < NVS_TOUCH_CALIB_SCALE_MIN_Q16) || (ay > NVS_TOUCH_CALIB_SCALE_MAX_Q16)) {
+        LOG_WARN("touch calib scale out of range ax=%d ay=%d (need ~0.70..1.45)", (int)ax, (int)ay);
+        return false;
+    }
+
+    *ax_q16 = (int32_t)ax;
+    *ay_q16 = (int32_t)ay;
+    *bx_q16 = (int32_t)bx;
+    *by_q16 = (int32_t)by;
+    LOG_INFO("touch calib fit ax=%d bx=%d ay=%d by=%d (span x=%d y=%d)", (int)*ax_q16, (int)*bx_q16,
+             (int)*ay_q16, (int)*by_q16, (int)dx_raw, (int)dy_raw);
+    return true;
+}
+
+static bool ui_calib_residual_ok(int32_t ax_q16, int32_t bx_q16, int32_t ay_q16, int32_t by_q16)
+{
+    uint8_t i;
+
+    for (i = 0U; i < UI_CALIB_POINTS; i++) {
+        int16_t mx = ui_calib_map_axis(s_calib_raw_x[i], ax_q16, bx_q16, (int16_t)(UI_HOR_RES - 1));
+        int16_t my = ui_calib_map_axis(s_calib_raw_y[i], ay_q16, by_q16, (int16_t)(UI_VER_RES - 1));
+        int16_t ex = (int16_t)(mx - s_calib_tx[i]);
+        int16_t ey = (int16_t)(my - s_calib_ty[i]);
+        int16_t err_main;
+
+        if (ex < 0) {
+            ex = (int16_t)(-ex);
+        }
+        if (ey < 0) {
+            ey = (int16_t)(-ey);
+        }
+        if ((i == UI_CALIB_IDX_TOP) || (i == UI_CALIB_IDX_BOT)) {
+            err_main = ey;
+        } else {
+            err_main = ex;
+        }
+        if (err_main > UI_CALIB_FIT_MAX_RESID) {
+            LOG_WARN("touch calib resid %s main=%d (ex=%d ey=%d)", s_calib_dir[i], (int)err_main,
+                     (int)ex, (int)ey);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ui_calib_commit(void)
+{
+    nvs_touch_calib_t cfg;
+    int32_t ax_q16;
+    int32_t bx_q16;
+    int32_t ay_q16;
+    int32_t by_q16;
+
+    ui_calib_average_rounds();
+    nvs_touch_calib_default(&cfg);
+    if (!ui_calib_fit_scale_offset(&ax_q16, &bx_q16, &ay_q16, &by_q16)) {
+        LOG_WARN("touch calib fit failed");
+        return false;
+    }
+    if (!ui_calib_residual_ok(ax_q16, bx_q16, ay_q16, by_q16)) {
+        LOG_WARN("touch calib residual too large, discard");
+        return false;
+    }
+    cfg.ax_q16 = ax_q16;
+    cfg.bx_q16 = bx_q16;
+    cfg.ay_q16 = ay_q16;
+    cfg.by_q16 = by_q16;
+    cfg.valid = 1U;
+    if (!nvs_touch_calib_validate(&cfg)) {
+        LOG_WARN("touch calib validate fail ax=%d bx=%d ay=%d by=%d", (int)cfg.ax_q16, (int)cfg.bx_q16,
+                 (int)cfg.ay_q16, (int)cfg.by_q16);
+        return false;
+    }
+    if (!nvs_touch_calib_set(&cfg)) {
+        LOG_WARN("touch calib NVS set failed");
+        return false;
+    }
+    s_calib = cfg;
+    s_calib_apply = true;
+    LOG_INFO("touch calib saved ax=%d bx=%d ay=%d by=%d", (int)cfg.ax_q16, (int)cfg.bx_q16,
+             (int)cfg.ay_q16, (int)cfg.by_q16);
+    return true;
+}
+
+static void ui_calib_enter_end(bool ok)
+{
+    s_calib_st = UI_CALIB_ST_END;
+    s_calib_end_ms = (int32_t)UI_CALIB_END_MS;
+    s_calib_evt = UI_CALIB_EVT_NONE;
+    if (!ok) {
+        s_calib_apply = (s_calib.valid != 0U);
+    }
+    if (s_calib_mark != NULL) {
+        lv_obj_add_flag(s_calib_mark, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_calib_lbl != NULL) {
+        lv_label_set_text(s_calib_lbl, ok ? "Saved" : "Fail");
+        lv_obj_set_style_text_color(s_calib_lbl,
+                                    ok ? lv_color_hex(0x7CFF9A) : lv_color_hex(0xFF6666), 0);
+    }
+}
+
+static void ui_calib_accept_point(void)
+{
+    int16_t rx;
+    int16_t ry;
+
+    rx = (int16_t)(s_calib_sum_x / (int32_t)s_calib_nsamp);
+    ry = (int16_t)(s_calib_sum_y / (int32_t)s_calib_nsamp);
+
+    if (!ui_calib_side_ok(s_calib_idx, rx, ry)) {
+        LOG_INFO("touch calib %s wrong side raw=%d,%d", s_calib_dir[s_calib_idx], (int)rx, (int)ry);
+        if (s_calib_lbl != NULL) {
+            lv_label_set_text(s_calib_lbl, "Wrong side");
+            lv_obj_set_style_text_color(s_calib_lbl, lv_color_hex(0xFFAA66), 0);
+        }
+        s_calib_st = UI_CALIB_ST_WAIT_DOWN;
+        return;
+    }
+
+    s_calib_samp_x[s_calib_idx][s_calib_round] = rx;
+    s_calib_samp_y[s_calib_idx][s_calib_round] = ry;
+    LOG_INFO("touch calib r%u %s raw=%d,%d tgt=%d,%d", (unsigned)(s_calib_round + 1U),
+             s_calib_dir[s_calib_idx], (int)rx, (int)ry, (int)s_calib_tx[s_calib_idx],
+             (int)s_calib_ty[s_calib_idx]);
+
+    s_calib_idx++;
+    if (s_calib_idx >= UI_CALIB_POINTS) {
+        s_calib_idx = 0U;
+        s_calib_round++;
+        if (s_calib_round >= UI_CALIB_ROUNDS) {
+            ui_calib_enter_end(ui_calib_commit());
+            return;
+        }
+        LOG_INFO("touch calib round %u/%u", (unsigned)(s_calib_round + 1U),
+                 (unsigned)UI_CALIB_ROUNDS);
+    }
+    s_calib_st = UI_CALIB_ST_WAIT_UP;
+}
+
+/* indev 内只改状态/采样，不碰 LVGL / NVS */
+static void ui_calib_on_press_edge(void)
+{
+    if ((s_calib_st != UI_CALIB_ST_WAIT_DOWN) && (s_calib_st != UI_CALIB_ST_ORIENT)) {
+        return;
+    }
+    s_calib_orient_tap = (s_calib_st == UI_CALIB_ST_ORIENT);
+    s_calib_st = UI_CALIB_ST_HOLD;
+    s_calib_nsamp = 0U;
+    s_calib_sum_x = 0;
+    s_calib_sum_y = 0;
+    ui_calib_add_sample(s_raw_x, s_raw_y);
+}
+
+static void ui_calib_on_release_edge(void)
+{
+    if ((s_calib_st == UI_CALIB_ST_HOLD) || (s_calib_st == UI_CALIB_ST_WAIT_UP)) {
+        s_calib_evt = UI_CALIB_EVT_RELEASE;
+    }
+}
+
+static void ui_calib_timer_cb(lv_timer_t *timer)
+{
+    uint8_t evt;
+
+    (void)timer;
+    evt = s_calib_evt;
+    s_calib_evt = UI_CALIB_EVT_NONE;
+
+    if (evt == UI_CALIB_EVT_RELEASE) {
+        if (s_calib_st == UI_CALIB_ST_WAIT_UP) {
+            s_calib_st = UI_CALIB_ST_WAIT_DOWN;
+            ui_calib_set_mark(s_calib_idx);
+        } else if (s_calib_st == UI_CALIB_ST_HOLD) {
+            int16_t rx;
+            int16_t ry;
+
+            if (s_calib_nsamp < UI_CALIB_MIN_SAMPLES) {
+                if (s_calib_orient_tap) {
+                    s_calib_st = UI_CALIB_ST_ORIENT;
+                } else {
+                    s_calib_st = UI_CALIB_ST_WAIT_DOWN;
+                }
+                return;
+            }
+            rx = (int16_t)(s_calib_sum_x / (int32_t)s_calib_nsamp);
+            ry = (int16_t)(s_calib_sum_y / (int32_t)s_calib_nsamp);
+            if (s_calib_orient_tap) {
+                s_calib_orient_tap = false;
+                if (ui_calib_center_ok(rx, ry)) {
+                    LOG_INFO("touch calib orient confirmed raw=%d,%d", (int)rx, (int)ry);
+                    ui_calib_enter_points();
+                } else {
+                    LOG_INFO("touch calib orient need center raw=%d,%d", (int)rx, (int)ry);
+                    if (s_calib_orient_lbl[4] != NULL) {
+                        lv_label_set_text(s_calib_orient_lbl[4], "Tap CENTER\nto start");
+                        lv_obj_set_style_text_color(s_calib_orient_lbl[4], lv_color_hex(0xFFAA66),
+                                                    0);
+                    }
+                    s_calib_st = UI_CALIB_ST_ORIENT;
+                }
+            } else {
+                ui_calib_accept_point();
+            }
+        }
+    }
+
+    if (s_calib_st == UI_CALIB_ST_WAIT_UP) {
+        if (!s_last_pressed) {
+            s_calib_st = UI_CALIB_ST_WAIT_DOWN;
+            ui_calib_set_mark(s_calib_idx);
+        }
+        return;
+    }
+
+    if (s_calib_st == UI_CALIB_ST_END) {
+        s_calib_end_ms -= (int32_t)UI_CALIB_TIMER_MS;
+        if (s_calib_end_ms <= 0) {
+            ui_calib_overlay_destroy();
+        }
+    }
+}
+
+static void ui_calib_begin(void)
+{
+    lv_obj_t *dot;
+
+    if (!s_touch_ok) {
+        return;
+    }
+    ui_calib_overlay_destroy();
+
+    s_calib_apply = false;
+    s_calib_idx = 0U;
+    s_calib_round = 0U;
+    s_calib_step = 0U;
+    s_calib_evt = UI_CALIB_EVT_NONE;
+    s_calib_orient_tap = false;
+    s_calib_running = true;
+    (void)memset(s_calib_samp_x, 0, sizeof(s_calib_samp_x));
+    (void)memset(s_calib_samp_y, 0, sizeof(s_calib_samp_y));
+    (void)memset(s_calib_orient_lbl, 0, sizeof(s_calib_orient_lbl));
+
+    s_calib_layer = lv_obj_create(lv_layer_top());
+    if (s_calib_layer == NULL) {
+        s_calib_running = false;
+        s_calib_st = UI_CALIB_ST_IDLE;
+        s_calib_apply = (s_calib.valid != 0U);
+        LOG_WARN("touch calib overlay alloc failed");
+        return;
+    }
+    lv_obj_remove_style_all(s_calib_layer);
+    lv_obj_set_size(s_calib_layer, UI_HOR_RES, UI_VER_RES);
+    lv_obj_set_style_bg_color(s_calib_layer, lv_color_hex(0x101018), 0);
+    lv_obj_set_style_bg_opa(s_calib_layer, LV_OPA_COVER, 0);
+    lv_obj_set_pos(s_calib_layer, 0, 0);
+    lv_obj_add_flag(s_calib_layer, LV_OBJ_FLAG_CLICKABLE);
+
+    s_calib_lbl = lv_label_create(s_calib_layer);
+    lv_label_set_text(s_calib_lbl, "Needs 1/12");
+    lv_obj_set_style_text_color(s_calib_lbl, lv_color_hex(0xE8EEF7), 0);
+#if LV_FONT_MONTSERRAT_14
+    lv_obj_set_style_text_font(s_calib_lbl, &lv_font_montserrat_14, 0);
+#endif
+    lv_obj_align(s_calib_lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(s_calib_lbl, LV_OBJ_FLAG_HIDDEN);
+
+    s_calib_mark = lv_obj_create(s_calib_layer);
+    lv_obj_remove_style_all(s_calib_mark);
+    lv_obj_set_size(s_calib_mark, UI_CALIB_MARK, UI_CALIB_MARK);
+    lv_obj_set_style_radius(s_calib_mark, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(s_calib_mark, 2, 0);
+    lv_obj_set_style_border_color(s_calib_mark, lv_color_hex(0xFF6666), 0);
+    lv_obj_set_style_bg_opa(s_calib_mark, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(s_calib_mark, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_calib_mark, LV_OBJ_FLAG_HIDDEN);
+
+    dot = lv_obj_create(s_calib_mark);
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, UI_CALIB_DOT, UI_CALIB_DOT);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(0xFF6666), 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_center(dot);
+    lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+
+    ui_calib_show_orient();
+    s_calib_timer = lv_timer_create(ui_calib_timer_cb, UI_CALIB_TIMER_MS, NULL);
+    if (s_calib_timer == NULL) {
+        LOG_WARN("touch calib timer failed");
+        ui_calib_overlay_destroy();
+        return;
+    }
+    LOG_INFO("touch calib started (orient first)");
+}
+
+static void ui_calib_reset_runtime(void)
+{
+    ui_calib_overlay_destroy();
+    (void)nvs_touch_calib_delete();
+    nvs_touch_calib_default(&s_calib);
+    s_calib_apply = false;
+    LOG_INFO("touch calib cleared");
+}
+
+static void ui_calib_take_req(void)
+{
+    int req = s_calib_req;
+
+    if (req == UI_CALIB_REQ_NONE) {
+        return;
+    }
+    s_calib_req = UI_CALIB_REQ_NONE;
+    if (req == UI_CALIB_REQ_START) {
+        ui_calib_begin();
+    } else if (req == UI_CALIB_REQ_CANCEL) {
+        if (s_calib_running) {
+            ui_calib_overlay_destroy();
+            LOG_INFO("touch calib cancelled");
+        }
+    } else if (req == UI_CALIB_REQ_RESET) {
+        ui_calib_reset_runtime();
+    }
 }
 #endif /* DESKTOP_PET_ENABLE_TOUCH */
 
@@ -730,6 +1416,9 @@ static void ui_task(void *arg)
     for (;;) {
         uint32_t delay_ms;
 
+#if DESKTOP_PET_ENABLE_TOUCH
+        ui_calib_take_req();
+#endif
 #if DESKTOP_PET_ENABLE_DEBUG_UI
         if (s_debug_req != 0) {
             s_debug_req = 0;
@@ -756,6 +1445,78 @@ void desktop_pet_ui_toggle_debug(void)
 #else
     /* Product home: GPIO0 single-click reserved (debug overlay isolated). */
 #endif
+}
+
+bool desktop_pet_ui_touch_calib_start(void)
+{
+#if DESKTOP_PET_ENABLE_TOUCH
+    if (!s_started || !s_touch_ok) {
+        return false;
+    }
+    if (s_calib_running) {
+        return true;
+    }
+    s_calib_req = UI_CALIB_REQ_START;
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool desktop_pet_ui_touch_calib_cancel(void)
+{
+#if DESKTOP_PET_ENABLE_TOUCH
+    if (!s_calib_running && (s_calib_req != UI_CALIB_REQ_START)) {
+        return false;
+    }
+    s_calib_req = UI_CALIB_REQ_CANCEL;
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool desktop_pet_ui_touch_calib_reset(void)
+{
+#if DESKTOP_PET_ENABLE_TOUCH
+    if (!s_started) {
+        return nvs_touch_calib_delete();
+    }
+    s_calib_req = UI_CALIB_REQ_RESET;
+    return true;
+#else
+    return nvs_touch_calib_delete();
+#endif
+}
+
+bool desktop_pet_ui_touch_calib_is_running(void)
+{
+#if DESKTOP_PET_ENABLE_TOUCH
+    return s_calib_running || (s_calib_req == UI_CALIB_REQ_START);
+#else
+    return false;
+#endif
+}
+
+void desktop_pet_ui_touch_calib_status(bool *running, uint8_t *step, uint8_t *steps, bool *saved)
+{
+    if (running != NULL) {
+        *running = desktop_pet_ui_touch_calib_is_running();
+    }
+    if (step != NULL) {
+#if DESKTOP_PET_ENABLE_TOUCH
+        *step = s_calib_step;
+#else
+        *step = 0U;
+#endif
+    }
+    if (steps != NULL) {
+        *steps = (uint8_t)(UI_CALIB_ROUNDS * UI_CALIB_POINTS);
+    }
+    if (saved != NULL) {
+        nvs_touch_calib_t cfg;
+        *saved = nvs_touch_calib_get(&cfg) && (cfg.valid != 0U);
+    }
 }
 
 status_t desktop_pet_ui_start(void)

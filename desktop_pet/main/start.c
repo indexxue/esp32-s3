@@ -132,6 +132,11 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
 
     switch (event) {
     case BTN_EVENT_SINGLE_CLICK:
+        if (desktop_pet_ui_touch_calib_is_running()) {
+            LOG_INFO("BTN single-click: cancel touch calib");
+            (void)desktop_pet_ui_touch_calib_cancel();
+            break;
+        }
 #if DESKTOP_PET_ENABLE_DEBUG_UI
         LOG_INFO("BTN single-click: toggle debug overlay");
 #else
@@ -141,6 +146,13 @@ static void app_button_notify(btn_id_e id, const char *name, btn_permission_e pe
         break;
     case BTN_EVENT_DOUBLE_CLICK:
         app_wifi_reprovision_from_button();
+        break;
+    case BTN_EVENT_LONG_PRESS:
+        if (desktop_pet_ui_touch_calib_start()) {
+            LOG_INFO("BTN long-press: touch calib start");
+        } else {
+            LOG_WARN("BTN long-press: touch calib start failed");
+        }
         break;
     default:
         break;

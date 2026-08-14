@@ -54,6 +54,15 @@ h2{font-weight:650}
     <div class="status" id="skinStatus"></div>
   </div>
   <div class="card">
+    <h2 style="margin:0 0 8px;font-size:1rem">触摸校准</h2>
+    <p class="status" style="margin-top:0">先确认 Needs=上 / Dock=下，点中央后三轮×四向共 12 点。长按 GPIO0 开始；单击取消。</p>
+    <div class="actions" style="justify-content:flex-start;margin-bottom:8px">
+      <button type="button" class="btn btn-accent" id="btnCalib">开始校准</button>
+      <button type="button" class="btn btn-danger" id="btnCalibReset">清除校准</button>
+    </div>
+    <div class="status" id="calibStatus"></div>
+  </div>
+  <div class="card">
     <div class="crumb" id="crumb">/sdcard</div>
     <div class="status" id="status">加载中…</div>
     <div id="list"></div>
@@ -206,6 +215,58 @@ h2{font-weight:650}
       xhr.onerror=function(){btn.disabled=false;msg('网络错误','err');};
       xhr.send(file);
     });
+  })();
+
+  (function touchCalib(){
+    var st=document.getElementById('calibStatus');
+    var btn=document.getElementById('btnCalib');
+    var btnReset=document.getElementById('btnCalibReset');
+    var pollT=null;
+    function msg(t,cls){st.className='status'+(cls?' '+cls:'');st.textContent=t;}
+    function stopPoll(){if(pollT){clearInterval(pollT);pollT=null;}}
+    async function refresh(){
+      try{
+        var r=await fetch('/api/touch/calib',{cache:'no-store'});
+        var j=await r.json();
+        if(!j||!j.ok){msg('状态失败','err');return j;}
+        if(j.running){
+          msg('请点屏幕十字 '+(j.step+1)+'/'+j.steps,'ok');
+        }else{
+          stopPoll();
+          msg(j.saved?'已保存到 NVS':'未校准（1:1）',j.saved?'ok':'');
+        }
+        return j;
+      }catch(e){
+        msg('请求失败: '+e.message,'err');
+        return null;
+      }
+    }
+    btn.addEventListener('click',async function(){
+      btn.disabled=true;
+      msg('正在启动…');
+      try{
+        var r=await fetch('/api/touch/calib/start',{method:'POST'});
+        var j=await r.json();
+        if(!j||!j.ok){msg('启动失败: '+(j&&j.error?j.error:('HTTP '+r.status)),'err');return;}
+        msg('请点屏幕十字 1/4','ok');
+        stopPoll();
+        pollT=setInterval(refresh,500);
+      }catch(e){msg('启动失败: '+e.message,'err');}
+      finally{btn.disabled=false;}
+    });
+    btnReset.addEventListener('click',async function(){
+      if(!confirm('清除已保存的触摸校准？'))return;
+      btnReset.disabled=true;
+      try{
+        var r=await fetch('/api/touch/calib/reset',{method:'POST'});
+        var j=await r.json();
+        if(!j||!j.ok){msg('清除失败','err');return;}
+        stopPoll();
+        msg('已清除，恢复 1:1','ok');
+      }catch(e){msg('清除失败: '+e.message,'err');}
+      finally{btnReset.disabled=false;}
+    });
+    refresh();
   })();
 
   if(!location.hash)location.hash='#/record';

@@ -24,7 +24,21 @@ extern "C" {
 #define PET_RES_SPLASH_MAX_W (240U)
 #define PET_RES_SPLASH_MAX_H (240U)
 #define PET_RES_SPLASH_REL "boot/splash.bin"
+#define PET_RES_UI_ICON_MAX_W (32U)
+#define PET_RES_UI_ICON_MAX_H (32U)
+#define PET_RES_UI_ICON_FEED_REL "theme/ui/feed.bin"
+#define PET_RES_UI_ICON_PLAY_REL "theme/ui/play.bin"
+#define PET_RES_UI_ICON_SLEEP_REL "theme/ui/sleep.bin"
+#define PET_RES_UI_ICON_CHAT_REL "theme/ui/chat.bin"
 #define PET_RES_FACE_BLOCK_LEN (32U)
+
+typedef enum {
+    PET_UI_ICON_FEED = 0,
+    PET_UI_ICON_PLAY,
+    PET_UI_ICON_SLEEP,
+    PET_UI_ICON_CHAT,
+    PET_UI_ICON_COUNT
+} pet_ui_icon_id_t;
 
 typedef struct {
     int16_t x;
@@ -56,6 +70,8 @@ bool pet_res_load_frame(pet_clip_id_t clip, uint8_t frame_index,
 bool pet_res_get_face(pet_clip_id_t clip, uint8_t frame_index, pet_res_face_t *out);
 bool pet_res_load_splash(uint16_t *pixels, uint32_t pixel_cap,
                          uint16_t *w, uint16_t *h);
+bool pet_res_load_ui_icon(pet_ui_icon_id_t id, uint16_t *pixels, uint32_t pixel_cap,
+                          uint16_t *w, uint16_t *h);
 
 #ifdef __cplusplus
 }

@@ -9,6 +9,7 @@ from app.features.design_feature import DesignFeature
 from app.features.pack_feature import PackFeature
 from app.features.reserved_feature import ReservedFeature
 from app.features.splash_feature import SplashFeature
+from app.features.theme_feature import ThemeFeature
 
 
 def built_in_features(ctx: ProjectContext) -> list[FeatureModule]:
@@ -20,7 +21,7 @@ def built_in_features(ctx: ProjectContext) -> list[FeatureModule]:
         BodyFeature(ctx),
         ReservedFeature(ctx, "sfx", "SFX", "sfx/", 50),
         ReservedFeature(ctx, "font", "Font", "font/", 60),
-        ReservedFeature(ctx, "theme", "Theme", "theme/", 70),
+        ThemeFeature(ctx),
     ]
     mods.sort(key=lambda m: m.order)
     return mods

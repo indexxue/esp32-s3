@@ -445,5 +445,25 @@
     "fit": "contain",
     "bg": "#202020",
     "content_size": 240
+  },
+  "theme": {
+    "ui": {
+      "feed": {
+        "mode": "image",
+        "bg": "#fa656c"
+      },
+      "play": {
+        "mode": "image",
+        "bg": "#fa656c"
+      },
+      "sleep": {
+        "mode": "image",
+        "bg": "#fa656c"
+      },
+      "chat": {
+        "mode": "image",
+        "bg": "#000770"
+      }
+    }
   }
 }

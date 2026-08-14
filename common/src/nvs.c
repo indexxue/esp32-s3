@@ -85,6 +85,7 @@ static const char *const TAG = "nvs";
 #define NVS_KEY_LCD_GAL_BOOT "lcd_gal_boot"
 #define NVS_KEY_CAMERA_CFG "cam_cfg"
 #define NVS_KEY_SERVO_CAL "servo_cal"
+#define NVS_KEY_TOUCH_CAL "touch_cal"
 
 /** 与 board.h 舵机映射一致；nvs 不依赖 board，避免层倒挂。 */
 #define NVS_SERVO_CALIB_PULSE_MIN_US (500U)
@@ -1187,5 +1188,89 @@ bool nvs_servo_calib_delete(void)
         return false;
     }
     st = blob_del(NVS_KEY_SERVO_CAL);
+    return (st == NVS_OK) || (st == NVS_ERR_NOT_FOUND);
+}
+
+void nvs_touch_calib_default(nvs_touch_calib_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    (void)memset(out, 0, sizeof(*out));
+    out->magic  = NVS_TOUCH_CALIB_MAGIC;
+    out->valid  = 0U;
+    out->ax_q16 = NVS_TOUCH_CALIB_Q16;
+    out->ay_q16 = NVS_TOUCH_CALIB_Q16;
+}
+
+bool nvs_touch_calib_validate(const nvs_touch_calib_t *cfg)
+{
+    int32_t off_max_q16;
+
+    if (cfg == NULL) {
+        return false;
+    }
+    if (cfg->magic != NVS_TOUCH_CALIB_MAGIC) {
+        return false;
+    }
+    if (cfg->valid > 1U) {
+        return false;
+    }
+    if (cfg->valid == 0U) {
+        return true;
+    }
+    if ((cfg->ax_q16 < NVS_TOUCH_CALIB_SCALE_MIN_Q16) || (cfg->ax_q16 > NVS_TOUCH_CALIB_SCALE_MAX_Q16) ||
+        (cfg->ay_q16 < NVS_TOUCH_CALIB_SCALE_MIN_Q16) || (cfg->ay_q16 > NVS_TOUCH_CALIB_SCALE_MAX_Q16)) {
+        return false;
+    }
+    off_max_q16 = (int32_t)NVS_TOUCH_CALIB_OFFSET_MAX_PX * NVS_TOUCH_CALIB_Q16;
+    if ((cfg->bx_q16 < -off_max_q16) || (cfg->bx_q16 > off_max_q16) || (cfg->by_q16 < -off_max_q16) ||
+        (cfg->by_q16 > off_max_q16)) {
+        return false;
+    }
+    return true;
+}
+
+_Static_assert(sizeof(nvs_touch_calib_t) <= NVS_KEY_VALUE_MAX, "touch calib blob must fit NVS_KEY_VALUE_MAX");
+
+bool nvs_touch_calib_get(nvs_touch_calib_t *out)
+{
+    nvs_touch_calib_t tmp;
+    size_t            len = sizeof(tmp);
+
+    if (out == NULL) {
+        return false;
+    }
+    if (blob_get(NVS_KEY_TOUCH_CAL, &tmp, &len) != NVS_OK) {
+        return false;
+    }
+    if (len != sizeof(tmp) || !nvs_touch_calib_validate(&tmp) || (tmp.valid == 0U)) {
+        /* 清掉旧版过宽校验写下的坏数据，避免开机继续拉歪触摸 */
+        (void)blob_del(NVS_KEY_TOUCH_CAL);
+        return false;
+    }
+    *out = tmp;
+    return true;
+}
+
+bool nvs_touch_calib_set(const nvs_touch_calib_t *cfg)
+{
+    if (!s_ready || (cfg == NULL)) {
+        return false;
+    }
+    if (!nvs_touch_calib_validate(cfg) || (cfg->valid == 0U)) {
+        return false;
+    }
+    return (blob_set(NVS_KEY_TOUCH_CAL, cfg, sizeof(*cfg)) == NVS_OK);
+}
+
+bool nvs_touch_calib_delete(void)
+{
+    nvs_err_t st;
+
+    if (!s_ready) {
+        return false;
+    }
+    st = blob_del(NVS_KEY_TOUCH_CAL);
     return (st == NVS_OK) || (st == NVS_ERR_NOT_FOUND);
 }

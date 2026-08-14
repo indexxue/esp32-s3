@@ -3,7 +3,7 @@
 作者侧唯一入口：把 PNG / 涂鸦打成设备可读的 `/sdcard/pet/` 二进制。  
 写盘只经 [`skin_core.py`](skin_core.py)；GUI / CLI 不得另写第二套落盘逻辑。
 
-**本阶段固件只显示身体**，不叠五官。开机仅静态 `boot/splash.bin`。`boot/anim/`、sfx/font/theme 预留。
+**本阶段固件只显示身体**，不叠五官。开机仅静态 `boot/splash.bin`。可选按键图标 `theme/ui/*.bin`（缺则字母 F/P/S/C）。`boot/anim/`、sfx/font 仍预留。
 
 ---
 
@@ -39,6 +39,7 @@ py -3 tools/pet_skin/run_gui.py
 | `poke.png` | 160×160 | poke | 1 |
 | `sleep_loop.png` | 160×160 | sleep_loop | 1 |
 | `splash.png` | 240×240 | 开机 | 单帧 |
+| `ui_feed.png` / `ui_play.png` / `ui_sleep.png` / `ui_chat.png` | 28×28（可更大，contain） | 按键图标 | 可选；Theme 可选「图片+背景色」或「纯色」；缺图非纯色则字母 |
 
 文件名必须对上，扩展名可以是 `.png` / `.webp` / `.jpg`。出图提示见 [`doc/desktop_pet/skin_ai_asset_brief.md`](../../doc/desktop_pet/skin_ai_asset_brief.md)。
 
@@ -48,14 +49,14 @@ py -3 tools/pet_skin/run_gui.py
 
 ## 3. GUI 使用（推荐）
 
-启动后左侧：Splash → Design → Pack → Body。
+启动后左侧：Splash → Design → Pack → Body → Theme。
 
 ### 3.1 最快路径（已有一套 PNG）
 
 1. 把上表文件放进 `tools/pet_skin/assets/`，**或**在 Design / Body 点 **Import folder…** 选你的出图目录（只拷贝认识的文件名）。
 2. 点 **Bind assets/**：按文件名写入 `pack.json` 的 `source` / `sources`。
 3. Design 里逐个 clip 看右侧圆屏预览（Frame 切 idle_0 / idle_1）。
-4. 点 **Build pack.bin**（只要身体）或 **Build pack + splash**（连开机图）。
+4. 点 **Build pack.bin**（只要身体）或 **Build pack + splash + UI icons**（连开机图与按键皮肤）。
 5. 把输出目录拷到卡上（**整棵** `sdcard/`，含根目录 `config`），**或**导出 zip 用网页上传：
 
 ```
@@ -64,6 +65,7 @@ tools/pet_sim/sdcard/   →   设备 /sdcard/
   pet/pack.bin
   pet/body/*.bin
   pet/boot/splash.bin
+  pet/theme/ui/{feed,play,sleep,chat}.bin   # 可选
 ```
 
 网页换肤：Pack 面板 **Export zip…**（或 `py -3 tools/pet_skin/cli.py --zip`）得到 `pet.zip`，浏览器打开设备 `http://<IP>/`，选 zip → **上传并重启**。只覆盖 `pet/`，不改 `config`。
@@ -167,7 +169,8 @@ py -3 tools/pet_skin/cli.py --splash D:\art\splash.png --no-pack
 | `design` | 宠物设计 | ready |
 | `pack` | 资源包 | ready |
 | `body` | clip 清单 + 绑定 | ready |
-| `sfx` / `font` / `theme` | 预留 | reserved stub |
+| `sfx` / `font` | 预留 | reserved stub |
+| `theme` | 按键 UI 图标 | ready（`theme/ui/*.bin`） |
 
 ## 如何加功能
 

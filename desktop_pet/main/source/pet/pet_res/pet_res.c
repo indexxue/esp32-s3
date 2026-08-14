@@ -271,3 +271,20 @@ bool pet_res_load_splash(uint16_t *pixels, uint32_t pixel_cap,
     return pet_res_load_rgbh(PET_RES_SPLASH_REL, pixels, pixel_cap,
                              PET_RES_SPLASH_MAX_W, PET_RES_SPLASH_MAX_H, w, h);
 }
+
+bool pet_res_load_ui_icon(pet_ui_icon_id_t id, uint16_t *pixels, uint32_t pixel_cap,
+                          uint16_t *w, uint16_t *h)
+{
+    static const char *const rels[PET_UI_ICON_COUNT] = {
+        PET_RES_UI_ICON_FEED_REL,
+        PET_RES_UI_ICON_PLAY_REL,
+        PET_RES_UI_ICON_SLEEP_REL,
+        PET_RES_UI_ICON_CHAT_REL,
+    };
+
+    if (id >= PET_UI_ICON_COUNT) {
+        return false;
+    }
+    return pet_res_load_rgbh(rels[id], pixels, pixel_cap,
+                             PET_RES_UI_ICON_MAX_W, PET_RES_UI_ICON_MAX_H, w, h);
+}

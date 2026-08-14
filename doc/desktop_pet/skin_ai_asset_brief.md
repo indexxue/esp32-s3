@@ -57,7 +57,8 @@
 | 10 | sleep_loop.png | 160 | 蜷睡、侧躺或趴下均可；头可偏左/偏下 |
 | 11 | splash.png | 240 | 以 idle 全身为准，居中放大适配 240 画布，外侧全透明 |
 
-不要生成：Dock 图标、眨眼图、带完整五官的整宠插画、开机动画序列、锚点标注图。
+不要生成：眨眼图、带完整五官的整宠插画、开机动画序列、锚点标注图。  
+（按键图标 `ui_feed/ui_play/ui_sleep/ui_chat` 为可选另册，本任务可不做。）
 
 ## 3. 每张自检清单（交付前默默执行）
 
@@ -97,8 +98,11 @@
 ## 你收到图后怎么用（给人看，不用复制给生图 AI）
 
 1. 把 PNG 放进 `tools/pet_skin/assets/`（文件名保持上表不变），或 GUI **Import folder…**。
-2. **Bind assets/** → 圆屏预览各 clip → **Build pack + splash**。
+2. **Bind assets/** → 圆屏预览各 clip → **Build pack + splash + UI icons**。
 3. 拷 `tools/pet_sim/sdcard/` 到设备 `/sdcard/`（含根目录 `config` 与 `pet/`）。
+
+可选按键皮肤：另备 `ui_feed.png` / `ui_play.png` / `ui_sleep.png` / `ui_chat.png`（约 28×28，透明底），
+在 `pet_skin` **Theme** 面板导入并 Build，或 CLI `--theme-ui`。缺图时设备显示字母 F/P/S/C。
 
 固件本阶段不叠五官，预览也不必开锚点。逐步说明见 [`tools/pet_skin/README.md`](../../tools/pet_skin/README.md)。
 

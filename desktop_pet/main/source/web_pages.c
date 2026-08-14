@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -19,6 +20,7 @@
 
 #include "board.h"
 #include "sdcard.h"
+#include "ui.h"
 #include "web_skin.h"
 
 #include "esp_http_server.h"
@@ -504,12 +506,64 @@ static esp_err_t sd_delete_post_handler(httpd_req_t *req)
     return httpd_resp_send(req, jbuf, HTTPD_RESP_USE_STRLEN);
 }
 
+static esp_err_t web_send_json(httpd_req_t *req, const char *json)
+{
+    (void)httpd_resp_set_type(req, "application/json");
+    (void)httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t touch_calib_get_handler(httpd_req_t *req)
+{
+    bool running = false;
+    bool saved = false;
+    uint8_t step = 0U;
+    uint8_t steps = 0U;
+    char buf[128];
+
+    desktop_pet_ui_touch_calib_status(&running, &step, &steps, &saved);
+    (void)snprintf(buf, sizeof(buf),
+                   "{\"ok\":true,\"running\":%s,\"step\":%u,\"steps\":%u,\"saved\":%s}",
+                   running ? "true" : "false", (unsigned)step, (unsigned)steps,
+                   saved ? "true" : "false");
+    return web_send_json(req, buf);
+}
+
+static esp_err_t touch_calib_start_post_handler(httpd_req_t *req)
+{
+    if (req->content_len > 0) {
+        discard_post_remainder(req);
+    }
+    if (!desktop_pet_ui_touch_calib_start()) {
+        (void)httpd_resp_set_status(req, "409 Conflict");
+        return web_send_json(req, "{\"ok\":false,\"error\":\"start_failed\"}");
+    }
+    return web_send_json(req, "{\"ok\":true,\"running\":true}");
+}
+
+static esp_err_t touch_calib_reset_post_handler(httpd_req_t *req)
+{
+    if (req->content_len > 0) {
+        discard_post_remainder(req);
+    }
+    if (!desktop_pet_ui_touch_calib_reset()) {
+        (void)httpd_resp_set_status(req, "500 Internal Server Error");
+        return web_send_json(req, "{\"ok\":false,\"error\":\"reset_failed\"}");
+    }
+    return web_send_json(req, "{\"ok\":true,\"saved\":false}");
+}
+
 esp_err_t web_pages_sd_http_register(httpd_handle_t server)
 {
     const httpd_uri_t uris[] = {
         {.uri = "/api/sd/list", .method = HTTP_GET, .handler = sd_list_get_handler, .user_ctx = NULL},
         {.uri = "/api/sd/file", .method = HTTP_GET, .handler = sd_file_get_handler, .user_ctx = NULL},
         {.uri = "/api/sd/delete", .method = HTTP_POST, .handler = sd_delete_post_handler, .user_ctx = NULL},
+        {.uri = "/api/touch/calib", .method = HTTP_GET, .handler = touch_calib_get_handler, .user_ctx = NULL},
+        {.uri = "/api/touch/calib/start", .method = HTTP_POST, .handler = touch_calib_start_post_handler,
+         .user_ctx = NULL},
+        {.uri = "/api/touch/calib/reset", .method = HTTP_POST, .handler = touch_calib_reset_post_handler,
+         .user_ctx = NULL},
     };
     size_t i;
 

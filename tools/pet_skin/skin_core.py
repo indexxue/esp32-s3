@@ -68,12 +68,25 @@ DECLARED_PATHS = (
     "pack.bin",
     "body/*.bin",
     "boot/splash.bin",
+    "theme/ui/*.bin",
 )
 RESERVED_PATHS = (
     "sfx/",
     "font/",
-    "theme/",
+    "theme/",  # theme/ui icons declared; other theme/* still reserved
     "boot/anim/",  # deferred; do not implement in tool v1
+)
+
+# UI button icons (28×28 RGBH) → theme/ui/{id}.bin; missing → firmware letter fallback
+UI_ICON_SIZE = 28
+UI_ICON_CARE_BG = (0x3A, 0x3A, 0x44)
+UI_ICON_CHAT_BG = (0x3A, 0x55, 0x70)
+# (bin_stem, assets_stem, button_bg)
+UI_ICONS = (
+    ("feed", "ui_feed", UI_ICON_CARE_BG),
+    ("play", "ui_play", UI_ICON_CARE_BG),
+    ("sleep", "ui_sleep", UI_ICON_CARE_BG),
+    ("chat", "ui_chat", UI_ICON_CHAT_BG),
 )
 
 
@@ -363,6 +376,10 @@ KNOWN_ASSET_STEMS = (
     "poke",
     "sleep_loop",
     "splash",
+    "ui_feed",
+    "ui_play",
+    "ui_sleep",
+    "ui_chat",
 )
 
 
@@ -1051,3 +1068,147 @@ def build_splash_from_cfg(
         bg,
         size,
     )
+
+
+def find_ui_icon_src(base_dir: Path, assets_stem: str) -> Path | None:
+    return find_asset_file(Path(base_dir) / "assets", assets_stem)
+
+
+def default_ui_icon_bg(bin_stem: str) -> tuple[int, int, int]:
+    return UI_ICON_CHAT_BG if bin_stem == "chat" else UI_ICON_CARE_BG
+
+
+def theme_ui_icon_cfg(cfg: dict, bin_stem: str) -> dict:
+    """Return {mode, bg} for one UI icon; mode is image|solid."""
+    theme = cfg.get("theme") if isinstance(cfg.get("theme"), dict) else {}
+    ui = theme.get("ui") if isinstance(theme.get("ui"), dict) else {}
+    raw = ui.get(bin_stem) if isinstance(ui.get(bin_stem), dict) else {}
+    mode = str(raw.get("mode", "image")).lower()
+    if mode not in ("image", "solid"):
+        mode = "image"
+    bg = parse_rgb(raw["bg"]) if raw.get("bg") else default_ui_icon_bg(bin_stem)
+    return {"mode": mode, "bg": bg}
+
+
+def set_theme_ui_icon_cfg(
+    cfg: dict,
+    bin_stem: str,
+    mode: str,
+    bg: tuple[int, int, int],
+) -> None:
+    if mode not in ("image", "solid"):
+        mode = "image"
+    theme = cfg.setdefault("theme", {})
+    if not isinstance(theme, dict):
+        theme = {}
+        cfg["theme"] = theme
+    ui = theme.setdefault("ui", {})
+    if not isinstance(ui, dict):
+        ui = {}
+        theme["ui"] = ui
+    ui[bin_stem] = {
+        "mode": mode,
+        "bg": f"#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}",
+    }
+
+
+def make_solid_ui_icon_pixels(
+    size: int = UI_ICON_SIZE,
+    bg: tuple[int, int, int] = UI_ICON_CARE_BG,
+) -> bytes:
+    rows = [[bg] * size for _ in range(size)]
+    return pixels_from_rgb_rows(rows, size, size)
+
+
+def load_image_ui_icon(
+    src: Path,
+    size: int = UI_ICON_SIZE,
+    bg: tuple[int, int, int] = UI_ICON_CARE_BG,
+    fit: str = "contain",
+) -> bytes:
+    """Fit icon PNG into size×size; transparent → button bg (RGB565 has no alpha)."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError(
+            "Pillow required for UI icons. Install: py -3 -m pip install Pillow"
+        ) from exc
+
+    im = Image.open(src).convert("RGBA")
+    px = im.load()
+    sw, sh = im.size
+
+    def get_rgba(x: int, y: int) -> tuple[int, int, int, int]:
+        return px[x, y]
+
+    content = fit_rgba_to_box(sw, sh, get_rgba, size, fit)
+    rows = [[(c if c is not None else bg) for c in row] for row in content]
+    return pixels_from_rgb_rows(rows, size, size)
+
+
+def preview_ui_icon_pixels(
+    base_dir: Path,
+    bin_stem: str,
+    assets_stem: str,
+    mode: str,
+    bg: tuple[int, int, int],
+) -> bytes:
+    """Pixels for Theme panel preview (solid or image+bg)."""
+    if mode == "solid":
+        return make_solid_ui_icon_pixels(UI_ICON_SIZE, bg)
+    src = find_ui_icon_src(base_dir, assets_stem)
+    if src is None:
+        return make_solid_ui_icon_pixels(UI_ICON_SIZE, bg)
+    return load_image_ui_icon(src, UI_ICON_SIZE, bg)
+
+
+def build_theme_ui_icons(
+    out_dir: Path,
+    base_dir: Path,
+    cfg: dict | None = None,
+) -> str:
+    """Write theme/ui/{feed,play,sleep,chat}.bin.
+
+    mode=image: needs assets/ui_*.* ; transparent filled with bg.
+    mode=solid: flat bg color (no PNG required).
+    Missing image-mode assets are skipped so firmware keeps letter fallback.
+    """
+    ensure_card_config(out_dir)
+    out_dir = Path(out_dir)
+    base_dir = Path(base_dir)
+    cfg = cfg if isinstance(cfg, dict) else {}
+    written: list[str] = []
+    missing: list[str] = []
+    for bin_stem, assets_stem, _default_bg in UI_ICONS:
+        opt = theme_ui_icon_cfg(cfg, bin_stem)
+        mode = opt["mode"]
+        bg = opt["bg"]
+        rel = f"theme/ui/{bin_stem}.bin"
+        path = out_dir / rel
+        if mode == "solid":
+            pixels = make_solid_ui_icon_pixels(UI_ICON_SIZE, bg)
+            write_rgbh(path, UI_ICON_SIZE, UI_ICON_SIZE, pixels)
+            written.append(f"{rel}=solid#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}")
+            continue
+        src = find_ui_icon_src(base_dir, assets_stem)
+        if src is None:
+            missing.append(assets_stem)
+            continue
+        pixels = load_image_ui_icon(src, UI_ICON_SIZE, bg)
+        write_rgbh(path, UI_ICON_SIZE, UI_ICON_SIZE, pixels)
+        written.append(
+            f"{rel}←{src.name}+bg#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}"
+        )
+    parts = []
+    if written:
+        parts.append(
+            f"wrote {len(written)} UI icons ({UI_ICON_SIZE}x{UI_ICON_SIZE}): "
+            + ", ".join(written)
+        )
+    else:
+        parts.append(
+            "no UI icons written (set solid color or add assets/ui_feed|ui_play|ui_sleep|ui_chat.*)"
+        )
+    if missing:
+        parts.append("skip missing image: " + ", ".join(missing))
+    return "; ".join(parts)
