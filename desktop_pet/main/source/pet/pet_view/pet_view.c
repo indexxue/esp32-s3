@@ -8,7 +8,9 @@
 #include "pet_view.h"
 
 #include "pet_core.h"
+#include "pet_fs.h"
 #include "pet_res.h"
+#include "log.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -48,7 +50,11 @@
 #define PET_HINT_FADE_MS (2800U)
 #define PET_CHAT_IDLE_MS (45000U)
 #define PET_CHAT_WAVE_BARS (5)
-#define PET_CHAT_CAPTION_MAX (96)
+/* 字幕条：CJK 14 行高约 17，双行 + pad */
+#define PET_CHAT_CAP_BOX_W (196)
+#define PET_CHAT_CAP_BOX_H (56)
+#define PET_CHAT_CAP_LABEL_W (180)
+#define PET_CHAT_CAPTION_MAX (160)
 
 static pet_view_alloc_fn s_alloc;
 static pet_view_free_fn s_free;
@@ -104,6 +110,7 @@ static pet_chat_mode_t s_chat_mode_id;
 static uint32_t s_chat_idle_ms;
 static uint8_t s_chat_wave_phase;
 static char s_chat_caption_buf[PET_CHAT_CAPTION_MAX];
+static lv_font_t *s_sd_caption_font;
 
 static lv_image_dsc_t s_img_dsc[2];
 static uint16_t *s_pix[2];
@@ -461,6 +468,106 @@ static void drain_intents(void)
     }
 }
 
+static const lv_font_t *chat_caption_fallback_font(void)
+{
+#if LV_FONT_SOURCE_HAN_SANS_SC_14_CJK
+    return &lv_font_source_han_sans_sc_14_cjk;
+#elif LV_FONT_MONTSERRAT_14
+    return &lv_font_montserrat_14;
+#else
+    return LV_FONT_DEFAULT;
+#endif
+}
+
+static void chat_font_try_load_sd(void)
+{
+    char abs[PET_FS_PATH_MAX];
+    char lvpath[PET_FS_PATH_MAX + 4U];
+    long sz;
+    lv_font_t *font;
+    const lv_font_t *fallback;
+
+    if (s_sd_caption_font != NULL) {
+        return;
+    }
+#if !LV_USE_FS_STDIO
+    (void)abs;
+    (void)lvpath;
+    (void)sz;
+    (void)font;
+    (void)fallback;
+    return;
+#else
+    sz = pet_fs_file_size(PET_RES_FONT_CAPTION_REL);
+    if (sz <= 0) {
+        LOG_INFO("chat font: no %s (use embedded CJK)", PET_RES_FONT_CAPTION_REL);
+        return;
+    }
+    if (!pet_fs_join(abs, sizeof(abs), PET_RES_FONT_CAPTION_REL)) {
+        return;
+    }
+    /* LVGL FS_STDIO letter S → fopen(abs) */
+    if (snprintf(lvpath, sizeof(lvpath), "S:%s", abs) < 0) {
+        return;
+    }
+    font = lv_binfont_create(lvpath);
+    if (font == NULL) {
+        LOG_WARN("chat font: binfont load fail %s (%ld B)", abs, sz);
+        return;
+    }
+    fallback = chat_caption_fallback_font();
+    if (fallback != NULL) {
+        font->fallback = fallback;
+    }
+    s_sd_caption_font = font;
+    LOG_INFO("chat font: SD %s (%ld B)", PET_RES_FONT_CAPTION_REL, sz);
+#endif
+}
+
+static const lv_font_t *chat_caption_font(void)
+{
+    if (s_sd_caption_font != NULL) {
+        return s_sd_caption_font;
+    }
+    return chat_caption_fallback_font();
+}
+
+/** Truncate on UTF-8 codepoint boundary (avoid broken CJK glyphs). */
+static void utf8_copy_trunc(char *dst, size_t dst_sz, const char *src)
+{
+    size_t i = 0U;
+
+    if ((dst == NULL) || (dst_sz == 0U)) {
+        return;
+    }
+    if (src == NULL) {
+        dst[0] = '\0';
+        return;
+    }
+    while ((src[i] != '\0') && ((i + 1U) < dst_sz)) {
+        unsigned char c = (unsigned char)src[i];
+        size_t need = 1U;
+
+        if ((c & 0x80U) == 0U) {
+            need = 1U;
+        } else if ((c & 0xE0U) == 0xC0U) {
+            need = 2U;
+        } else if ((c & 0xF0U) == 0xE0U) {
+            need = 3U;
+        } else if ((c & 0xF8U) == 0xF0U) {
+            need = 4U;
+        } else {
+            break;
+        }
+        if ((i + need) >= dst_sz) {
+            break;
+        }
+        (void)memcpy(&dst[i], &src[i], need);
+        i += need;
+    }
+    dst[i] = '\0';
+}
+
 static void chat_bump_idle(void)
 {
     s_chat_idle_ms = 0U;
@@ -571,8 +678,7 @@ static void chat_set_caption_internal(const char *utf8)
     const char *show = "...";
 
     if ((utf8 != NULL) && (utf8[0] != '\0')) {
-        strncpy(s_chat_caption_buf, utf8, sizeof(s_chat_caption_buf) - 1U);
-        s_chat_caption_buf[sizeof(s_chat_caption_buf) - 1U] = '\0';
+        utf8_copy_trunc(s_chat_caption_buf, sizeof(s_chat_caption_buf), utf8);
         show = s_chat_caption_buf;
     } else {
         s_chat_caption_buf[0] = '\0';
@@ -777,7 +883,7 @@ static void chat_create_layer(lv_obj_t *parent)
 
     s_chat_cap_box = lv_obj_create(s_chat_layer);
     lv_obj_remove_style_all(s_chat_cap_box);
-    lv_obj_set_size(s_chat_cap_box, 196, 40);
+    lv_obj_set_size(s_chat_cap_box, PET_CHAT_CAP_BOX_W, PET_CHAT_CAP_BOX_H);
     lv_obj_set_style_radius(s_chat_cap_box, 12, 0);
     lv_obj_set_style_bg_opa(s_chat_cap_box, LV_OPA_50, 0);
     lv_obj_set_style_bg_color(s_chat_cap_box, lv_color_hex(0x000000), 0);
@@ -789,12 +895,10 @@ static void chat_create_layer(lv_obj_t *parent)
 
     s_chat_caption = lv_label_create(s_chat_cap_box);
     lv_label_set_long_mode(s_chat_caption, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_chat_caption, 180);
+    lv_obj_set_width(s_chat_caption, PET_CHAT_CAP_LABEL_W);
     lv_obj_set_style_text_align(s_chat_caption, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s_chat_caption, lv_color_hex(0xDCE6F8), 0);
-#if LV_FONT_MONTSERRAT_14
-    lv_obj_set_style_text_font(s_chat_caption, &lv_font_montserrat_14, 0);
-#endif
+    lv_obj_set_style_text_font(s_chat_caption, chat_caption_font(), 0);
     lv_label_set_text(s_chat_caption, "...");
     lv_obj_center(s_chat_caption);
     lv_obj_remove_flag(s_chat_caption, LV_OBJ_FLAG_CLICKABLE);
@@ -998,6 +1102,8 @@ static void splash_enter_home(void)
     lv_obj_t *parent = s_boot_parent;
     pet_view_boot_done_fn done = s_boot_done;
 
+    /* Gate 已满足（≥1s + pack）：此时再拉字库，避免卡死首帧刷新导致“无开机动画”。 */
+    chat_font_try_load_sd();
     splash_destroy();
     pet_view_create(parent);
     if (done != NULL) {

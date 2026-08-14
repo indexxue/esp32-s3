@@ -78,7 +78,7 @@
 #define UI_CALIB_IDX_RIGHT (1U)
 #define UI_CALIB_IDX_BOT (2U)   /* Dock / 下 */
 #define UI_CALIB_IDX_LEFT (3U)
-#define UI_CHAT_CAPTION_MAX (96)
+#define UI_CHAT_CAPTION_MAX (160)
 
 static lv_display_t *s_disp;
 static lv_indev_t *s_indev;

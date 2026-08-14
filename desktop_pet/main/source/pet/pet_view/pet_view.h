@@ -45,9 +45,11 @@ void pet_view_set_intent_hook(pet_view_intent_hook_t hook);
 void pet_view_set_chat_hook(pet_view_chat_hook_t hook);
 /**
  * Show splash C (body + ring). Call pet_view_boot_pack_done() after pack
- * load attempt ends; gate is ≥1s + pack done, then creates home.
+ * load attempt; gate ≥1s + pack done, then load caption font and open home.
+ * Does not wait for Wi‑Fi / agent.
  */
 void pet_view_boot_start(lv_obj_t *parent, pet_view_boot_done_fn on_home);
+/** Mark pack load attempt finished (Splash Gate half). */
 void pet_view_boot_pack_done(void);
 void pet_view_create(lv_obj_t *parent);
 void pet_view_poll(void);

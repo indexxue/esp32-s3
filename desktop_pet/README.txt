@@ -22,6 +22,7 @@ desktop_pet — ESP32-S3 桌宠（LVGL UI + 板级驱动）
   触摸：点身体 poke；长按喂食
     左弧 F/P/S = 喂/玩/睡；右侧 C = 聊（→对话页 D：进听出停、字幕、打断、45s）
     有 `/sdcard/pet/theme/ui/{feed,play,sleep,chat}.bin` 则显示图标，否则字母
+  对话字幕：开机 Splash 读 `/sdcard/pet/font/caption.bin`（缺则内置 CJK）；网页上传后需重启
   IMU：晃一下玩、翻转约 1s 睡觉
   GPIO0 单击：默认无动作（debug 覆盖层已隔离；`DESKTOP_PET_ENABLE_DEBUG_UI=1` 可恢复 Rec/Play/Conn/Talk）
   GPIO0 双击：清除已存 STA，重启进入 SoftAP 配网（SSID ESP32-WebCtrl / esp32web1 → http://192.168.4.1/provision）
@@ -52,7 +53,8 @@ desktop_pet — ESP32-S3 桌宠（LVGL UI + 板级驱动）
 
 Web（AP/STA 同一 HTTP）：
   SoftAP 默认 http://192.168.4.1/ ；STA 用设备 DHCP IP
-  `GET /` SD 文件管理页；`/api/sd/list|file|delete`；另有 `/provision` `/ota`
+  `GET /` SD 文件管理：浏览 / 上传 / 下载 / 建目录 / 删除；`/api/sd/list|file|upload|mkdir|delete`
+  另有 `/provision` `/ota`；皮肤 zip：`POST /api/pet/skin`
   需 DESKTOP_PET_ENABLE_WIFI_WEB=1 且 CONFIG_WEB_CTRL_AUTO_START
 
 Bring-up 开关（board.h，改后重编）：

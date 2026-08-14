@@ -11,5 +11,5 @@
 /** `GET /`：返回 `source/www/index.html`。 */
 esp_err_t web_pages_root_get_handler(httpd_req_t *req);
 
-/** 注册 SD 列表 / 下载 / 删除 / 皮肤 zip 上传（挂到 `web_ctrl_config_t.gallery_http_register`）。 */
+/** 注册 SD 列表 / 上传 / 下载 / 建目录 / 删除 / 皮肤 zip（挂到 `web_ctrl_config_t.gallery_http_register`）。 */
 esp_err_t web_pages_sd_http_register(httpd_handle_t server);

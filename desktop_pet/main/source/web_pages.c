@@ -1,6 +1,6 @@
 /**
  * @file web_pages.c
- * @brief desktop_pet：`GET /` 与 SD 卡浏览 / 下载 / 删除 HTTP API。
+ * @brief desktop_pet：`GET /` 与 SD 卡浏览 / 上传 / 下载 / 建目录 / 删除 HTTP API。
  *
  * AP / STA 共用同一 httpd；路径相对 `BOARD_SDCARD_MOUNT_POINT`，禁止 `..`。
  * 皮肤 zip 上传见 `web_skin.c`（`POST /api/pet/skin`）。
@@ -10,6 +10,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -29,9 +30,11 @@
 #define WEB_SD_PATH_MAX       (200U)
 #define WEB_SD_NAME_MAX       (120U)
 #define WEB_SD_REL_MAX        (160U)
-#define WEB_SD_MAX_FILES      (48U)
-#define WEB_SD_JSON_MAX       (10240U)
+#define WEB_SD_MAX_FILES      (80U)
+#define WEB_SD_JSON_MAX       (16384U)
 #define WEB_SD_SEND_CHUNK     (1024U)
+#define WEB_SD_RECV_CHUNK     (2048U)
+#define WEB_SD_UPLOAD_MAX     (8U * 1024U * 1024U) /* 8 MiB：字库 / 帧图等 */
 
 static const char *TAG = "web_pages";
 
@@ -234,6 +237,95 @@ static esp_err_t web_sd_build_abs(const char *rel, char *out, size_t out_cap)
         return ESP_ERR_INVALID_SIZE;
     }
     return ESP_OK;
+}
+
+/** Create each path segment under mount (rel may be "" → no-op). */
+static bool web_sd_mkdir_p(const char *rel)
+{
+    char   acc[WEB_SD_REL_MAX + 1U];
+    char   abs[WEB_SD_PATH_MAX];
+    size_t i;
+    size_t n;
+    size_t start = 0U;
+
+    if ((rel == NULL) || (rel[0] == '\0')) {
+        return true;
+    }
+    if (!web_sd_relpath_ok(rel)) {
+        return false;
+    }
+    n = strlen(rel);
+    acc[0] = '\0';
+    for (i = 0U; i <= n; i++) {
+        if ((i < n) && (rel[i] != '/')) {
+            continue;
+        }
+        if (i == start) {
+            return false;
+        }
+        if ((i - start) >= sizeof(acc)) {
+            return false;
+        }
+        if (acc[0] != '\0') {
+            size_t al = strlen(acc);
+
+            if ((al + 1U + (i - start)) >= sizeof(acc)) {
+                return false;
+            }
+            acc[al] = '/';
+            (void)memcpy(acc + al + 1U, rel + start, i - start);
+            acc[al + 1U + (i - start)] = '\0';
+        } else {
+            (void)memcpy(acc, rel + start, i - start);
+            acc[i - start] = '\0';
+        }
+        if (web_sd_build_abs(acc, abs, sizeof(abs)) != ESP_OK) {
+            return false;
+        }
+        if (mkdir(abs, 0755) != 0) {
+            struct stat st;
+
+            if ((errno != EEXIST) || (stat(abs, &st) != 0) || !S_ISDIR(st.st_mode)) {
+                return false;
+            }
+        }
+        start = i + 1U;
+    }
+    return true;
+}
+
+static bool web_sd_parent_rel(const char *rel_file, char *parent, size_t parent_cap)
+{
+    const char *slash;
+
+    if ((rel_file == NULL) || (parent == NULL) || (parent_cap == 0U)) {
+        return false;
+    }
+    slash = strrchr(rel_file, '/');
+    if (slash == NULL) {
+        parent[0] = '\0';
+        return true;
+    }
+    if ((size_t)(slash - rel_file) >= parent_cap) {
+        return false;
+    }
+    (void)memcpy(parent, rel_file, (size_t)(slash - rel_file));
+    parent[slash - rel_file] = '\0';
+    return web_sd_relpath_ok(parent);
+}
+
+static esp_err_t web_sd_json_err(httpd_req_t *req, const char *http_status, const char *err)
+{
+    char buf[96];
+    int  n;
+
+    (void)httpd_resp_set_status(req, http_status);
+    (void)httpd_resp_set_type(req, "application/json");
+    n = snprintf(buf, sizeof(buf), "{\"ok\":false,\"error\":\"%s\"}", (err != NULL) ? err : "err");
+    if (n <= 0) {
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"err\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    return httpd_resp_send(req, buf, (size_t)n);
 }
 
 static void web_sd_sort_entries(web_sd_entry_t *ents, size_t n)
@@ -455,6 +547,7 @@ static esp_err_t sd_delete_post_handler(httpd_req_t *req)
     char        abs[WEB_SD_PATH_MAX];
     const char *base;
     char        jbuf[WEB_SD_REL_MAX + 48U];
+    struct stat st;
     int         ur;
 
     if (req->content_len > 0) {
@@ -462,45 +555,169 @@ static esp_err_t sd_delete_post_handler(httpd_req_t *req)
     }
 
     if (sdcard_get_card() == NULL) {
-        (void)httpd_resp_set_status(req, "503 Service Unavailable");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"no_sd\"}", HTTPD_RESP_USE_STRLEN);
+        return web_sd_json_err(req, "503 Service Unavailable", "no_sd");
     }
 
     if (web_sd_query_path(req, rel, sizeof(rel)) != ESP_OK) {
-        (void)httpd_resp_set_status(req, "400 Bad Request");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"need_path\"}", HTTPD_RESP_USE_STRLEN);
+        return web_sd_json_err(req, "400 Bad Request", "need_path");
     }
     if (!web_sd_relpath_ok(rel) || (rel[0] == '\0')) {
-        (void)httpd_resp_set_status(req, "400 Bad Request");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"bad_path\"}", HTTPD_RESP_USE_STRLEN);
+        return web_sd_json_err(req, "400 Bad Request", "bad_path");
     }
 
     base = strrchr(rel, '/');
     base = (base != NULL) ? (base + 1) : rel;
     if (!web_sd_basename_ok(base)) {
-        (void)httpd_resp_set_status(req, "400 Bad Request");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"bad_name\"}", HTTPD_RESP_USE_STRLEN);
+        return web_sd_json_err(req, "400 Bad Request", "bad_name");
     }
 
     if (web_sd_build_abs(rel, abs, sizeof(abs)) != ESP_OK) {
-        (void)httpd_resp_set_status(req, "400 Bad Request");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"path\"}", HTTPD_RESP_USE_STRLEN);
+        return web_sd_json_err(req, "400 Bad Request", "path");
     }
 
-    ur = unlink(abs);
-    if (ur != 0) {
-        (void)httpd_resp_set_status(req, "404 Not Found");
-        (void)httpd_resp_set_type(req, "application/json");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"unlink\"}", HTTPD_RESP_USE_STRLEN);
+    if (stat(abs, &st) != 0) {
+        return web_sd_json_err(req, "404 Not Found", "not_found");
+    }
+    if (S_ISDIR(st.st_mode)) {
+        ur = rmdir(abs);
+        if (ur != 0) {
+            return web_sd_json_err(req, "409 Conflict", "rmdir");
+        }
+    } else if (S_ISREG(st.st_mode)) {
+        ur = unlink(abs);
+        if (ur != 0) {
+            return web_sd_json_err(req, "404 Not Found", "unlink");
+        }
+    } else {
+        return web_sd_json_err(req, "400 Bad Request", "bad_type");
     }
 
     ESP_LOGI(TAG, "sd delete %s", abs);
     (void)snprintf(jbuf, sizeof(jbuf), "{\"ok\":true,\"path\":\"%s\"}", rel);
+    (void)httpd_resp_set_status(req, "200 OK");
+    (void)httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, jbuf, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t sd_mkdir_post_handler(httpd_req_t *req)
+{
+    char rel[WEB_SD_REL_MAX + 1U];
+    char abs[WEB_SD_PATH_MAX];
+    char jbuf[WEB_SD_REL_MAX + 48U];
+    const char *base;
+
+    if (req->content_len > 0) {
+        discard_post_remainder(req);
+    }
+    if (sdcard_get_card() == NULL) {
+        return web_sd_json_err(req, "503 Service Unavailable", "no_sd");
+    }
+    if (web_sd_query_path(req, rel, sizeof(rel)) != ESP_OK) {
+        return web_sd_json_err(req, "400 Bad Request", "need_path");
+    }
+    if (!web_sd_relpath_ok(rel) || (rel[0] == '\0')) {
+        return web_sd_json_err(req, "400 Bad Request", "bad_path");
+    }
+    base = strrchr(rel, '/');
+    base = (base != NULL) ? (base + 1) : rel;
+    if (!web_sd_basename_ok(base)) {
+        return web_sd_json_err(req, "400 Bad Request", "bad_name");
+    }
+    if (!web_sd_mkdir_p(rel)) {
+        return web_sd_json_err(req, "500 Internal Server Error", "mkdir");
+    }
+    if (web_sd_build_abs(rel, abs, sizeof(abs)) != ESP_OK) {
+        return web_sd_json_err(req, "400 Bad Request", "path");
+    }
+    ESP_LOGI(TAG, "sd mkdir %s", abs);
+    (void)snprintf(jbuf, sizeof(jbuf), "{\"ok\":true,\"path\":\"%s\"}", rel);
+    (void)httpd_resp_set_status(req, "200 OK");
+    (void)httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, jbuf, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t sd_upload_post_handler(httpd_req_t *req)
+{
+    char        rel[WEB_SD_REL_MAX + 1U];
+    char        parent[WEB_SD_REL_MAX + 1U];
+    char        abs[WEB_SD_PATH_MAX];
+    char        jbuf[WEB_SD_REL_MAX + 64U];
+    const char *base;
+    FILE       *fp = NULL;
+    size_t      total;
+    size_t      got = 0U;
+
+    if (sdcard_get_card() == NULL) {
+        discard_post_remainder(req);
+        return web_sd_json_err(req, "503 Service Unavailable", "no_sd");
+    }
+    if (web_sd_query_path(req, rel, sizeof(rel)) != ESP_OK) {
+        discard_post_remainder(req);
+        return web_sd_json_err(req, "400 Bad Request", "need_path");
+    }
+    if (!web_sd_relpath_ok(rel) || (rel[0] == '\0')) {
+        discard_post_remainder(req);
+        return web_sd_json_err(req, "400 Bad Request", "bad_path");
+    }
+    base = strrchr(rel, '/');
+    base = (base != NULL) ? (base + 1) : rel;
+    if (!web_sd_basename_ok(base)) {
+        discard_post_remainder(req);
+        return web_sd_json_err(req, "400 Bad Request", "bad_name");
+    }
+    if (req->content_len <= 0) {
+        return web_sd_json_err(req, "411 Length Required", "need_content_length");
+    }
+    total = (size_t)req->content_len;
+    if (total > WEB_SD_UPLOAD_MAX) {
+        discard_post_remainder(req);
+        return web_sd_json_err(req, "413 Payload Too Large", "too_large");
+    }
+    if (!web_sd_parent_rel(rel, parent, sizeof(parent))) {
+        discard_post_remainder(req);
+        return web_sd_json_err(req, "400 Bad Request", "bad_parent");
+    }
+    if (!web_sd_mkdir_p(parent)) {
+        discard_post_remainder(req);
+        return web_sd_json_err(req, "500 Internal Server Error", "mkdir_parent");
+    }
+    if (web_sd_build_abs(rel, abs, sizeof(abs)) != ESP_OK) {
+        discard_post_remainder(req);
+        return web_sd_json_err(req, "400 Bad Request", "path");
+    }
+
+    fp = fopen(abs, "wb");
+    if (fp == NULL) {
+        discard_post_remainder(req);
+        return web_sd_json_err(req, "500 Internal Server Error", "open");
+    }
+
+    while (got < total) {
+        char   buf[WEB_SD_RECV_CHUNK];
+        size_t ask = total - got;
+        int    n;
+
+        if (ask > sizeof(buf)) {
+            ask = sizeof(buf);
+        }
+        n = httpd_req_recv(req, buf, ask);
+        if (n <= 0) {
+            (void)fclose(fp);
+            (void)unlink(abs);
+            return web_sd_json_err(req, "400 Bad Request", "recv");
+        }
+        if (fwrite(buf, 1U, (size_t)n, fp) != (size_t)n) {
+            (void)fclose(fp);
+            (void)unlink(abs);
+            discard_post_remainder(req);
+            return web_sd_json_err(req, "500 Internal Server Error", "write");
+        }
+        got += (size_t)n;
+    }
+    (void)fclose(fp);
+
+    ESP_LOGI(TAG, "sd upload %s (%u B)", abs, (unsigned)total);
+    (void)snprintf(jbuf, sizeof(jbuf), "{\"ok\":true,\"path\":\"%s\",\"bytes\":%u}", rel, (unsigned)total);
     (void)httpd_resp_set_status(req, "200 OK");
     (void)httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, jbuf, HTTPD_RESP_USE_STRLEN);
@@ -558,6 +775,8 @@ esp_err_t web_pages_sd_http_register(httpd_handle_t server)
     const httpd_uri_t uris[] = {
         {.uri = "/api/sd/list", .method = HTTP_GET, .handler = sd_list_get_handler, .user_ctx = NULL},
         {.uri = "/api/sd/file", .method = HTTP_GET, .handler = sd_file_get_handler, .user_ctx = NULL},
+        {.uri = "/api/sd/upload", .method = HTTP_POST, .handler = sd_upload_post_handler, .user_ctx = NULL},
+        {.uri = "/api/sd/mkdir", .method = HTTP_POST, .handler = sd_mkdir_post_handler, .user_ctx = NULL},
         {.uri = "/api/sd/delete", .method = HTTP_POST, .handler = sd_delete_post_handler, .user_ctx = NULL},
         {.uri = "/api/touch/calib", .method = HTTP_GET, .handler = touch_calib_get_handler, .user_ctx = NULL},
         {.uri = "/api/touch/calib/start", .method = HTTP_POST, .handler = touch_calib_start_post_handler,

@@ -45,10 +45,13 @@
 | `pet/body/<name>.bin` | `RGBH` | fallback |
 | `pet/boot/splash.bin` | `RGBH`，建议 240×240 | LVGL 开机 fallback |
 | `pet/theme/ui/{feed,play,sleep,chat}.bin` | `RGBH`，28×28（≤32） | 护理/聊按钮图标；缺则字母 |
+| `pet/font/caption.bin` | LVGL binary 字库（14px 建议） | 内置思源 CJK 子集（约 1k 字） |
 
 `config` 首版键：`version`、`content_root`、`record_root`。未知键保留在内存。凡键名以 `_root` 结尾且值为相对路径的，上电后扫描该目录（深度 2）并记下文件名与大小。
 
-Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/font/`、`pet/theme/` 下除 `ui/` 外、`pet/boot/anim/`。
+Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/theme/` 下除 `ui/` 外、`pet/boot/anim/`。
+
+字幕完整汉字：用 [`tools/pet_font/make_caption_bin.py`](../../tools/pet_font/make_caption_bin.py) 从 TTF 生成 `caption.bin`，拷/网页上传到 `pet/font/` 后**需重启**（开机 Splash 阶段加载进内存）。
 
 ### A.4 开机（视觉 C）
 
@@ -57,7 +60,7 @@ Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/fon
 | 路径 | `boot/splash.bin` **静态单帧**；与 `pack.bin` 解耦 |
 | 视觉 | **C**：身体 + 环形进度（LVGL 弧可绑加载） |
 | 工具 | 画布固定 240×240；背景/身体色与内容尺寸可调；`--fit contain|cover` |
-| Splash Gate | ≥1000 ms 且皮肤加载尝试结束；不等 WiFi/agent |
+| Splash Gate | ≥1000 ms 且皮肤 pack 加载尝试结束 → 再读字幕字库 → 进主界面；**不等** WiFi / agent |
 | 动画 | `boot/anim/` reserved，**暂不做** |
 
 ### A.5 工具（`tools/pet_skin/`）
@@ -106,9 +109,11 @@ Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/fon
 
 ### B.4 延后
 
-Care Feedback（移动/跟随等）；Chat 图标皮肤打磨；对话页中文字体（`pet/font`）。
+Care Feedback（移动/跟随等）；Chat 图标皮肤打磨。
 
 五官叠加 / 表情演出 / 眨眼：**暂不做**（引擎口预留，固件不画）。作者侧 Design 锚点可继续写 `pack.json`，设备本阶段忽略。
+
+对话字幕字体：读 `pet/font/caption.bin`（见 §A.3）；缺则内置 CJK 子集。
 
 ---
 
@@ -176,11 +181,11 @@ Care Feedback（移动/跟随等）；Chat 图标皮肤打磨；对话页中文�
 
 1. ~~`pet_skin` 写出 splash；固件 splash + Gate。~~ **已完成**
 2. ~~`pet_view`：Needs、照料弧 + Chat、字母/图标、热区；隔离 debug；触摸校准。~~ **已完成（主界面骨架）**
-3. ~~对话页空壳 → 接 agent（单击听↔等答、字幕、45s）。~~ **已完成骨架**（换肤/中文字体后续）
+3. ~~对话页空壳 → 接 agent（单击听↔等答、字幕、45s）。~~ **已完成骨架**
 4. 补齐 `ui_chat` 图标与皮肤包打磨；板测校准一次并固化 NVS（量产可预写或出厂向导）。
 5. **五官/表情（预留）**：`pet_view` 打开叠加 + 锚点应用；此前固件只画身体。
 6. Care Feedback / 历史页等专项。
-7. 对话页换肤 / `pet/font` 中文字幕字体。
+7. ~~对话页换肤 / `pet/font` 中文字幕字体。~~ **已接 SD `font/caption.bin`**（缺则内置子集；换肤主题另做）
 
 ## F. 变更规则
 
