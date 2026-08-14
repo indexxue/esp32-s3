@@ -1,0 +1,13 @@
+# desktop_pet SD card map
+# Lives at the SD mount root (/sdcard/config). Not inside /pet — skin replace must not overwrite this.
+# Device reads KEY=VALUE after mount. Unknown keys are kept in RAM for later features.
+# Lines starting with # are comments.
+
+version=1
+content_root=pet
+record_root=record
+
+# reserved (ignored until implemented):
+# volume=80
+# brightness=100
+# locale=zh

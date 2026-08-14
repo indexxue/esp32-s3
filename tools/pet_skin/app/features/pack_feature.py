@@ -47,10 +47,16 @@ class PackPanel(QWidget):
         btn_out.clicked.connect(self._browse_out)
         btn_reload = QPushButton("Reload JSON")
         btn_reload.clicked.connect(self._reload)
+        btn_bind = QPushButton("Bind assets/")
+        btn_bind.clicked.connect(self._bind)
+        btn_check = QPushButton("Check")
+        btn_check.clicked.connect(self._check)
         btn_build = QPushButton("Build pack.bin")
         btn_build.clicked.connect(self._build)
-        btn_both = QPushButton("Build pack + splash (synthetic)")
+        btn_both = QPushButton("Build pack + splash")
         btn_both.clicked.connect(self._build_both)
+        btn_zip = QPushButton("Export zip…")
+        btn_zip.clicked.connect(self._export_zip)
 
         lay = QVBoxLayout(self)
         lay.addWidget(QLabel("pack.json"))
@@ -67,8 +73,11 @@ class PackPanel(QWidget):
 
         row3 = QHBoxLayout()
         row3.addWidget(btn_reload)
+        row3.addWidget(btn_bind)
+        row3.addWidget(btn_check)
         row3.addWidget(btn_build)
         row3.addWidget(btn_both)
+        row3.addWidget(btn_zip)
         row3.addStretch(1)
         lay.addLayout(row3)
         lay.addWidget(QLabel("Summary"))
@@ -99,6 +108,7 @@ class PackPanel(QWidget):
             self._sync_ctx()
             cfg = self.ctx.load_cfg()
             clips = cfg.get("clips", [])
+            warns = skin_core.check_pack(cfg, self.ctx.cfg_path)
             lines = [
                 f"version={cfg.get('version')}  body={cfg.get('width')}x{cfg.get('height')}",
                 f"clips={len(clips)}: " + ", ".join(c.get("id", "?") for c in clips),
@@ -106,12 +116,35 @@ class PackPanel(QWidget):
                 "",
                 "declared: " + ", ".join(skin_core.DECLARED_PATHS),
                 "reserved: " + ", ".join(skin_core.RESERVED_PATHS),
+                "",
+                "check: ok" if not warns else "check:",
             ]
+            lines.extend(f"  {w}" for w in warns)
             self.summary.setPlainText("\n".join(lines))
             self.ctx.info(f"loaded {self.ctx.cfg_path}")
         except Exception as exc:  # noqa: BLE001
             self.summary.setPlainText(str(exc))
             self.ctx.info(f"pack reload error: {exc}")
+
+    def _bind(self) -> None:
+        try:
+            self._sync_ctx()
+            cfg = self.ctx.load_cfg()
+            notes = skin_core.bind_assets(cfg, self.ctx.cfg_path.parent)
+            for line in notes:
+                self.ctx.info(line)
+            path = skin_core.save_cfg(cfg, self.ctx.cfg_path)
+            self.ctx.info(f"saved {path}")
+            self._reload()
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.info(f"pack bind error: {exc}")
+
+    def _check(self) -> None:
+        try:
+            self._sync_ctx()
+            self._reload()
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.info(f"pack check error: {exc}")
 
     def _build(self) -> None:
         try:
@@ -128,15 +161,21 @@ class PackPanel(QWidget):
             cfg = self.ctx.load_cfg()
             self.ctx.info(skin_core.build_pack(cfg, self.ctx.out_dir, self.ctx.cfg_path))
             self.ctx.info(
-                skin_core.build_splash(
-                    self.ctx.out_dir,
-                    None,
-                    "contain",
-                    skin_core.idle_color_from_cfg(cfg),
-                    cfg,
-                    skin_core.BG,
-                    skin_core.SPLASH_CONTENT_DEFAULT,
-                )
+                skin_core.build_splash_from_cfg(self.ctx.out_dir, cfg, self.ctx.cfg_path.parent)
             )
         except Exception as exc:  # noqa: BLE001
             self.ctx.info(f"pack+splash error: {exc}")
+
+    def _export_zip(self) -> None:
+        try:
+            self._sync_ctx()
+            default = str(self.ctx.out_dir.parent / "pet.zip")
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Export skin zip", default, "ZIP (*.zip)"
+            )
+            if not path:
+                return
+            z = skin_core.export_skin_zip(self.ctx.out_dir, Path(path))
+            self.ctx.info(f"wrote {z} — upload on device web page, then the board reboots")
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.info(f"export zip error: {exc}")

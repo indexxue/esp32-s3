@@ -21,6 +21,7 @@ $relFromSim = "..\..\..\.."
 $sources = @(
     "$relFromSim\desktop_pet\main\source\pet\pet_core\pet_core.c",
     "$relFromSim\desktop_pet\main\source\pet\pet_fs.c",
+    "$relFromSim\desktop_pet\main\source\pet\sd_cfg.c",
     "$relFromSim\desktop_pet\main\source\pet\pet_res\pet_res.c",
     "$relFromSim\desktop_pet\main\source\pet\pet_view\pet_view.c",
     "$relFromSim\tools\pet_sim\pet_sim_app.c"

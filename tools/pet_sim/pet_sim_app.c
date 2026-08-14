@@ -9,6 +9,7 @@
 #include "pet_fs.h"
 #include "pet_res.h"
 #include "pet_view.h"
+#include "sd_cfg.h"
 
 #include "lvgl.h"
 
@@ -51,7 +52,11 @@ void pet_sim_app_create(void)
     const char *root = getenv("PET_PACK_ROOT");
 
     if ((root == NULL) || (root[0] == '\0')) {
-        root = "tools/pet_sim/sdcard/pet";
+        (void)sd_cfg_load("tools/pet_sim/sdcard");
+        root = sd_cfg_content_path();
+        if ((root == NULL) || (root[0] == '\0')) {
+            root = "tools/pet_sim/sdcard/pet";
+        }
     }
     pet_fs_set_root(root);
     pet_view_boot_start(lv_screen_active(), NULL);

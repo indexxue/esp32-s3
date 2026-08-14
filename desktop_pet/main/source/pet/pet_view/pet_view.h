@@ -1,6 +1,6 @@
 /**
  * @file pet_view.h
- * @brief LVGL layered pet: SD body + face + Needs dots + Dock.
+ * @brief LVGL layered pet: SD body + Needs dots + Dock (face overlay reserved).
  */
 
 #ifndef PET_VIEW_H

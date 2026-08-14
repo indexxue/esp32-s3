@@ -15,6 +15,7 @@
 #include "pet_fs.h"
 #include "pet_res.h"
 #include "pet_view.h"
+#include "sd_cfg.h"
 #include "qmi8658a.h"
 #include "type.h"
 
@@ -701,7 +702,14 @@ static void ui_screen_pet_create(void)
 {
     lv_obj_t *scr = lv_screen_active();
 
-    pet_fs_set_root("/sdcard/pet");
+    {
+        const char *root = sd_cfg_content_path();
+
+        if ((root == NULL) || (root[0] == '\0')) {
+            root = "/sdcard/pet";
+        }
+        pet_fs_set_root(root);
+    }
     pet_view_set_alloc(ui_alloc_psram, ui_free_psram);
     pet_view_set_intent_hook(ui_intent_hook);
     pet_view_boot_start(scr, ui_on_pet_home);

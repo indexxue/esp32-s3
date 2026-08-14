@@ -16,9 +16,11 @@ typedef struct {
     uint8_t frame_count;
     uint8_t fps;
     char names[PET_RES_MAX_FRAMES][PET_RES_NAME_LEN];
+    pet_res_face_t faces[PET_RES_MAX_FRAMES];
 } pet_res_clip_t;
 
 static bool s_loaded;
+static uint16_t s_pack_ver;
 static pet_needs_cfg_t s_cfg;
 static pet_res_clip_t s_clips[PET_CLIP_COUNT];
 
@@ -27,20 +29,51 @@ static uint16_t rd_u16(const uint8_t *p)
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
+static int16_t rd_i16(const uint8_t *p)
+{
+    return (int16_t)rd_u16(p);
+}
+
 static uint32_t rd_u32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+static void parse_face_block(const uint8_t *blk, pet_res_face_t *out)
+{
+    out->eye_l.x = rd_i16(&blk[0]);
+    out->eye_l.y = rd_i16(&blk[2]);
+    out->eye_l.angle_deg = rd_i16(&blk[4]);
+    out->eye_r.x = rd_i16(&blk[6]);
+    out->eye_r.y = rd_i16(&blk[8]);
+    out->eye_r.angle_deg = rd_i16(&blk[10]);
+    out->mouth.x = rd_i16(&blk[12]);
+    out->mouth.y = rd_i16(&blk[14]);
+    out->mouth.angle_deg = rd_i16(&blk[16]);
+    out->brow_l.x = rd_i16(&blk[18]);
+    out->brow_l.y = rd_i16(&blk[20]);
+    out->brow_l.angle_deg = rd_i16(&blk[22]);
+    out->brow_r.x = rd_i16(&blk[24]);
+    out->brow_r.y = rd_i16(&blk[26]);
+    out->brow_r.angle_deg = rd_i16(&blk[28]);
+    out->valid = true;
+}
+
 void pet_res_unload(void)
 {
     (void)memset(s_clips, 0, sizeof(s_clips));
+    s_pack_ver = 0U;
     s_loaded = false;
 }
 
 bool pet_res_is_loaded(void)
 {
     return s_loaded;
+}
+
+uint16_t pet_res_pack_version(void)
+{
+    return s_pack_ver;
 }
 
 const pet_needs_cfg_t *pet_res_needs_cfg(void)
@@ -62,6 +95,16 @@ uint8_t pet_res_clip_fps(pet_clip_id_t clip)
         return 0U;
     }
     return s_clips[clip].fps;
+}
+
+bool pet_res_get_face(pet_clip_id_t clip, uint8_t frame_index, pet_res_face_t *out)
+{
+    if ((out == NULL) || !s_loaded || (clip >= PET_CLIP_COUNT) ||
+        (frame_index >= s_clips[clip].frame_count)) {
+        return false;
+    }
+    *out = s_clips[clip].faces[frame_index];
+    return out->valid;
 }
 
 bool pet_res_load(void)
@@ -87,10 +130,11 @@ bool pet_res_load(void)
         return false;
     }
     ver = rd_u16(&hdr[4]);
-    if (ver != 1U) {
+    if ((ver != 1U) && (ver != 2U)) {
         (void)fclose(fp);
         return false;
     }
+    s_pack_ver = ver;
     s_cfg.hunger_decay_s = rd_u16(&hdr[8]);
     s_cfg.mood_decay_s = rd_u16(&hdr[10]);
     s_cfg.energy_decay_s = rd_u16(&hdr[12]);
@@ -127,12 +171,23 @@ bool pet_res_load(void)
         s_clips[clip_id].frame_count = frames;
         s_clips[clip_id].fps = (fps == 0U) ? 4U : fps;
         for (f = 0U; f < frames; f++) {
+            uint8_t face_blk[PET_RES_FACE_BLOCK_LEN];
+
             if (fread(s_clips[clip_id].names[f], 1U, PET_RES_NAME_LEN, fp) != PET_RES_NAME_LEN) {
                 (void)fclose(fp);
                 pet_res_unload();
                 return false;
             }
             s_clips[clip_id].names[f][PET_RES_NAME_LEN - 1U] = '\0';
+            s_clips[clip_id].faces[f].valid = false;
+            if (ver >= 2U) {
+                if (fread(face_blk, 1U, PET_RES_FACE_BLOCK_LEN, fp) != PET_RES_FACE_BLOCK_LEN) {
+                    (void)fclose(fp);
+                    pet_res_unload();
+                    return false;
+                }
+                parse_face_block(face_blk, &s_clips[clip_id].faces[f]);
+            }
         }
     }
     (void)fclose(fp);

@@ -15,11 +15,13 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSlider,
     QSplitter,
     QVBoxLayout,
@@ -92,6 +94,7 @@ class SplashPanel(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self._src: Path | None = None
+        self._loading = True
 
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("Optional PNG/JPEG (empty = synthetic idle body)")
@@ -108,18 +111,19 @@ class SplashPanel(QWidget):
         fit_group = QButtonGroup(self)
         fit_group.addButton(self.fit_contain)
         fit_group.addButton(self.fit_cover)
-        self.fit_contain.toggled.connect(lambda _: self.refresh())
-        self.fit_cover.toggled.connect(lambda _: self.refresh())
+        self.fit_contain.toggled.connect(lambda _: self._on_fit())
+        self.fit_cover.toggled.connect(lambda _: self._on_fit())
 
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
         self.size_slider.setRange(skin_core.SPLASH_CONTENT_MIN, skin_core.SPLASH_CONTENT_MAX)
         self.size_slider.setValue(skin_core.SPLASH_CONTENT_DEFAULT)
         self.size_lbl = QLabel(f"{skin_core.SPLASH_CONTENT_DEFAULT}px")
         self.size_slider.valueChanged.connect(self._on_size)
+        self.size_slider.sliderReleased.connect(self._persist_splash_cfg)
 
         self.btn_bg = _ColorButton(QColor(0x20, 0x20, 0x20))
         self.btn_body = _ColorButton(QColor(74, 163, 200))
-        self.btn_bg.colorChanged.connect(lambda _: self.refresh())
+        self.btn_bg.colorChanged.connect(lambda _: self._on_bg())
         self.btn_body.colorChanged.connect(lambda _: self.refresh())
 
         self.btn_arc_track = _ColorButton(QColor(0x2A, 0x31, 0x48))
@@ -191,9 +195,9 @@ class SplashPanel(QWidget):
         form.addWidget(self.chk_arc)
 
         hint = QLabel(
-            "Output fixed 240x240 -> {out}/boot/splash.bin\n"
-            "Content size scales image/synthetic body inside canvas; BG fills the rest.\n"
-            "v1 is static single frame only; boot/anim is deferred."
+            "Browse copies the image into assets/splash.png and writes boot/splash.bin.\n"
+            "Reopen / Pack / Design all use that file. Preview is the full 240x240 round screen.\n"
+            "Content size scales the image inside the canvas; BG fills the rest."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#8b93a7;")
@@ -208,21 +212,62 @@ class SplashPanel(QWidget):
 
         left = QWidget()
         left.setLayout(form)
+        scroll = QScrollArea()
+        scroll.setWidget(left)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(320)
 
         self.preview = RoundPreview()
         self._apply_arc_colors()
 
         split = QSplitter(Qt.Orientation.Horizontal)
-        split.addWidget(left)
+        split.addWidget(scroll)
         split.addWidget(self.preview)
         split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 2)
+        split.setStretchFactor(1, 0)
+        split.setChildrenCollapsible(False)
 
         root = QVBoxLayout(self)
         root.addWidget(split)
 
         self._sync_body_from_cfg()
+        self._load_splash_cfg()
+        self._autoload_splash_png()
+        self._loading = False
         self.refresh()
+
+    def _assets_dir(self) -> Path:
+        return self.ctx.cfg_path.parent / "assets"
+
+    def _load_splash_cfg(self) -> None:
+        try:
+            cfg = self.ctx.load_cfg()
+        except Exception:  # noqa: BLE001
+            return
+        fit, bg, size = skin_core.splash_params(cfg)
+        self.fit_cover.setChecked(fit == "cover")
+        self.fit_contain.setChecked(fit != "cover")
+        self.btn_bg.set_color(QColor(bg[0], bg[1], bg[2]))
+        if size is not None:
+            self.size_slider.setValue(size)
+
+    def _autoload_splash_png(self) -> None:
+        src = skin_core.splash_src_from_assets(self.ctx.cfg_path.parent)
+        if src is None:
+            return
+        self._src = src
+        self.path_edit.setText(str(src))
+        if skin_core.splash_params(self.ctx.load_cfg())[2] is None:
+            self.size_slider.setValue(skin_core.SPLASH_SIZE)
+
+    def _persist_splash_cfg(self) -> None:
+        if self._loading:
+            return
+        cfg = self.ctx.load_cfg()
+        skin_core.set_splash_cfg(cfg, self._fit(), self._bg(), self._content_size())
+        skin_core.save_cfg(cfg, self.ctx.cfg_path)
 
     def _sync_body_from_cfg(self) -> None:
         try:
@@ -244,9 +289,19 @@ class SplashPanel(QWidget):
     def _body(self) -> tuple[int, int, int]:
         return _rgb_tuple(self.btn_body.color())
 
+    def _on_fit(self) -> None:
+        self.refresh()
+        self._persist_splash_cfg()
+
+    def _on_bg(self) -> None:
+        self.refresh()
+        self._persist_splash_cfg()
+
     def _on_size(self, v: int) -> None:
         self.size_lbl.setText(f"{v}px")
         self.refresh()
+        if not self.size_slider.isSliderDown():
+            self._persist_splash_cfg()
 
     def _on_arc_size(self, v: int) -> None:
         self.arc_size_lbl.setText(f"{v}px")
@@ -262,18 +317,30 @@ class SplashPanel(QWidget):
             "",
             "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All (*.*)",
         )
-        if path:
-            self._src = Path(path)
-            self.path_edit.setText(path)
+        if not path:
+            return
+        try:
+            self._src = skin_core.install_splash_image(Path(path), self._assets_dir())
+            self.path_edit.setText(str(self._src))
             if self.size_slider.value() == skin_core.SPLASH_CONTENT_DEFAULT:
                 self.size_slider.setValue(skin_core.SPLASH_SIZE)
+            self._persist_splash_cfg()
             self.refresh()
+            self._write()
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.info(f"splash browse error: {exc}")
 
     def _clear(self) -> None:
         self._src = None
         self.path_edit.clear()
         self.size_slider.setValue(skin_core.SPLASH_CONTENT_DEFAULT)
-        self.refresh()
+        try:
+            skin_core.clear_splash_assets(self._assets_dir())
+            self._persist_splash_cfg()
+            self.refresh()
+            self._write()
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.info(f"splash clear error: {exc}")
 
     def _toggle_arc(self, on: bool) -> None:
         self.preview.set_show_arc(on)
@@ -301,6 +368,7 @@ class SplashPanel(QWidget):
 
     def _write(self) -> None:
         try:
+            self._persist_splash_cfg()
             cfg = self.ctx.load_cfg()
             msg = skin_core.build_splash(
                 self.ctx.out_dir,

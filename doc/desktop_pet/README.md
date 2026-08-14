@@ -14,6 +14,8 @@
 ## 辅助
 
 - 圆屏 HTML 预览：[`tools/pet_ui_preview/index.html`](../../tools/pet_ui_preview/index.html)
+- **五官方案评审**（预留；本阶段固件不画五官）：[`tools/pet_ui_preview/face_review.html`](../../tools/pet_ui_preview/face_review.html)
 - 皮肤工具：[`tools/pet_skin/README.md`](../../tools/pet_skin/README.md)
+- AI 出图方案：[`skin_ai_asset_brief.md`](skin_ai_asset_brief.md)
 - 工程说明：[`desktop_pet/README.txt`](../../desktop_pet/README.txt)
 - **从哪开干**：见 [`product.md`](product.md) §E

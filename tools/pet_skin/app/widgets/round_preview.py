@@ -1,72 +1,69 @@
-"""Round device preview: fixed 240 canvas frame; zoom for inspect only."""
+"""Round device preview: 240×240 canvas always fully visible (device scale)."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPixmap, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsPathItem,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
-    QHBoxLayout,
     QLabel,
-    QSlider,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 import skin_core
 
-# Fixed Qt viewport around the 240×240 device canvas (2× for comfort).
+# Viewport around the 240×240 device canvas (2× after scale-to-fit).
 _VIEW_PX = 480
 # Firmware PET_SPLASH_ARC_SIZE = 132 on 240 canvas.
 _ARC_DIAMETER = 132.0
 _ARC_OFFSET_Y = -8.0
 
 
-class _ZoomView(QGraphicsView):
-    def __init__(self, owner: "RoundPreview") -> None:
-        super().__init__()
-        self._owner = owner
-
-    def wheelEvent(self, event) -> None:  # noqa: N802
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            step = 10 if event.angleDelta().y() > 0 else -10
-            z = self._owner._zoom
-            z.setValue(max(z.minimum(), min(z.maximum(), z.value() + step)))
-            event.accept()
-            return
-        super().wheelEvent(event)
-
-
 class RoundPreview(QWidget):
-    """Shows a fixed 240×240 splash with circular clip; content size is authored left."""
+    """Shows the device 240×240 round screen; the full disk is always in view."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        view_px: int = _VIEW_PX,
+        show_caption: bool = True,
+    ) -> None:
         super().__init__(parent)
+        self._view_px = max(160, int(view_px))
         self._arc_angle = 0.0
         self._show_arc = True
         self._arc_rect = QRectF()
         self._arc_diameter = _ARC_DIAMETER
 
         self._scene = QGraphicsScene(self)
-        self._view = _ZoomView(self)
+        self._view = QGraphicsView()
         self._view.setScene(self._scene)
         self._view.setRenderHints(
             QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
         )
-        self._view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self._view.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self._view.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self._view.setInteractive(False)
+        self._view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._view.setBackgroundBrush(QColor("#10141c"))
-        self._view.setFixedSize(_VIEW_PX, _VIEW_PX)
+        self._view.setFixedSize(self._view_px, self._view_px)
+        self._view.setFrameShape(QGraphicsView.Shape.NoFrame)
+        self._view.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self._view.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
 
         self._pix_item = QGraphicsPixmapItem()
         self._scene.addItem(self._pix_item)
 
         self._bezel = QGraphicsEllipseItem()
-        self._bezel.setPen(QPen(QColor("#3a4258"), 10))
+        self._bezel.setPen(QPen(QColor("#3a4258"), 3))
         self._bezel.setBrush(Qt.BrushStyle.NoBrush)
         self._scene.addItem(self._bezel)
 
@@ -80,32 +77,28 @@ class RoundPreview(QWidget):
         self._arc_ind.setBrush(Qt.BrushStyle.NoBrush)
         self._scene.addItem(self._arc_ind)
 
-        self._zoom = QSlider(Qt.Orientation.Horizontal)
-        self._zoom.setRange(50, 400)
-        self._zoom.setValue(200)
-        self._zoom.valueChanged.connect(self._apply_zoom)
-        self._zoom_lbl = QLabel("200%")
-
-        zoom_row = QHBoxLayout()
-        zoom_row.addWidget(QLabel("缩放"))
-        zoom_row.addWidget(self._zoom, 1)
-        zoom_row.addWidget(self._zoom_lbl)
-
-        tip = QLabel("画布固定 240×240 · Ctrl+滚轮缩放 · 拖拽平移")
+        tip = QLabel("预览 = 设备圆屏 240×240（完整显示）")
         tip.setStyleSheet("color:#8b93a7;")
+        tip.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        tip.setVisible(show_caption)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
         lay.addWidget(self._view, 0, Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(tip)
-        lay.addLayout(zoom_row)
-        lay.addStretch(1)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._caption_h = 22 if show_caption else 0
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick_arc)
         self._timer.start(50)
 
-        self._apply_zoom(self._zoom.value())
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self._view_px, self._view_px + self._caption_h)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return self.sizeHint()
 
     def set_show_arc(self, on: bool) -> None:
         self._show_arc = on
@@ -124,6 +117,7 @@ class RoundPreview(QWidget):
     def set_arc_size(self, diameter: float) -> None:
         self._arc_diameter = max(24.0, float(diameter))
         self._layout_overlays()
+        self._fit_view()
 
     def set_rgb565(
         self,
@@ -148,24 +142,46 @@ class RoundPreview(QWidget):
         painter.end()
         self._pix_item.setPixmap(out)
         self._layout_overlays()
-        self._scene.setSceneRect(QRectF(-24, -24, out.width() + 48, out.height() + 48))
+        self._scene.setSceneRect(QRectF(0, 0, out.width(), out.height()))
+        self._fit_view()
+        QTimer.singleShot(0, self._fit_view)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._fit_view()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._fit_view()
+
+    def _fit_view(self) -> None:
+        r = self._scene.sceneRect()
+        if r.isEmpty() or r.width() < 1 or r.height() < 1:
+            return
+        vw = self._view.viewport().width()
+        vh = self._view.viewport().height()
+        if vw < 8 or vh < 8:
+            return
+        s = min(vw / r.width(), vh / r.height())
+        self._view.resetTransform()
+        self._view.scale(s, s)
+        self._view.centerOn(r.center())
 
     def _layout_overlays(self) -> None:
         pm = self._pix_item.pixmap()
         w = pm.width() if not pm.isNull() else skin_core.SPLASH_SIZE
         h = pm.height() if not pm.isNull() else skin_core.SPLASH_SIZE
-        pad = 8
-        self._bezel.setRect(QRectF(-pad, -pad, w + pad * 2, h + pad * 2))
+        inset = 1.5
+        self._bezel.setRect(QRectF(inset, inset, w - inset * 2, h - inset * 2))
         cx = w * 0.5
         cy = h * 0.5 + _ARC_OFFSET_Y
-        r = self._arc_diameter * 0.5
-        self._arc_rect = QRectF(cx - r, cy - r, r * 2, r * 2)
+        rad = self._arc_diameter * 0.5
+        self._arc_rect = QRectF(cx - rad, cy - rad, rad * 2, rad * 2)
         self._arc_track.setRect(self._arc_rect)
         self._update_arc_path()
 
     def _update_arc_path(self) -> None:
         path = QPainterPath()
-        # Qt arc angles: 0° at 3 o'clock, counter-clockwise
         path.arcMoveTo(self._arc_rect, self._arc_angle)
         path.arcTo(self._arc_rect, self._arc_angle, -270)
         self._arc_ind.setPath(path)
@@ -175,9 +191,3 @@ class RoundPreview(QWidget):
             return
         self._arc_angle = (self._arc_angle + 8) % 360
         self._update_arc_path()
-
-    def _apply_zoom(self, percent: int) -> None:
-        self._zoom_lbl.setText(f"{percent}%")
-        scale = percent / 100.0
-        self._view.resetTransform()
-        self._view.scale(scale, scale)

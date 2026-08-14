@@ -3,6 +3,7 @@
  * @brief desktop_pet：`GET /` 与 SD 卡浏览 / 下载 / 删除 HTTP API。
  *
  * AP / STA 共用同一 httpd；路径相对 `BOARD_SDCARD_MOUNT_POINT`，禁止 `..`。
+ * 皮肤 zip 上传见 `web_skin.c`（`POST /api/pet/skin`）。
  */
 
 #include "web_pages.h"
@@ -18,6 +19,7 @@
 
 #include "board.h"
 #include "sdcard.h"
+#include "web_skin.h"
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -523,5 +525,5 @@ esp_err_t web_pages_sd_http_register(httpd_handle_t server)
         }
     }
     ESP_LOGI(TAG, "SD file API registered");
-    return ESP_OK;
+    return web_skin_http_register(server);
 }

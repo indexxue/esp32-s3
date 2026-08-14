@@ -23,6 +23,8 @@
 #include "net_wifi.h"
 #include "nvs.h"
 #include "ota.h"
+#include "sd_cfg.h"
+#include "web_skin.h"
 
 #if CONFIG_WEB_CTRL_AUTO_START && DESKTOP_PET_ENABLE_WIFI_WEB
 #include "esp_err.h"
@@ -213,6 +215,27 @@ static void web_ctrl_boot_task(void *arg)
 }
 #endif
 
+static void app_load_sd_cfg(void)
+{
+    uint8_t n;
+    uint8_t i;
+    uint32_t sz;
+    char rel[SD_CFG_REL_LEN];
+
+    (void)sd_cfg_load(BOARD_SDCARD_MOUNT_POINT);
+    n = sd_cfg_file_count();
+    LOG_INFO("sd cfg %s content=%s record=%s files=%u",
+             sd_cfg_is_loaded() ? "ok" : "default",
+             sd_cfg_content_path(),
+             sd_cfg_record_path(),
+             (unsigned)n);
+    for (i = 0; i < n; i++) {
+        if (sd_cfg_file_at(i, rel, sizeof(rel), &sz)) {
+            LOG_INFO("sd file %s %u", rel, (unsigned)sz);
+        }
+    }
+}
+
 static status_t app_init(void)
 {
     status_t err;
@@ -228,6 +251,9 @@ static status_t app_init(void)
         LOG_ERROR("BoardInit failed");
         return STATUS_FAIL;
     }
+
+    web_skin_commit_pending();
+    app_load_sd_cfg();
 
     product = device_profile_product();
 

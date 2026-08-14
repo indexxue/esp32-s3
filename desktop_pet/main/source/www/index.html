@@ -24,20 +24,34 @@ th{color:var(--muted);font-weight:600;font-size:.8rem}tr:last-child td{border-bo
 .badge{display:inline-block;font-size:.7rem;padding:2px 6px;border-radius:4px;background:var(--surface2);color:var(--muted);margin-right:6px}
 .actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .empty{color:var(--muted);padding:18px 0;text-align:center}
+.bar{height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;margin:8px 0}
+.bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:4px}
+h2{font-weight:650}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="top">
     <h1>SD 卡文件管理</h1>
-    <p>AP / STA 下均可访问；录音默认在 <code>record/</code></p>
+    <p>AP / STA 下均可访问；皮肤 zip 上传后覆盖 <code>pet/</code> 并重启</p>
   </div>
   <div class="nav">
     <a href="#/">SD 根目录</a>
+    <a href="#/pet">皮肤 pet/</a>
     <a href="#/record">录音目录</a>
     <button type="button" class="btn btn-accent" id="btnRefresh">刷新</button>
     <a href="/provision">Wi‑Fi</a>
     <a href="/ota">OTA</a>
+  </div>
+  <div class="card">
+    <h2 style="margin:0 0 8px;font-size:1rem">上传皮肤包</h2>
+    <p class="status" style="margin-top:0">选择 <code>pet.zip</code>（内含 <code>pack.bin</code>、<code>body/</code>、<code>boot/</code>）。覆盖 <code>/sdcard/pet/</code> 后自动重启；不会改卡根 <code>config</code>。</p>
+    <div class="actions" style="justify-content:flex-start;margin-bottom:8px">
+      <input type="file" id="skinFile" accept=".zip,application/zip">
+      <button type="button" class="btn btn-accent" id="btnSkin">上传并重启</button>
+    </div>
+    <div class="bar" id="skinBar"><i id="skinFill"></i></div>
+    <div class="status" id="skinStatus"></div>
   </div>
   <div class="card">
     <div class="crumb" id="crumb">/sdcard</div>
@@ -156,6 +170,44 @@ th{color:var(--muted);font-weight:600;font-size:.8rem}tr:last-child td{border-bo
 
   document.getElementById('btnRefresh').addEventListener('click',loadList);
   window.addEventListener('hashchange',loadList);
+
+  (function skinUpload(){
+    var fi=document.getElementById('skinFile');
+    var btn=document.getElementById('btnSkin');
+    var fill=document.getElementById('skinFill');
+    var st=document.getElementById('skinStatus');
+    function msg(t,cls){st.className='status'+(cls?' '+cls:'');st.textContent=t;}
+    btn.addEventListener('click',function(){
+      var file=fi.files&&fi.files[0];
+      if(!file){msg('请选择 .zip 皮肤包','err');return;}
+      btn.disabled=true;
+      fill.style.width='0';
+      msg('上传中 '+file.name+' ('+fmtBytes(file.size)+') …');
+      var xhr=new XMLHttpRequest();
+      xhr.open('POST','/api/pet/skin');
+      xhr.setRequestHeader('Content-Type','application/zip');
+      xhr.upload.onprogress=function(e){
+        if(e.lengthComputable&&e.total){
+          fill.style.width=Math.round(e.loaded*100/e.total)+'%';
+        }
+      };
+      xhr.onreadystatechange=function(){
+        if(xhr.readyState!==4)return;
+        btn.disabled=false;
+        var j=null;
+        try{j=JSON.parse(xhr.responseText);}catch(e){}
+        if(xhr.status===200&&j&&j.ok){
+          fill.style.width='100%';
+          msg('已写入，设备即将重启。请稍候刷新本页。','ok');
+          return;
+        }
+        msg('失败: '+(j&&j.error?j.error:('HTTP '+xhr.status)),'err');
+      };
+      xhr.onerror=function(){btn.disabled=false;msg('网络错误','err');};
+      xhr.send(file);
+    });
+  })();
+
   if(!location.hash)location.hash='#/record';
   else loadList();
 })();

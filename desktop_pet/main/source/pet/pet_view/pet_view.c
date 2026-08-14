@@ -1,6 +1,7 @@
 /**
  * @file pet_view.c
- * @brief Round-screen compositor: body, face, Needs dots, Dock (product §B).
+ * @brief Round-screen compositor: body, Needs dots, Dock (product §B).
+ *        Face overlay is reserved: PET_VIEW_ENABLE_FACE=0 does not draw 五官.
  */
 
 #include "pet_view.h"
@@ -14,8 +15,13 @@
 
 #define PET_VIEW_POLL_MS (100U)
 #define PET_VIEW_TICK_DIV (10U)
+#ifndef PET_VIEW_ENABLE_FACE
+#define PET_VIEW_ENABLE_FACE 0 /* product: 五官/表情预留，固件不画 */
+#endif
+#if PET_VIEW_ENABLE_FACE
 #define PET_VIEW_BLINK_PERIOD_MS (3200U)
 #define PET_VIEW_BLINK_MS (140U)
+#endif
 #define PET_VIEW_HOLD_MS (650U)
 #define PET_BODY_PIXELS ((uint32_t)PET_RES_FRAME_MAX_W * (uint32_t)PET_RES_FRAME_MAX_H)
 #define PET_SPLASH_PIXELS ((uint32_t)PET_RES_SPLASH_MAX_W * (uint32_t)PET_RES_SPLASH_MAX_H)
@@ -48,6 +54,7 @@ static int16_t s_splash_arc_rot;
 
 static lv_obj_t *s_body_fallback;
 static lv_obj_t *s_body_img;
+#if PET_VIEW_ENABLE_FACE
 static lv_obj_t *s_eye_l;
 static lv_obj_t *s_eye_r;
 static lv_obj_t *s_pupil_l;
@@ -55,6 +62,7 @@ static lv_obj_t *s_pupil_r;
 static lv_obj_t *s_mouth;
 static lv_obj_t *s_brow_l;
 static lv_obj_t *s_brow_r;
+#endif
 static lv_obj_t *s_need_h;
 static lv_obj_t *s_need_m;
 static lv_obj_t *s_need_e;
@@ -71,8 +79,10 @@ static uint8_t s_frame_idx;
 static uint32_t s_frame_acc_ms;
 static pet_face_id_t s_shown_face;
 static uint8_t s_tick_div;
+#if PET_VIEW_ENABLE_FACE
 static uint32_t s_blink_acc;
 static bool s_blinking;
+#endif
 static bool s_pressing;
 static uint32_t s_press_ms;
 static bool s_hold_sent;
@@ -127,6 +137,88 @@ static void set_need_dot(lv_obj_t *dot, uint8_t v, uint32_t color_ok, uint32_t c
     lv_obj_set_style_bg_opa(dot, opa, 0);
 }
 
+#if PET_VIEW_ENABLE_FACE
+static void place_face_part(lv_obj_t *obj, int32_t cx, int32_t cy, int16_t angle_deg,
+                            int32_t w, int32_t h)
+{
+    if (obj == NULL) {
+        return;
+    }
+    lv_obj_set_size(obj, w, h);
+    lv_obj_set_pos(obj, cx - (w / 2), cy - (h / 2));
+    lv_obj_set_style_transform_pivot_x(obj, w / 2, 0);
+    lv_obj_set_style_transform_pivot_y(obj, h / 2, 0);
+    /* LVGL transform angle unit: 0.1 degree; clockwise positive matches pack.json. */
+    lv_obj_set_style_transform_rotation(obj, (int32_t)angle_deg * 10, 0);
+}
+
+static void apply_face_placement(void)
+{
+    pet_res_face_t face;
+    int32_t body_x;
+    int32_t body_y;
+    int32_t eye_h = 22;
+    int32_t mouth_w = 28;
+    int32_t mouth_h = 8;
+    bool have_face;
+
+    if (s_body_img != NULL && !lv_obj_has_flag(s_body_img, LV_OBJ_FLAG_HIDDEN)) {
+        body_x = lv_obj_get_x(s_body_img);
+        body_y = lv_obj_get_y(s_body_img);
+    } else if (s_body_fallback != NULL) {
+        body_x = lv_obj_get_x(s_body_fallback);
+        body_y = lv_obj_get_y(s_body_fallback);
+    } else {
+        body_x = (240 - (int32_t)s_frame_w) / 2;
+        body_y = (240 - (int32_t)s_frame_h) / 2 - 6;
+    }
+
+    have_face = pet_res_get_face(s_shown_clip, s_frame_idx, &face);
+    if (s_shown_face == PET_FACE_SLEEPY) {
+        eye_h = 6;
+    } else if (s_blinking) {
+        eye_h = 3;
+    }
+    if (s_shown_face == PET_FACE_HAPPY) {
+        mouth_w = 36;
+        mouth_h = 12;
+    } else if (s_shown_face == PET_FACE_SAD) {
+        mouth_w = 22;
+        mouth_h = 5;
+    } else if (s_shown_face == PET_FACE_SLEEPY) {
+        mouth_w = 18;
+        mouth_h = 4;
+    } else if (s_shown_face == PET_FACE_HUNGRY) {
+        mouth_w = 16;
+        mouth_h = 14;
+    } else if (s_shown_face == PET_FACE_ANGRY) {
+        mouth_w = 20;
+        mouth_h = 6;
+    }
+
+    if (have_face) {
+        place_face_part(s_eye_l, body_x + face.eye_l.x, body_y + face.eye_l.y,
+                        face.eye_l.angle_deg, 18, eye_h);
+        place_face_part(s_eye_r, body_x + face.eye_r.x, body_y + face.eye_r.y,
+                        face.eye_r.angle_deg, 18, eye_h);
+        place_face_part(s_mouth, body_x + face.mouth.x, body_y + face.mouth.y,
+                        face.mouth.angle_deg, mouth_w, mouth_h);
+        place_face_part(s_brow_l, body_x + face.brow_l.x, body_y + face.brow_l.y,
+                        face.brow_l.angle_deg, 16, 3);
+        place_face_part(s_brow_r, body_x + face.brow_r.x, body_y + face.brow_r.y,
+                        face.brow_r.angle_deg, 16, 3);
+        return;
+    }
+
+    /* Legacy pack v1: screen-center face (body aligned CENTER,0,-6). */
+    place_face_part(s_eye_l, 120 - 18, 120 - 6 - 8, 0, 18, eye_h);
+    place_face_part(s_eye_r, 120 + 18, 120 - 6 - 8, 0, 18, eye_h);
+    place_face_part(s_mouth, 120, 120 - 6 + 28, 0, mouth_w, mouth_h);
+    place_face_part(s_brow_l, 120 - 18, 120 - 6 - 24, 0, 16, 3);
+    place_face_part(s_brow_r, 120 + 18, 120 - 6 - 24, 0, 16, 3);
+}
+#endif /* PET_VIEW_ENABLE_FACE */
+
 static void apply_hud(void)
 {
     pet_needs_t n;
@@ -139,6 +231,11 @@ static void apply_hud(void)
 
 static void apply_face(pet_face_id_t face)
 {
+    s_shown_face = face;
+#if !PET_VIEW_ENABLE_FACE
+    (void)s_shown_face;
+#endif
+#if PET_VIEW_ENABLE_FACE
     int32_t eye_h = 22;
     int32_t pupil_y = 0;
     int32_t mouth_w = 28;
@@ -147,7 +244,6 @@ static void apply_face(pet_face_id_t face)
     lv_color_t mouth_c = lv_color_hex(0xE07080);
     bool brows = false;
 
-    s_shown_face = face;
     switch (face) {
     case PET_FACE_HAPPY:
         mouth_w = 36;
@@ -192,10 +288,8 @@ static void apply_face(pet_face_id_t face)
         lv_obj_set_y(s_pupil_r, pupil_y);
     }
     if (s_mouth != NULL) {
-        lv_obj_set_size(s_mouth, mouth_w, mouth_h);
         lv_obj_set_style_bg_color(s_mouth, mouth_c, 0);
         lv_obj_set_style_radius(s_mouth, mouth_h / 2 + 2, 0);
-        lv_obj_align(s_mouth, LV_ALIGN_CENTER, 0, 28);
     }
     if (s_brow_l != NULL) {
         if (brows) {
@@ -206,6 +300,8 @@ static void apply_face(pet_face_id_t face)
             lv_obj_add_flag(s_brow_r, LV_OBJ_FLAG_HIDDEN);
         }
     }
+    apply_face_placement();
+#endif
 }
 
 static bool load_frame_to(uint8_t slot, pet_clip_id_t clip, uint8_t fi)
@@ -240,6 +336,9 @@ static void show_body_clip(pet_clip_id_t clip)
         if (s_body_fallback != NULL) {
             lv_obj_remove_flag(s_body_fallback, LV_OBJ_FLAG_HIDDEN);
         }
+#if PET_VIEW_ENABLE_FACE
+        apply_face_placement();
+#endif
         return;
     }
     if (!load_frame_to(0, clip, 0U)) {
@@ -248,10 +347,14 @@ static void show_body_clip(pet_clip_id_t clip)
     s_pix_i = 0U;
     lv_image_set_src(s_body_img, &s_img_dsc[0]);
     lv_obj_set_size(s_body_img, (int32_t)s_frame_w, (int32_t)s_frame_h);
+    lv_obj_align(s_body_img, LV_ALIGN_CENTER, 0, -6);
     lv_obj_remove_flag(s_body_img, LV_OBJ_FLAG_HIDDEN);
     if (s_body_fallback != NULL) {
         lv_obj_add_flag(s_body_fallback, LV_OBJ_FLAG_HIDDEN);
     }
+#if PET_VIEW_ENABLE_FACE
+    apply_face_placement();
+#endif
 }
 
 static void advance_frame(void)
@@ -277,16 +380,21 @@ static void advance_frame(void)
     s_pix_i = slot;
     s_frame_idx = next;
     lv_image_set_src(s_body_img, &s_img_dsc[slot]);
+#if PET_VIEW_ENABLE_FACE
+    apply_face_placement();
+#endif
 }
 
+#if PET_VIEW_ENABLE_FACE
 static void apply_blink(bool closed)
 {
     if ((s_shown_face == PET_FACE_SLEEPY) || (s_eye_l == NULL)) {
         return;
     }
-    lv_obj_set_height(s_eye_l, closed ? 3 : 22);
-    lv_obj_set_height(s_eye_r, closed ? 3 : 22);
+    s_blinking = closed;
+    apply_face_placement();
 }
+#endif
 
 static void drain_intents(void)
 {
@@ -411,6 +519,7 @@ static void hint_fade_cb(lv_timer_t *t)
     s_hint_timer = NULL;
 }
 
+#if PET_VIEW_ENABLE_FACE
 static lv_obj_t *make_eye(lv_obj_t *parent, int32_t x)
 {
     lv_obj_t *eye = lv_obj_create(parent);
@@ -437,6 +546,7 @@ static lv_obj_t *make_eye(lv_obj_t *parent, int32_t x)
     }
     return eye;
 }
+#endif /* PET_VIEW_ENABLE_FACE */
 
 static void poll_timer_cb(lv_timer_t *t)
 {
@@ -621,6 +731,7 @@ void pet_view_create(lv_obj_t *parent)
     lv_obj_align(s_body_img, LV_ALIGN_CENTER, 0, -6);
     lv_obj_add_flag(s_body_img, LV_OBJ_FLAG_HIDDEN);
 
+#if PET_VIEW_ENABLE_FACE
     s_eye_l = make_eye(parent, -18);
     s_eye_r = make_eye(parent, 18);
 
@@ -647,6 +758,7 @@ void pet_view_create(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_mouth, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(s_mouth, 6, 0);
     lv_obj_align(s_mouth, LV_ALIGN_CENTER, 0, 28);
+#endif
 
     hit = lv_obj_create(parent);
     lv_obj_remove_style_all(hit);
@@ -726,6 +838,7 @@ void pet_view_poll(void)
         }
     }
 
+#if PET_VIEW_ENABLE_FACE
     s_blink_acc += PET_VIEW_POLL_MS;
     if (!s_blinking && (s_blink_acc >= PET_VIEW_BLINK_PERIOD_MS)) {
         s_blinking = true;
@@ -737,4 +850,5 @@ void pet_view_poll(void)
         apply_blink(false);
         apply_face(s_shown_face);
     }
+#endif
 }

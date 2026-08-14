@@ -6,8 +6,12 @@
 
 ## Language
 
+**卡根配置 (Card Config)**：
+SD 挂载根上的 `config`（现路径 `/sdcard/config`）。UTF-8 `KEY=VALUE`，上电挂载后读取；可声明 `content_root` / `record_root`，未知键保留。凡 `*_root` 键都会被扫描（文件名+大小）。不属于皮肤包，换肤不覆盖。缺文件用默认根并仍尝试枚举文件。
+_Avoid_：把设备配置写进 `/sdcard/pet/`、卡上 JSON（首版不解析 JSON）、无文件时拒绝启动
+
 **皮肤包 (Skin Pack)**：
-作者侧生成、可整包替换的只读内容树；含身体 clip、开机画面、以及后续主题/音效索引。设备挂载根现为 `/sdcard/pet/`。
+作者侧生成、可整包替换的只读内容树；含身体 clip、开机画面、以及后续主题/音效索引。设备挂载根现为 `/sdcard/pet/`。可用 zip（根为 `pack.bin` 或 `pet/pack.bin`）经网页 `POST /api/pet/skin` 覆盖后重启；不覆盖卡根 `config`。
 _Avoid_：资源包（仅指 `pack.bin` 时）、主题包（未定前勿混用）、固件资源
 
 **运行时数据 (Runtime Data)**：
@@ -23,7 +27,7 @@ _Avoid_：多根散落（`/sdcard/boot` + `/sdcard/ui` 等）
 _Avoid_：启动动画文件序列（`boot/anim` 首版不做）、固件内嵌图（非默认策略）
 
 **合法路径 (Declared Paths)**：
-皮肤包内固件会读或文档已承诺的相对路径集合；首版：`pack.bin`、`body/*`、`boot/splash.bin`。未实现能力只在文档标为 reserved，不在卡上预建空目录。
+皮肤包内固件会读或文档已承诺的相对路径集合；首版皮肤：`pack.bin`、`body/*`、`boot/splash.bin`。卡根另承诺 `/sdcard/config`。未实现能力只在文档标为 reserved，不在卡上预建空目录。
 _Avoid_：空目录占位、未文档化的随意路径
 
 **设备像素帧 (RGBH Frame)**：
@@ -79,5 +83,9 @@ _Avoid_：用身体点按替代对话入口、把聊天框嵌进主界面
 _Avoid_：聊与照料拆到对角导致双热区体系
 
 **五官叠加 (Face Overlay)**：
-眼/嘴/眉由 LVGL 叠在身体 `RGBH` 之上，随 `PET_FACE_*` 与本地眨眼变化；皮肤包首版以换身体帧为主。
-_Avoid_：首版把五官烘焙进每一身体帧、未约定就加「自带五官」pack 开关
+眼/嘴/眉由 LVGL 叠在身体 `RGBH` 之上，随 `PET_FACE_*` 与本地眨眼变化；位置/旋转来自皮肤包的**五官锚点**。**本阶段 reserved**：固件不创建、不显示五官；`pet_core` 仍发 `PET_INTENT_FACE`，`pet_view` 只消费不画。
+_Avoid_：把五官烘焙进每一身体帧、未约定就加「自带五官」pack 开关、本阶段在屏上叠眼嘴眉
+
+**五官锚点 (Face Anchor)**：
+每身体帧一组作者侧坐标：左眼 / 右眼 / 嘴 / 左眉 / 右眉，各含相对身体图左上角的 `(x, y)` 与 **独立旋转角 `angle`（度，有符号）**。字段与 Design 标定保留，供以后叠加；本阶段设备忽略。缺省则退回历史中心对齐、`angle=0`。
+_Avoid_：让出图模型猜坐标、仅整脸一个角度却要求五官各自倾斜、在设备上现场标定

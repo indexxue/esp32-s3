@@ -1,7 +1,7 @@
 {
-  "version": 1,
-  "width": 96,
-  "height": 96,
+  "version": 2,
+  "width": 157,
+  "height": 157,
   "needs": {
     "hunger_decay_s": 6,
     "mood_decay_s": 8,
@@ -12,12 +12,438 @@
     "tap_mood": 4
   },
   "clips": [
-    {"id": "idle", "fps": 4, "frames": 2, "color": [74, 163, 200]},
-    {"id": "sleepy", "fps": 2, "frames": 1, "color": [110, 130, 170]},
-    {"id": "eat", "fps": 6, "frames": 2, "color": [90, 190, 120]},
-    {"id": "play", "fps": 8, "frames": 2, "color": [255, 180, 80]},
-    {"id": "sad", "fps": 2, "frames": 1, "color": [90, 90, 140]},
-    {"id": "sleep_loop", "fps": 2, "frames": 1, "color": [70, 90, 140]},
-    {"id": "poke", "fps": 8, "frames": 1, "color": [255, 140, 160]}
-  ]
+    {
+      "id": "idle",
+      "fps": 4,
+      "frames": 3,
+      "color": [
+        255,
+        255,
+        255
+      ],
+      "fit": "contain",
+      "faces": [
+        {
+          "eye_l": {
+            "x": 62,
+            "y": 72,
+            "angle": 0
+          },
+          "eye_r": {
+            "x": 98,
+            "y": 72,
+            "angle": 0
+          },
+          "mouth": {
+            "x": 80,
+            "y": 108,
+            "angle": 0
+          },
+          "brow_l": {
+            "x": 62,
+            "y": 56,
+            "angle": 0
+          },
+          "brow_r": {
+            "x": 98,
+            "y": 56,
+            "angle": 0
+          }
+        },
+        {
+          "eye_l": {
+            "x": 62,
+            "y": 72,
+            "angle": 0
+          },
+          "eye_r": {
+            "x": 98,
+            "y": 72,
+            "angle": 0
+          },
+          "mouth": {
+            "x": 80,
+            "y": 108,
+            "angle": 0
+          },
+          "brow_l": {
+            "x": 62,
+            "y": 56,
+            "angle": 0
+          },
+          "brow_r": {
+            "x": 98,
+            "y": 56,
+            "angle": 0
+          }
+        },
+        {
+          "eye_l": {
+            "x": 62,
+            "y": 72,
+            "angle": 0
+          },
+          "eye_r": {
+            "x": 98,
+            "y": 72,
+            "angle": 0
+          },
+          "mouth": {
+            "x": 80,
+            "y": 108,
+            "angle": 0
+          },
+          "brow_l": {
+            "x": 62,
+            "y": 56,
+            "angle": 0
+          },
+          "brow_r": {
+            "x": 98,
+            "y": 56,
+            "angle": 0
+          }
+        }
+      ],
+      "sources": [
+        "assets/idle.png",
+        "assets/idle_2.png",
+        "assets/idle_2.png"
+      ]
+    },
+    {
+      "id": "sleepy",
+      "fps": 2,
+      "frames": 2,
+      "color": [
+        110,
+        130,
+        170
+      ],
+      "fit": "contain",
+      "faces": [
+        {
+          "eye_l": {
+            "x": 62,
+            "y": 76,
+            "angle": 0
+          },
+          "eye_r": {
+            "x": 98,
+            "y": 76,
+            "angle": 0
+          },
+          "mouth": {
+            "x": 80,
+            "y": 112,
+            "angle": 0
+          },
+          "brow_l": {
+            "x": 62,
+            "y": 60,
+            "angle": 0
+          },
+          "brow_r": {
+            "x": 98,
+            "y": 60,
+            "angle": 0
+          }
+        },
+        {
+          "eye_l": {
+            "x": 62,
+            "y": 76,
+            "angle": 0
+          },
+          "eye_r": {
+            "x": 98,
+            "y": 76,
+            "angle": 0
+          },
+          "mouth": {
+            "x": 80,
+            "y": 112,
+            "angle": 0
+          },
+          "brow_l": {
+            "x": 62,
+            "y": 60,
+            "angle": 0
+          },
+          "brow_r": {
+            "x": 98,
+            "y": 60,
+            "angle": 0
+          }
+        }
+      ],
+      "sources": [
+        "assets/sleepy.png",
+        "assets/sleepy.png"
+      ]
+    },
+    {
+      "id": "eat",
+      "fps": 6,
+      "frames": 2,
+      "color": [
+        90,
+        190,
+        120
+      ],
+      "fit": "contain",
+      "sources": [
+        "assets/eat_0.png",
+        "assets/eat_1.png"
+      ],
+      "face": {
+        "eye_l": {
+          "x": 62,
+          "y": 70,
+          "angle": 0
+        },
+        "eye_r": {
+          "x": 98,
+          "y": 70,
+          "angle": 0
+        },
+        "mouth": {
+          "x": 80,
+          "y": 106,
+          "angle": 0
+        },
+        "brow_l": {
+          "x": 62,
+          "y": 54,
+          "angle": 0
+        },
+        "brow_r": {
+          "x": 98,
+          "y": 54,
+          "angle": 0
+        }
+      }
+    },
+    {
+      "id": "play",
+      "fps": 8,
+      "frames": 3,
+      "color": [
+        255,
+        180,
+        80
+      ],
+      "fit": "contain",
+      "sources": [
+        "assets/play_0.png",
+        "assets/play_1.png",
+        "assets/play_2.png"
+      ],
+      "faces": [
+        {
+          "eye_l": {
+            "x": 62,
+            "y": 66,
+            "angle": 0
+          },
+          "eye_r": {
+            "x": 98,
+            "y": 66,
+            "angle": 0
+          },
+          "mouth": {
+            "x": 80,
+            "y": 102,
+            "angle": 0
+          },
+          "brow_l": {
+            "x": 62,
+            "y": 50,
+            "angle": 0
+          },
+          "brow_r": {
+            "x": 98,
+            "y": 50,
+            "angle": 0
+          }
+        },
+        {
+          "eye_l": {
+            "x": 62,
+            "y": 66,
+            "angle": 0
+          },
+          "eye_r": {
+            "x": 98,
+            "y": 66,
+            "angle": 0
+          },
+          "mouth": {
+            "x": 80,
+            "y": 102,
+            "angle": 0
+          },
+          "brow_l": {
+            "x": 62,
+            "y": 50,
+            "angle": 0
+          },
+          "brow_r": {
+            "x": 98,
+            "y": 50,
+            "angle": 0
+          }
+        },
+        {
+          "eye_l": {
+            "x": 62,
+            "y": 66,
+            "angle": 0
+          },
+          "eye_r": {
+            "x": 98,
+            "y": 66,
+            "angle": 0
+          },
+          "mouth": {
+            "x": 80,
+            "y": 102,
+            "angle": 0
+          },
+          "brow_l": {
+            "x": 62,
+            "y": 50,
+            "angle": 0
+          },
+          "brow_r": {
+            "x": 98,
+            "y": 50,
+            "angle": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "sad",
+      "fps": 2,
+      "frames": 1,
+      "color": [
+        90,
+        90,
+        140
+      ],
+      "fit": "contain",
+      "source": "assets/sad.png",
+      "face": {
+        "eye_l": {
+          "x": 62,
+          "y": 78,
+          "angle": 0
+        },
+        "eye_r": {
+          "x": 98,
+          "y": 78,
+          "angle": 0
+        },
+        "mouth": {
+          "x": 80,
+          "y": 114,
+          "angle": 0
+        },
+        "brow_l": {
+          "x": 62,
+          "y": 62,
+          "angle": 0
+        },
+        "brow_r": {
+          "x": 98,
+          "y": 62,
+          "angle": 0
+        }
+      }
+    },
+    {
+      "id": "sleep_loop",
+      "fps": 2,
+      "frames": 1,
+      "color": [
+        70,
+        90,
+        140
+      ],
+      "fit": "contain",
+      "source": "assets/sleep_loop.png",
+      "face": {
+        "eye_l": {
+          "x": 62,
+          "y": 80,
+          "angle": 0
+        },
+        "eye_r": {
+          "x": 98,
+          "y": 80,
+          "angle": 0
+        },
+        "mouth": {
+          "x": 80,
+          "y": 116,
+          "angle": 0
+        },
+        "brow_l": {
+          "x": 62,
+          "y": 64,
+          "angle": 0
+        },
+        "brow_r": {
+          "x": 98,
+          "y": 64,
+          "angle": 0
+        }
+      }
+    },
+    {
+      "id": "poke",
+      "fps": 8,
+      "frames": 1,
+      "color": [
+        255,
+        140,
+        160
+      ],
+      "fit": "contain",
+      "source": "assets/poke.png",
+      "face": {
+        "eye_l": {
+          "x": 62,
+          "y": 74,
+          "angle": 0
+        },
+        "eye_r": {
+          "x": 98,
+          "y": 74,
+          "angle": 0
+        },
+        "mouth": {
+          "x": 80,
+          "y": 110,
+          "angle": 0
+        },
+        "brow_l": {
+          "x": 62,
+          "y": 58,
+          "angle": 0
+        },
+        "brow_r": {
+          "x": 98,
+          "y": 58,
+          "angle": 0
+        }
+      }
+    }
+  ],
+  "splash": {
+    "fit": "contain",
+    "bg": "#202020",
+    "content_size": 240
+  }
 }

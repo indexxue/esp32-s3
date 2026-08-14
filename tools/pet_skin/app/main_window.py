@@ -24,7 +24,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("pet_skin")
-        self.resize(1100, 700)
+        self.resize(1400, 840)
 
         self.ctx = ProjectContext(self)
         self.features = built_in_features(self.ctx)
@@ -76,7 +76,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.ctx.info(
-            "ready | design=doodle/PNG | splash=static | declared=pack/body/splash"
+            "ready | bind assets/ → pack.bin | splash=static | face overlay reserved"
         )
 
     def _on_log(self, msg: str) -> None:

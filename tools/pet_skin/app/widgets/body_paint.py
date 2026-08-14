@@ -10,7 +10,11 @@ import skin_core
 
 
 class BodyPaintCanvas(QWidget):
-    """Paint inside a circular clip; size matches body frame (≤180)."""
+    """Paint inside a circular clip; size matches body frame (≤180).
+
+    Canvas is ARGB: transparent pixels stay alpha=0 so packing can fill
+    screen BG (#202020). RGB32 flattening would bake black and show a halo.
+    """
 
     changed = Signal()
 
@@ -21,12 +25,16 @@ class BodyPaintCanvas(QWidget):
         self._brush_r = 6
         self._erase = False
         self._bg = QColor(*skin_core.BG)
-        self._img = QImage(self._size, self._size, QImage.Format.Format_RGB32)
-        self._img.fill(self._bg)
+        self._img = self._blank()
         self._drawing = False
         self._last: QPoint | None = None
         self.setFixedSize(220, 220)
         self.setMouseTracking(True)
+
+    def _blank(self) -> QImage:
+        img = QImage(self._size, self._size, QImage.Format.Format_ARGB32)
+        img.fill(Qt.GlobalColor.transparent)
+        return img
 
     def body_size(self) -> int:
         return self._size
@@ -42,8 +50,7 @@ class BodyPaintCanvas(QWidget):
             Qt.TransformationMode.SmoothTransformation,
         )
         self._size = size
-        self._img = QImage(size, size, QImage.Format.Format_RGB32)
-        self._img.fill(self._bg)
+        self._img = self._blank()
         p = QPainter(self._img)
         p.drawImage(0, 0, scaled)
         p.end()
@@ -52,6 +59,7 @@ class BodyPaintCanvas(QWidget):
 
     def set_brush_color(self, color: QColor) -> None:
         self._brush = QColor(color)
+        self._brush.setAlpha(255)
 
     def set_brush_radius(self, r: int) -> None:
         self._brush_r = max(1, min(32, int(r)))
@@ -60,16 +68,18 @@ class BodyPaintCanvas(QWidget):
         self._erase = on
 
     def clear(self) -> None:
-        self._img.fill(self._bg)
+        self._img.fill(Qt.GlobalColor.transparent)
         self.update()
         self.changed.emit()
 
     def fill_disk(self, color: QColor) -> None:
-        """Synthetic body starter: filled circle."""
-        self._img.fill(self._bg)
+        """Synthetic body starter: opaque disk, transparent outside."""
+        self._img.fill(Qt.GlobalColor.transparent)
         p = QPainter(self._img)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setBrush(color)
+        fill = QColor(color)
+        fill.setAlpha(255)
+        p.setBrush(fill)
         p.setPen(Qt.PenStyle.NoPen)
         margin = int(self._size * 0.08)
         p.drawEllipse(margin, margin, self._size - 2 * margin, self._size - 2 * margin)
@@ -78,16 +88,17 @@ class BodyPaintCanvas(QWidget):
         self.changed.emit()
 
     def load_qimage(self, image: QImage) -> None:
-        scaled = image.convertToFormat(QImage.Format.Format_RGB32).scaled(
+        scaled = image.convertToFormat(QImage.Format.Format_ARGB32).scaled(
             self._size,
             self._size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        self._img.fill(self._bg)
+        self._img.fill(Qt.GlobalColor.transparent)
         ox = (self._size - scaled.width()) // 2
         oy = (self._size - scaled.height()) // 2
         p = QPainter(self._img)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         p.drawImage(ox, oy, scaled)
         p.end()
         self.update()
@@ -132,7 +143,13 @@ class BodyPaintCanvas(QWidget):
     def _stroke(self, a: QPoint, b: QPoint) -> None:
         p = QPainter(self._img)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = self._bg if self._erase else self._brush
+        if self._erase:
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            color = QColor(0, 0, 0, 0)
+        else:
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            color = QColor(self._brush)
+            color.setAlpha(255)
         pen = QPen(
             color,
             self._brush_r * 2,

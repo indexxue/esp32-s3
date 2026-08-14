@@ -7,8 +7,10 @@ idf_component_register(
         "source/agent.c"
         "source/pet_opus.c"
         "source/web_pages.c"
+        "source/web_skin.c"
         "source/pet/pet_core/pet_core.c"
         "source/pet/pet_fs.c"
+        "source/pet/sd_cfg.c"
         "source/pet/pet_res/pet_res.c"
         "source/pet/pet_view/pet_view.c"
     INCLUDE_DIRS

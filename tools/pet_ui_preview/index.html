@@ -388,6 +388,7 @@
     background: #4aa3c8;
   }
   .home .eye {
+    display: none;
     position: absolute;
     width: 18px; height: 22px;
     border-radius: 50%;
@@ -405,6 +406,7 @@
     background: #202028;
   }
   .home .mouth {
+    display: none;
     position: absolute;
     left: 50%; top: calc(50% + 28px);
     width: 28px; height: 8px;
@@ -471,6 +473,7 @@
     background: linear-gradient(180deg, #5bb8d8, #3a8fb0);
   }
   .home2 .eye {
+    display: none; /* 五官预留，本阶段不显示 */
     position: absolute;
     width: 18px; height: 22px;
     border-radius: 50%;
@@ -488,6 +491,7 @@
     background: #202028;
   }
   .home2 .mouth {
+    display: none;
     position: absolute;
     left: 50%; top: calc(46% + 32px);
     width: 28px; height: 8px;
@@ -736,6 +740,7 @@
     background: linear-gradient(180deg, #5bb8d8, #3a8fb0);
   }
   .chat-d .eye {
+    display: none; /* 五官预留 */
     position: absolute;
     width: 14px; height: 16px;
     border-radius: 50%;
@@ -860,7 +865,7 @@
       <div class="panel">
         <h2>主界面已锁定（摘要）</h2>
         <ul class="notes">
-          <li>构图 A：身体约 ø150</li>
+          <li>构图 A：身体约 ø150（本阶段无五官）</li>
           <li>Needs：顶中三点（绿/蓝/黄）</li>
           <li>Dock：喂 / 玩 / 睡 / 聊 → 对话框架 D</li>
           <li>开机约定：框架 C（环进度）</li>
@@ -1001,8 +1006,8 @@
     splashA: ["开机 A", "圆内宠物色块 + 标题 + 加载点。适合「上电先看到宠」。"],
     splashB: ["开机 B", "品牌方标居中 + 版本号。适合正式产品名已定。"],
     splashC: ["开机 C (约定)", "身体 + 环形进度。进度可绑皮肤加载；位图仍为单帧 splash.bin。"],
-    home: ["主界面(现网)", "像素对齐 pet_view：顶栏三 needs、身体、眼嘴、底栏三键。"],
-    home2: ["主界面(约定)", "宠为主体 + Needs 三点 + 底弧喂/玩/睡/聊；点「聊」进对话 D。"],
+    home: ["主界面(现网)", "像素对齐 pet_view：顶栏三 needs、身体、底栏三键；五官预留不显示。"],
+    home2: ["主界面(约定)", "宠为主体 + Needs 三点 + 底弧喂/玩/睡/聊；五官预留不显示；点「聊」进对话 D。"],
     chatA: ["对话框架 A · 半宠半聊", "备选对照（未作默认）。"],
     chatB: ["对话框架 B · 全屏聊", "备选对照（未作默认）。"],
     chatC: ["对话框架 C · 叠层聊", "备选对照（未作默认）。"],

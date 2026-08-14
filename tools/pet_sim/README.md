@@ -12,7 +12,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\pet_sim\install_into_lvgl_sim.p
 
 Open `tools\lvgl_sim\lv_port_pc_visual_studio\LVGL.sln`, set **LvglWindowsSimulator** as startup, F5.
 
-Boot: splash C (≥1s + pack load) then home. Debugger working directory is the **repo root** so `tools/pet_sim/sdcard/pet` resolves. Optional: `PET_PACK_ROOT`.
+Boot: splash C (≥1s + pack load) then home. Debugger working directory is the **repo root** so `tools/pet_sim/sdcard` resolves (`config` + `pet/`). Optional: `PET_PACK_ROOT`.
 
 Skin tool: [`tools/pet_skin/README.md`](../pet_skin/README.md).
 
@@ -44,4 +44,4 @@ gcc -I desktop_pet/main/source/pet/pet_core desktop_pet/main/source/pet/pet_core
 .\tools\pet_sim\pet_core_smoke.exe
 ```
 
-Copy `tools/pet_sim/sdcard/pet/` onto the device as `/sdcard/pet/`.
+Copy `tools/pet_sim/sdcard/` onto the device as `/sdcard/` (includes root `config` + `pet/`).

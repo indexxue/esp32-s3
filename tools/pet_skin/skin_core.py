@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import struct
+import zipfile
 from pathlib import Path
 
 CLIP_IDS = {
@@ -22,6 +24,11 @@ CLIP_IDS = {
     "poke": 6,
 }
 
+FACE_PARTS = ("eye_l", "eye_r", "mouth", "brow_l", "brow_r")
+FACE_REF_SIZE = 160
+PACK_VERSION_FACE = 2
+FACE_BLOCK_LEN = 32
+
 BG = (0x20, 0x20, 0x20)
 NAME_LEN = 32
 SPLASH_SIZE = 240
@@ -30,13 +37,30 @@ SPLASH_CONTENT_DEFAULT = 96
 SPLASH_CONTENT_MIN = 32
 SPLASH_CONTENT_MAX = SPLASH_SIZE
 # Body frame size (matches firmware PET_RES_FRAME_MAX_*).
-BODY_SIZE_DEFAULT = 96
+BODY_SIZE_DEFAULT = 160
 BODY_SIZE_MIN = 48
 BODY_SIZE_MAX = 180
+# Matches firmware PET_RES_MAX_FRAMES.
+CLIP_FRAMES_MAX = 8
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 DEFAULT_CFG = HERE / "pack.json"
 DEFAULT_OUT = REPO / "tools" / "pet_sim" / "sdcard" / "pet"
+CARD_CONFIG_NAME = "config"
+CARD_CONFIG_TEXT = """# desktop_pet SD card map
+# Lives at the SD mount root (/sdcard/config). Not inside /pet — skin replace must not overwrite this.
+# Device reads KEY=VALUE after mount. Unknown keys are kept in RAM for later features.
+# Lines starting with # are comments.
+
+version=1
+content_root=pet
+record_root=record
+
+# reserved (ignored until implemented):
+# volume=80
+# brightness=100
+# locale=zh
+"""
 
 # Declared / reserved skin paths (tool extension map). Firmware may lag.
 # boot/anim is product-reserved but deferred — splash stays static.
@@ -254,6 +278,15 @@ def load_cfg(cfg_path: Path | None = None) -> dict:
 def save_cfg(cfg: dict, cfg_path: Path | None = None) -> Path:
     path = Path(cfg_path or DEFAULT_CFG)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        try:
+            old = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            old = {}
+        if isinstance(old, dict):
+            for key, val in old.items():
+                if key not in cfg:
+                    cfg[key] = val
     path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
 
@@ -262,11 +295,75 @@ def clamp_body_size(size: int) -> int:
     return max(BODY_SIZE_MIN, min(BODY_SIZE_MAX, int(size)))
 
 
+def default_face(size: int = FACE_REF_SIZE) -> dict:
+    """Default face anchors relative to body top-left (ref 160×160)."""
+    s = float(clamp_body_size(size)) / float(FACE_REF_SIZE)
+    return {
+        "eye_l": {"x": int(round(62 * s)), "y": int(round(72 * s)), "angle": 0},
+        "eye_r": {"x": int(round(98 * s)), "y": int(round(72 * s)), "angle": 0},
+        "mouth": {"x": int(round(80 * s)), "y": int(round(108 * s)), "angle": 0},
+        "brow_l": {"x": int(round(62 * s)), "y": int(round(56 * s)), "angle": 0},
+        "brow_r": {"x": int(round(98 * s)), "y": int(round(56 * s)), "angle": 0},
+    }
+
+
+def normalize_face(face: dict | None, size: int = FACE_REF_SIZE) -> dict:
+    base = default_face(size)
+    if not isinstance(face, dict):
+        return base
+    out: dict = {}
+    for part in FACE_PARTS:
+        src = face.get(part) if isinstance(face.get(part), dict) else {}
+        out[part] = {
+            "x": int(src.get("x", base[part]["x"])),
+            "y": int(src.get("y", base[part]["y"])),
+            "angle": int(src.get("angle", base[part]["angle"])),
+        }
+    return out
+
+
+def face_for_frame(clip: dict, frame_index: int, size: int = FACE_REF_SIZE) -> dict:
+    faces = clip.get("faces")
+    if isinstance(faces, list) and frame_index < len(faces) and faces[frame_index]:
+        return normalize_face(faces[frame_index], size)
+    return normalize_face(clip.get("face"), size)
+
+
+def pack_face_bytes(face: dict) -> bytes:
+    blob = bytearray()
+    for part in FACE_PARTS:
+        p = face[part]
+        blob += struct.pack("<hhh", int(p["x"]), int(p["y"]), int(p["angle"]))
+    blob += struct.pack("<H", 0)
+    assert len(blob) == FACE_BLOCK_LEN
+    return bytes(blob)
+
+
 def idle_color_from_cfg(cfg: dict) -> tuple[int, int, int]:
     for clip in cfg.get("clips", []):
         if clip.get("id") == "idle":
             return tuple(int(c) for c in clip["color"])
     return (74, 163, 200)
+
+
+IMAGE_EXTS = (".png", ".webp", ".jpg", ".jpeg", ".bmp")
+# Filenames from skin_ai_asset_brief.md (stems, any IMAGE_EXTS).
+KNOWN_ASSET_STEMS = (
+    "idle_0",
+    "idle_1",
+    "idle",
+    "sleepy",
+    "sad",
+    "eat_0",
+    "eat_1",
+    "eat",
+    "play_0",
+    "play_1",
+    "play",
+    "poke",
+    "sleep_loop",
+    "splash",
+)
 
 
 def resolve_asset(path_str: str, base_dir: Path) -> Path:
@@ -277,6 +374,364 @@ def resolve_asset(path_str: str, base_dir: Path) -> Path:
     if cand.is_file():
         return cand
     raise FileNotFoundError(f"asset not found: {path_str} (base={base_dir})")
+
+
+def find_asset_file(assets_dir: Path, stem: str) -> Path | None:
+    """Return first existing assets/<stem>.<ext>."""
+    for ext in IMAGE_EXTS:
+        cand = assets_dir / f"{stem}{ext}"
+        if cand.is_file():
+            return cand
+    return None
+
+
+def splash_src_from_assets(base_dir: Path) -> Path | None:
+    return find_asset_file(base_dir / "assets", "splash")
+
+
+def splash_params(cfg: dict) -> tuple[str, tuple[int, int, int], int | None]:
+    """fit, bg, content_size from pack.json splash{} (missing size → caller default)."""
+    raw = cfg.get("splash")
+    s = raw if isinstance(raw, dict) else {}
+    fit = str(s.get("fit", "contain"))
+    if fit not in ("contain", "cover"):
+        fit = "contain"
+    bg = parse_rgb(s["bg"]) if s.get("bg") else BG
+    size = None
+    if s.get("content_size") is not None:
+        size = clamp_content_size(int(s["content_size"]))
+    return fit, bg, size
+
+
+def set_splash_cfg(cfg: dict, fit: str, bg: tuple[int, int, int], content_size: int) -> None:
+    if fit not in ("contain", "cover"):
+        fit = "contain"
+    cfg["splash"] = {
+        "fit": fit,
+        "bg": f"#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}",
+        "content_size": int(clamp_content_size(content_size)),
+    }
+
+
+def install_splash_image(src: Path, assets_dir: Path) -> Path:
+    """Copy/convert src to assets/splash.png; drop other splash.* so autoload cannot stick to the old file."""
+    from PIL import Image
+
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    dest = assets_dir / "splash.png"
+    src = Path(src).resolve()
+    im = Image.open(src).convert("RGBA")
+    dest_res = dest.resolve() if dest.exists() else dest
+    for ext in IMAGE_EXTS:
+        stale = assets_dir / f"splash{ext}"
+        if stale.exists() and stale.resolve() != dest_res:
+            stale.unlink()
+    im.save(dest, "PNG")
+    return dest
+
+
+def clear_splash_assets(assets_dir: Path) -> None:
+    for ext in IMAGE_EXTS:
+        p = assets_dir / f"splash{ext}"
+        if p.is_file():
+            p.unlink()
+
+
+def clip_frame_stem(clip_id: str, frame_i: int, frames: int) -> str:
+    return f"{clip_id}_{frame_i}" if frames > 1 else clip_id
+
+
+def install_clip_frames(
+    assets_dir: Path,
+    clip_id: str,
+    frames: int,
+    *,
+    src: Path | None = None,
+    png: bytes | None = None,
+    frame_i: int | None = None,
+) -> list[Path]:
+    """Write assets/<clip>[_i].png. frame_i=None writes every frame (same pixels)."""
+    from PIL import Image
+    import io
+
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    if src is not None:
+        im = Image.open(src).convert("RGBA")
+    elif png is not None:
+        im = Image.open(io.BytesIO(png)).convert("RGBA")
+    else:
+        raise ValueError("install_clip_frames needs src or png")
+
+    n = max(1, int(frames))
+    indices = range(n) if frame_i is None else [int(frame_i)]
+    written: list[Path] = []
+    for i in indices:
+        stem = clip_frame_stem(clip_id, i, n)
+        dest = assets_dir / f"{stem}.png"
+        dest_res = dest.resolve() if dest.exists() else dest
+        for ext in IMAGE_EXTS:
+            stale = assets_dir / f"{stem}{ext}"
+            if stale.exists() and stale.resolve() != dest_res:
+                stale.unlink()
+        im.save(dest, "PNG")
+        written.append(dest)
+    return written
+
+
+def set_clip_sources(clip: dict, rels: dict[int, str], apply_all: bool) -> None:
+    """rels maps frame index → assets-relative path."""
+    n = max(1, int(clip.get("frames", 1)))
+    if n <= 1:
+        clip["source"] = next(iter(rels.values()))
+        clip.pop("sources", None)
+        return
+    sources = list(clip.get("sources") or [None] * n)
+    while len(sources) < n:
+        sources.append(None)
+    if apply_all:
+        for i in range(n):
+            sources[i] = rels.get(i, sources[i])
+    else:
+        for i, rel in rels.items():
+            if 0 <= i < n:
+                sources[i] = rel
+    clip["sources"] = sources
+    clip.pop("source", None)
+
+
+def clip_source_list(clip: dict, frames: int | None = None) -> list[str | None]:
+    n = max(1, int(frames if frames is not None else clip.get("frames", 1)))
+    sources = clip.get("sources")
+    if isinstance(sources, list):
+        rows: list[str | None] = [str(x) if x else None for x in sources]
+    elif clip.get("source"):
+        rows = [str(clip["source"])] * n
+    else:
+        rows = [None] * n
+    while len(rows) < n:
+        rows.append(rows[-1] if rows else None)
+    return rows[:n]
+
+
+def write_clip_sources(clip: dict, sources: list[str | None]) -> None:
+    n = max(1, int(clip.get("frames", 1)))
+    rows = list(sources[:n])
+    while len(rows) < n:
+        rows.append(None)
+    if n <= 1:
+        if rows[0]:
+            clip["source"] = rows[0]
+        else:
+            clip.pop("source", None)
+        clip.pop("sources", None)
+        return
+    clip["sources"] = rows
+    clip.pop("source", None)
+
+
+def set_clip_frame_count(clip: dict, count: int) -> None:
+    """Grow/shrink clip frames (1..CLIP_FRAMES_MAX). New slots copy the last source."""
+    n = max(1, min(CLIP_FRAMES_MAX, int(count)))
+    old_n = max(1, int(clip.get("frames", 1)))
+    sources = clip_source_list(clip, old_n)
+    if n > old_n:
+        fill = sources[-1] if sources else None
+        sources.extend([fill] * (n - old_n))
+    else:
+        sources = sources[:n]
+    clip["frames"] = n
+    write_clip_sources(clip, sources)
+    faces = clip.get("faces")
+    if isinstance(faces, list):
+        while len(faces) < n:
+            last = faces[-1] if faces else None
+            faces.append(dict(last) if isinstance(last, dict) else None)
+        clip["faces"] = faces[:n]
+        if n <= 1 and faces:
+            clip["face"] = faces[0]
+            clip.pop("faces", None)
+    elif n > 1 and clip.get("face"):
+        clip["faces"] = [dict(clip["face"]) for _ in range(n)]
+        clip.pop("face", None)
+
+
+def delete_clip_frame(clip: dict, frame_i: int) -> int:
+    """Remove one frame; returns new current index. No-op if only one frame."""
+    n = max(1, int(clip.get("frames", 1)))
+    if n <= 1:
+        return 0
+    i = max(0, min(n - 1, int(frame_i)))
+    sources = clip_source_list(clip, n)
+    sources.pop(i)
+    faces = clip.get("faces")
+    if isinstance(faces, list) and i < len(faces):
+        faces.pop(i)
+        clip["faces"] = faces
+    clip["frames"] = n - 1
+    write_clip_sources(clip, sources)
+    return min(i, n - 2)
+
+
+def duplicate_clip_frame(clip: dict, frame_i: int) -> int:
+    """Insert a copy after frame_i; returns the new frame index."""
+    n = max(1, int(clip.get("frames", 1)))
+    if n >= CLIP_FRAMES_MAX:
+        return min(frame_i, n - 1)
+    i = max(0, min(n - 1, int(frame_i)))
+    sources = clip_source_list(clip, n)
+    sources.insert(i + 1, sources[i])
+    faces = clip.get("faces")
+    if isinstance(faces, list):
+        src_face = faces[i] if i < len(faces) else clip.get("face")
+        faces.insert(i + 1, dict(src_face) if isinstance(src_face, dict) else None)
+        clip["faces"] = faces
+    clip["frames"] = n + 1
+    write_clip_sources(clip, sources)
+    return i + 1
+
+
+def clear_clip_assets(assets_dir: Path, clip_id: str, frames: int) -> None:
+    n = max(1, int(frames))
+    stems = [clip_id] + [f"{clip_id}_{i}" for i in range(n)]
+    for stem in stems:
+        for ext in IMAGE_EXTS:
+            p = assets_dir / f"{stem}{ext}"
+            if p.is_file():
+                p.unlink()
+
+
+def _rel_asset(path: Path, base_dir: Path) -> str:
+    try:
+        return path.resolve().relative_to(base_dir.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def import_asset_folder(src_dir: Path, dest_assets: Path) -> list[str]:
+    """Copy known stems from src_dir into dest_assets/. Does not rewrite pack.json."""
+    notes: list[str] = []
+    if not src_dir.is_dir():
+        return [f"import: not a directory: {src_dir}"]
+    dest_assets.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for stem in KNOWN_ASSET_STEMS:
+        found = find_asset_file(src_dir, stem)
+        if found is None:
+            continue
+        dest = dest_assets / found.name
+        shutil.copy2(found, dest)
+        notes.append(f"copied {found.name}")
+        n += 1
+    if n == 0:
+        notes.append(f"import: no known filenames in {src_dir}")
+    else:
+        notes.insert(0, f"import: {n} files → {dest_assets}")
+    return notes
+
+
+def bind_assets(cfg: dict, base_dir: Path) -> list[str]:
+    """Scan assets/ and write clip source/sources in pack.json (in-memory)."""
+    assets = base_dir / "assets"
+    notes: list[str] = []
+    if not assets.is_dir():
+        return [f"bind: no assets/ under {base_dir}"]
+
+    for clip in cfg.get("clips", []):
+        cid = str(clip.get("id", ""))
+        if cid not in CLIP_IDS:
+            continue
+        n = max(1, int(clip.get("frames", 1)))
+        found_rows: list[str | None] = []
+        for i in range(n):
+            if n == 1:
+                hit = find_asset_file(assets, cid)
+                if hit is None:
+                    hit = find_asset_file(assets, f"{cid}_0")
+            else:
+                hit = find_asset_file(assets, f"{cid}_{i}")
+            found_rows.append(_rel_asset(hit, base_dir) if hit is not None else None)
+
+        bound = sum(1 for x in found_rows if x)
+        if bound == 0:
+            single = find_asset_file(assets, cid)
+            if single is not None:
+                clip["source"] = _rel_asset(single, base_dir)
+                clip.pop("sources", None)
+                notes.append(f"{cid}: {clip['source']} (all {n} frames)")
+            else:
+                notes.append(f"{cid}: no PNG → synthetic color")
+            continue
+
+        if n > 1:
+            sources = list(clip.get("sources") or [None] * n)
+            while len(sources) < n:
+                sources.append(None)
+            for i, rel in enumerate(found_rows):
+                if rel:
+                    sources[i] = rel
+            clip["sources"] = sources
+            clip.pop("source", None)
+            notes.append(f"{cid}: {bound}/{n} frames bound")
+        else:
+            clip["source"] = found_rows[0]
+            clip.pop("sources", None)
+            notes.append(f"{cid}: {found_rows[0]}")
+
+    splash = splash_src_from_assets(base_dir)
+    if splash is not None:
+        notes.append(f"splash: {splash.name} (use --splash or Splash panel)")
+    else:
+        notes.append("splash: assets/splash.png missing")
+    return notes
+
+
+def check_pack(cfg: dict, cfg_path: Path) -> list[str]:
+    """Lines prefixed error: or warn:. Empty = all clips have readable sources."""
+    base = Path(cfg_path).resolve().parent
+    lines: list[str] = []
+    ids = [str(c.get("id")) for c in cfg.get("clips", [])]
+    for need in CLIP_IDS:
+        if need not in ids:
+            lines.append(f"error: missing clip '{need}'")
+
+    for clip in cfg.get("clips", []):
+        cid = str(clip.get("id", "?"))
+        n = max(1, int(clip.get("frames", 1)))
+        sources = clip.get("sources")
+        source = clip.get("source")
+        if isinstance(sources, list):
+            for i in range(n):
+                if i >= len(sources) or not sources[i]:
+                    lines.append(f"warn: {cid}[{i}]: no source → synthetic")
+                    continue
+                try:
+                    resolve_asset(str(sources[i]), base)
+                except FileNotFoundError:
+                    lines.append(f"error: {cid}[{i}]: missing {sources[i]}")
+        elif source:
+            try:
+                resolve_asset(str(source), base)
+            except FileNotFoundError:
+                lines.append(f"error: {cid}: missing {source}")
+        else:
+            lines.append(f"warn: {cid}: no source → synthetic color")
+
+    if splash_src_from_assets(base) is None:
+        lines.append("warn: assets/splash.png missing")
+    return lines
+
+
+def check_has_errors(lines: list[str]) -> bool:
+    return any(s.startswith("error:") for s in lines)
+
+
+def clip_source_label(clip: dict) -> str:
+    sources = clip.get("sources")
+    if isinstance(sources, list) and any(sources):
+        return ",".join(str(s) if s else "-" for s in sources)
+    if clip.get("source"):
+        return str(clip.get("source"))
+    return "(synthetic)"
 
 
 def load_image_body(
@@ -356,7 +811,8 @@ def compose_home_preview(
     body_w: int,
     body_h: int,
     bg: tuple[int, int, int] = BG,
-    with_face: bool = True,
+    with_face: bool = False,
+    face: dict | None = None,
 ) -> bytes:
     """Place body on 240×240 home canvas; optional LVGL-like face for authoring."""
     canvas = SPLASH_SIZE
@@ -375,13 +831,14 @@ def compose_home_preview(
             rows[dy][dx] = body_rows[y][x]
 
     if with_face:
-        cx = canvas // 2
-        cy = canvas // 2 - 6
-        _stamp_disk(rows, canvas, cx - 18, cy - 8, 9, 11, (255, 255, 255))
-        _stamp_disk(rows, canvas, cx + 18, cy - 8, 9, 11, (255, 255, 255))
-        _stamp_disk(rows, canvas, cx - 18, cy - 8, 4, 5, (32, 32, 40))
-        _stamp_disk(rows, canvas, cx + 18, cy - 8, 4, 5, (32, 32, 40))
-        _stamp_disk(rows, canvas, cx, cy + 28, 14, 4, (224, 112, 128))
+        f = normalize_face(face, body_w)
+        _stamp_face_part(rows, canvas, ox + f["eye_l"]["x"], oy + f["eye_l"]["y"], 9, 11, (255, 255, 255), f["eye_l"]["angle"])
+        _stamp_face_part(rows, canvas, ox + f["eye_r"]["x"], oy + f["eye_r"]["y"], 9, 11, (255, 255, 255), f["eye_r"]["angle"])
+        _stamp_face_part(rows, canvas, ox + f["eye_l"]["x"], oy + f["eye_l"]["y"], 4, 5, (32, 32, 40), f["eye_l"]["angle"])
+        _stamp_face_part(rows, canvas, ox + f["eye_r"]["x"], oy + f["eye_r"]["y"], 4, 5, (32, 32, 40), f["eye_r"]["angle"])
+        _stamp_face_part(rows, canvas, ox + f["mouth"]["x"], oy + f["mouth"]["y"], 14, 4, (224, 112, 128), f["mouth"]["angle"])
+        _stamp_face_part(rows, canvas, ox + f["brow_l"]["x"], oy + f["brow_l"]["y"], 8, 2, (48, 48, 48), f["brow_l"]["angle"])
+        _stamp_face_part(rows, canvas, ox + f["brow_r"]["x"], oy + f["brow_r"]["y"], 8, 2, (48, 48, 48), f["brow_r"]["angle"])
     return pixels_from_rgb_rows(rows, canvas, canvas)
 
 
@@ -397,6 +854,31 @@ def _stamp_disk(
     for y in range(max(0, cy - ry), min(canvas, cy + ry + 1)):
         for x in range(max(0, cx - rx), min(canvas, cx + rx + 1)):
             if ((x - cx) / max(1, rx)) ** 2 + ((y - cy) / max(1, ry)) ** 2 <= 1.0:
+                rows[y][x] = color
+
+
+def _stamp_face_part(
+    rows: list[list[tuple[int, int, int]]],
+    canvas: int,
+    cx: int,
+    cy: int,
+    rx: int,
+    ry: int,
+    color: tuple[int, int, int],
+    angle_deg: int,
+) -> None:
+    """Stamp ellipse; angle rotates local axes (clockwise degrees)."""
+    rad = math.radians(float(angle_deg))
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    pad = max(rx, ry) + 2
+    for y in range(max(0, cy - pad), min(canvas, cy + pad + 1)):
+        for x in range(max(0, cx - pad), min(canvas, cx + pad + 1)):
+            dx = float(x - cx)
+            dy = float(y - cy)
+            lx = dx * cos_a + dy * sin_a
+            ly = -dx * sin_a + dy * cos_a
+            if (lx / max(1, rx)) ** 2 + (ly / max(1, ry)) ** 2 <= 1.0:
                 rows[y][x] = color
 
 
@@ -435,8 +917,38 @@ def rgb565_to_qimage_bytes(pixels: bytes, w: int, h: int) -> bytes:
     return bytes(out)
 
 
+def ensure_card_config(out_pet: Path) -> Path | None:
+    """If out is .../pet, write sibling card-root config once (never overwrite)."""
+    out_pet = Path(out_pet)
+    if out_pet.name != "pet":
+        return None
+    path = out_pet.parent / CARD_CONFIG_NAME
+    if not path.exists():
+        path.write_text(CARD_CONFIG_TEXT, encoding="utf-8")
+    return path
+
+
+def export_skin_zip(pet_dir: Path, zip_path: Path | None = None) -> Path:
+    """Zip pet/ contents (pack.bin, body/, boot/). Does not include card-root config."""
+    pet_dir = Path(pet_dir)
+    if zip_path is None:
+        zip_path = pet_dir.parent / "pet.zip"
+    zip_path = Path(zip_path)
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in sorted(pet_dir.rglob("*")):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(pet_dir).as_posix()
+            if rel == CARD_CONFIG_NAME or rel.startswith("record/"):
+                continue
+            zf.write(p, rel)
+    return zip_path
+
+
 def build_pack(cfg: dict, out_dir: Path, cfg_path: Path | None = None) -> str:
     """Write pack.bin + body/*.bin. Optional image sources resolved vs cfg_path parent."""
+    ensure_card_config(out_dir)
     body_dir = out_dir / "body"
     body_dir.mkdir(parents=True, exist_ok=True)
 
@@ -444,6 +956,8 @@ def build_pack(cfg: dict, out_dir: Path, cfg_path: Path | None = None) -> str:
     h = clamp_body_size(int(cfg["height"]))
     cfg["width"] = w
     cfg["height"] = h
+    # Face anchors require pack version >= 2.
+    cfg["version"] = max(int(cfg.get("version", PACK_VERSION_FACE)), PACK_VERSION_FACE)
     needs = cfg["needs"]
     clips = cfg["clips"]
     base_dir = Path(cfg_path).resolve().parent if cfg_path is not None else HERE
@@ -473,6 +987,8 @@ def build_pack(cfg: dict, out_dir: Path, cfg_path: Path | None = None) -> str:
         for i in range(n):
             rel = f"body/{clip['id']}_{i}.bin"
             blob += pad_name(rel)
+            face = face_for_frame(clip, i, w)
+            blob += pack_face_bytes(face)
             pixels = make_clip_frame_pixels(clip, i, w, h, base_dir)
             write_rgbh(out_dir / rel, w, h, pixels)
             if clip.get("source") or clip.get("sources"):
@@ -481,7 +997,10 @@ def build_pack(cfg: dict, out_dir: Path, cfg_path: Path | None = None) -> str:
     path = out_dir / "pack.bin"
     path.write_bytes(blob)
     note = f", {img_n} image frames" if img_n else ", synthetic colors"
-    return f"wrote {path} ({len(blob)} bytes), {len(clips)} clips {w}x{h}{note}"
+    return (
+        f"wrote {path} ({len(blob)} bytes), {len(clips)} clips {w}x{h}"
+        f"{note}, pack v{cfg['version']} face anchors"
+    )
 
 
 def build_splash(
@@ -493,6 +1012,7 @@ def build_splash(
     bg: tuple[int, int, int] = BG,
     content_size: int | None = None,
 ) -> str:
+    ensure_card_config(out_dir)
     pixels = make_splash_pixels(src, fit, idle_color, cfg, bg, content_size)
     path = out_dir / "boot" / "splash.bin"
     write_rgbh(path, SPLASH_SIZE, SPLASH_SIZE, pixels)
@@ -511,3 +1031,23 @@ def build_splash(
         else:
             note = f"synthetic body={size} bg={bg_hex}"
     return f"wrote {path} ({12 + len(pixels)} bytes) {SPLASH_SIZE}x{SPLASH_SIZE} ({note})"
+
+
+def build_splash_from_cfg(
+    out_dir: Path,
+    cfg: dict,
+    base_dir: Path,
+    idle_color: tuple[int, int, int] | None = None,
+) -> str:
+    """Write splash.bin from assets/splash.* + pack.json splash{}."""
+    src = splash_src_from_assets(base_dir)
+    fit, bg, size = splash_params(cfg)
+    return build_splash(
+        out_dir,
+        src,
+        fit,
+        idle_color if idle_color is not None else idle_color_from_cfg(cfg),
+        cfg,
+        bg,
+        size,
+    )
