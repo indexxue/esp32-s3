@@ -1,4 +1,4 @@
-# desktop_pet 文档入口
+﻿# desktop_pet 文档入口
 
 桌宠工程文档集中于此目录。仓库其它 `doc/*.md`（编码规范、OTA、分区等）与本产品无关，勿混读。
 
@@ -13,9 +13,9 @@
 
 ## 辅助
 
-- 圆屏 HTML 预览：[`tools/pet_ui_preview/index.html`](../../tools/pet_ui_preview/index.html)
-- **五官方案评审**（预留；本阶段固件不画五官）：[`tools/pet_ui_preview/face_review.html`](../../tools/pet_ui_preview/face_review.html)
-- 皮肤工具：[`tools/pet_skin/README.md`](../../tools/pet_skin/README.md)
+- 圆屏 HTML 预览：[`tools/pet_tool/web/`](../../tools/pet_tool/web/)（`py -3 tools/pet_tool/serve.py`）— 仅产品态：开机 C / 主界面 / 对话 D
+- 皮肤工具：[`tools/pet_tool/skin/README.md`](../../tools/pet_tool/skin/README.md)
+- 工具伞：[`tools/pet_tool/README.md`](../../tools/pet_tool/README.md)
 - AI 出图方案：[`skin_ai_asset_brief.md`](skin_ai_asset_brief.md)
 - 工程说明：[`desktop_pet/README.txt`](../../desktop_pet/README.txt)
 - **从哪开干**：见 [`product.md`](product.md) §E（当前建议：对话页 D）

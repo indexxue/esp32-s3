@@ -199,7 +199,12 @@ bool pet_res_load(void)
     }
     for (c = 0U; c < (uint8_t)PET_CLIP_COUNT; c++) {
         if (s_clips[c].frame_count == 0U) {
-            s_clips[c] = s_clips[PET_CLIP_IDLE];
+            if ((c == (uint8_t)PET_CLIP_REFUSE) &&
+                (s_clips[PET_CLIP_SAD].frame_count > 0U)) {
+                s_clips[c] = s_clips[PET_CLIP_SAD];
+            } else {
+                s_clips[c] = s_clips[PET_CLIP_IDLE];
+            }
         }
     }
     s_loaded = true;
@@ -280,6 +285,9 @@ bool pet_res_load_ui_icon(pet_ui_icon_id_t id, uint16_t *pixels, uint32_t pixel_
         PET_RES_UI_ICON_PLAY_REL,
         PET_RES_UI_ICON_SLEEP_REL,
         PET_RES_UI_ICON_CHAT_REL,
+        PET_RES_UI_ICON_WIFI_ON_REL,
+        PET_RES_UI_ICON_WIFI_OFF_REL,
+        PET_RES_UI_ICON_SETTINGS_REL,
     };
 
     if (id >= PET_UI_ICON_COUNT) {

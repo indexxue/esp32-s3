@@ -22,7 +22,14 @@ CLIP_IDS = {
     "sad": 4,
     "sleep_loop": 5,
     "poke": 6,
+    "refuse": 7,  # care tier: full feed / cold poke; optional in pack
 }
+
+# Must appear in pack.json. Others in CLIP_IDS may be omitted (firmware fallback).
+REQUIRED_CLIP_IDS = frozenset(
+    {"idle", "sleepy", "eat", "play", "sad", "sleep_loop", "poke"}
+)
+OPTIONAL_CLIP_IDS = frozenset(set(CLIP_IDS) - REQUIRED_CLIP_IDS)
 
 FACE_PARTS = ("eye_l", "eye_r", "mouth", "brow_l", "brow_r")
 FACE_REF_SIZE = 160
@@ -43,7 +50,8 @@ BODY_SIZE_MAX = 180
 # Matches firmware PET_RES_MAX_FRAMES.
 CLIP_FRAMES_MAX = 8
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[1]
+# tools/pet_tool/skin → repo root is parents[2]
+REPO = HERE.parents[2]
 DEFAULT_CFG = HERE / "pack.json"
 DEFAULT_OUT = REPO / "tools" / "pet_sim" / "sdcard" / "pet"
 CARD_CONFIG_NAME = "config"
@@ -79,14 +87,20 @@ RESERVED_PATHS = (
 
 # UI button icons (28×28 RGBH) → theme/ui/{id}.bin; missing → firmware letter fallback
 UI_ICON_SIZE = 28
-UI_ICON_CARE_BG = (0x3A, 0x3A, 0x44)
+UI_ICON_CARE_BG = (0x3A, 0x3A, 0x44)  # solid-mode only
 UI_ICON_CHAT_BG = (0x3A, 0x55, 0x70)
+UI_ICON_NET_BG = (0x2A, 0x2F, 0x3A)
+# LVGL default chroma key (#00FF00): transparent in RGB565 UI icons on device.
+UI_ICON_CHROMA = (0x00, 0xFF, 0x00)
 # (bin_stem, assets_stem, button_bg)
 UI_ICONS = (
     ("feed", "ui_feed", UI_ICON_CARE_BG),
     ("play", "ui_play", UI_ICON_CARE_BG),
     ("sleep", "ui_sleep", UI_ICON_CARE_BG),
     ("chat", "ui_chat", UI_ICON_CHAT_BG),
+    ("wifi_on", "ui_wifi_on", UI_ICON_NET_BG),
+    ("wifi_off", "ui_wifi_off", UI_ICON_NET_BG),
+    ("settings", "ui_settings", UI_ICON_NET_BG),
 )
 
 
@@ -285,7 +299,48 @@ def synthetic_splash(
 
 def load_cfg(cfg_path: Path | None = None) -> dict:
     path = cfg_path or DEFAULT_CFG
-    return json.loads(path.read_text(encoding="utf-8"))
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    ensure_optional_clips(cfg)
+    return cfg
+
+
+def default_optional_clip(clip_id: str) -> dict:
+    """Stub clip entry for optional care-tier ids (refuse, …)."""
+    if clip_id == "refuse":
+        return {
+            "id": "refuse",
+            "fps": 6,
+            "frames": 1,
+            "color": [180, 100, 120],
+            "fit": "contain",
+            "face": {
+                "eye_l": {"x": 62, "y": 78, "angle": 0},
+                "eye_r": {"x": 98, "y": 78, "angle": 0},
+                "mouth": {"x": 80, "y": 114, "angle": 0},
+                "brow_l": {"x": 62, "y": 62, "angle": -8},
+                "brow_r": {"x": 98, "y": 62, "angle": 8},
+            },
+        }
+    return {
+        "id": clip_id,
+        "fps": 4,
+        "frames": 1,
+        "color": [128, 128, 128],
+        "fit": "contain",
+    }
+
+
+def ensure_optional_clips(cfg: dict) -> list[str]:
+    """Insert missing optional clip stubs (e.g. refuse) into cfg['clips']."""
+    notes: list[str] = []
+    clips = cfg.setdefault("clips", [])
+    have = {str(c.get("id")) for c in clips if isinstance(c, dict)}
+    for opt in sorted(OPTIONAL_CLIP_IDS):
+        if opt in have:
+            continue
+        clips.append(default_optional_clip(opt))
+        notes.append(f"added optional clip '{opt}'")
+    return notes
 
 
 def save_cfg(cfg: dict, cfg_path: Path | None = None) -> Path:
@@ -374,12 +429,15 @@ KNOWN_ASSET_STEMS = (
     "play_1",
     "play",
     "poke",
+    "refuse",
     "sleep_loop",
     "splash",
     "ui_feed",
     "ui_play",
     "ui_sleep",
     "ui_chat",
+    "ui_wifi_on",
+    "ui_wifi_off",
 )
 
 
@@ -648,10 +706,11 @@ def import_asset_folder(src_dir: Path, dest_assets: Path) -> list[str]:
 
 def bind_assets(cfg: dict, base_dir: Path) -> list[str]:
     """Scan assets/ and write clip source/sources in pack.json (in-memory)."""
+    notes = ensure_optional_clips(cfg)
     assets = base_dir / "assets"
-    notes: list[str] = []
     if not assets.is_dir():
-        return [f"bind: no assets/ under {base_dir}"]
+        notes.append(f"bind: no assets/ under {base_dir}")
+        return notes
 
     for clip in cfg.get("clips", []):
         cid = str(clip.get("id", ""))
@@ -675,6 +734,15 @@ def bind_assets(cfg: dict, base_dir: Path) -> list[str]:
                 clip["source"] = _rel_asset(single, base_dir)
                 clip.pop("sources", None)
                 notes.append(f"{cid}: {clip['source']} (all {n} frames)")
+            elif cid == "refuse":
+                # Author may omit refuse.png; reuse sad until a dedicated art exists.
+                sad = find_asset_file(assets, "sad")
+                if sad is not None:
+                    clip["source"] = _rel_asset(sad, base_dir)
+                    clip.pop("sources", None)
+                    notes.append(f"{cid}: {clip['source']} (fallback sad)")
+                else:
+                    notes.append(f"{cid}: no PNG → synthetic color")
             else:
                 notes.append(f"{cid}: no PNG → synthetic color")
             continue
@@ -703,16 +771,26 @@ def bind_assets(cfg: dict, base_dir: Path) -> list[str]:
 
 
 def check_pack(cfg: dict, cfg_path: Path) -> list[str]:
-    """Lines prefixed error: or warn:. Empty = all clips have readable sources."""
+    """Lines prefixed error: or warn:. Empty = all required clips OK."""
     base = Path(cfg_path).resolve().parent
     lines: list[str] = []
+    ensure_optional_clips(cfg)
     ids = [str(c.get("id")) for c in cfg.get("clips", [])]
-    for need in CLIP_IDS:
+    for need in REQUIRED_CLIP_IDS:
         if need not in ids:
             lines.append(f"error: missing clip '{need}'")
+    for opt in sorted(OPTIONAL_CLIP_IDS):
+        if opt not in ids:
+            lines.append(
+                f"warn: optional clip '{opt}' missing "
+                f"(firmware falls back; add for care-tier art)"
+            )
 
     for clip in cfg.get("clips", []):
         cid = str(clip.get("id", "?"))
+        if cid not in CLIP_IDS:
+            lines.append(f"error: unknown clip id '{cid}'")
+            continue
         n = max(1, int(clip.get("frames", 1)))
         sources = clip.get("sources")
         source = clip.get("source")
@@ -731,12 +809,17 @@ def check_pack(cfg: dict, cfg_path: Path) -> list[str]:
             except FileNotFoundError:
                 lines.append(f"error: {cid}: missing {source}")
         else:
-            lines.append(f"warn: {cid}: no source → synthetic color")
+            if cid in OPTIONAL_CLIP_IDS:
+                lines.append(
+                    f"warn: {cid}: no source → synthetic "
+                    f"(or put assets/{cid}.png; bind may use sad)"
+                )
+            else:
+                lines.append(f"warn: {cid}: no source → synthetic color")
 
     if splash_src_from_assets(base) is None:
         lines.append("warn: assets/splash.png missing")
     return lines
-
 
 def check_has_errors(lines: list[str]) -> bool:
     return any(s.startswith("error:") for s in lines)
@@ -934,6 +1017,159 @@ def rgb565_to_qimage_bytes(pixels: bytes, w: int, h: int) -> bytes:
     return bytes(out)
 
 
+def rgb565_to_qimage_argb32(
+    pixels: bytes,
+    w: int,
+    h: int,
+    chroma: tuple[int, int, int] = UI_ICON_CHROMA,
+) -> bytes:
+    """ARGB32 (Qt little-endian: B,G,R,A) with chroma → alpha 0."""
+    need = w * h * 2
+    if len(pixels) < need:
+        raise ValueError("RGB565 payload too short")
+    cr, cg, cb = chroma
+    c565 = rgb565(cr, cg, cb)
+    out = bytearray(w * h * 4)
+    o = 0
+    for i in range(0, need, 2):
+        pix = pixels[i] | (pixels[i + 1] << 8)
+        if pix == c565:
+            out[o : o + 4] = b"\x00\x00\x00\x00"
+        else:
+            r, g, b = rgb565_to_rgb(pix)
+            out[o] = b
+            out[o + 1] = g
+            out[o + 2] = r
+            out[o + 3] = 255
+        o += 4
+    return bytes(out)
+
+
+def _circle_mask_rows(
+    rows: list[list[tuple[int, int, int] | None]],
+    size: int,
+    outside: tuple[int, int, int],
+) -> list[list[tuple[int, int, int]]]:
+    """Keep pixels inside circle; outside / None → outside color (usually chroma)."""
+    cx = (size - 1) * 0.5
+    cy = (size - 1) * 0.5
+    r2 = (size * 0.5) ** 2
+    out: list[list[tuple[int, int, int]]] = []
+    for y in range(size):
+        row: list[tuple[int, int, int]] = []
+        for x in range(size):
+            dx = x - cx
+            dy = y - cy
+            if (dx * dx + dy * dy) > r2:
+                row.append(outside)
+            else:
+                c = rows[y][x]
+                row.append(c if c is not None else outside)
+        out.append(row)
+    return out
+
+
+def make_solid_ui_icon_pixels(
+    size: int = UI_ICON_SIZE,
+    bg: tuple[int, int, int] = UI_ICON_CARE_BG,
+) -> bytes:
+    """Solid colored circle; outside = chroma (no square corners on device)."""
+    rows: list[list[tuple[int, int, int] | None]] = [
+        [bg] * size for _ in range(size)
+    ]
+    masked = _circle_mask_rows(rows, size, UI_ICON_CHROMA)
+    return pixels_from_rgb_rows(masked, size, size)
+
+
+def load_image_ui_icon(
+    src: Path,
+    size: int = UI_ICON_SIZE,
+    fit: str = "contain",
+) -> bytes:
+    """Fit PNG into size×size circle; PNG alpha / outside → chroma (no bg fill)."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError(
+            "Pillow required for UI icons. Install: py -3 -m pip install Pillow"
+        ) from exc
+
+    im = Image.open(src).convert("RGBA")
+    px = im.load()
+    sw, sh = im.size
+
+    def get_rgba(x: int, y: int) -> tuple[int, int, int, int]:
+        return px[x, y]
+
+    content = fit_rgba_to_box(sw, sh, get_rgba, size, fit)
+    masked = _circle_mask_rows(content, size, UI_ICON_CHROMA)
+    return pixels_from_rgb_rows(masked, size, size)
+
+
+def preview_ui_icon_pixels(
+    base_dir: Path,
+    bin_stem: str,
+    assets_stem: str,
+    mode: str,
+    bg: tuple[int, int, int],
+) -> bytes:
+    """Pixels for Theme panel preview (solid circle or transparent circle image)."""
+    if mode == "solid":
+        return make_solid_ui_icon_pixels(UI_ICON_SIZE, bg)
+    src = find_ui_icon_src(base_dir, assets_stem)
+    if src is None:
+        return make_solid_ui_icon_pixels(UI_ICON_SIZE, bg)
+    return load_image_ui_icon(src, UI_ICON_SIZE)
+
+
+def build_theme_ui_icons(
+    out_dir: Path,
+    base_dir: Path,
+    cfg: dict | None = None,
+) -> str:
+    """Write theme/ui/{feed,play,sleep,chat,wifi_on,wifi_off,settings}.bin.
+
+    mode=image: circular PNG; transparent / outside → LVGL chroma (no bg fill).
+    mode=solid: circular flat color.
+    Missing image-mode assets are skipped so firmware keeps letter/drawn fallback.
+    """
+    ensure_card_config(out_dir)
+    out_dir = Path(out_dir)
+    base_dir = Path(base_dir)
+    cfg = cfg if isinstance(cfg, dict) else {}
+    written: list[str] = []
+    missing: list[str] = []
+    for bin_stem, assets_stem, _default_bg in UI_ICONS:
+        opt = theme_ui_icon_cfg(cfg, bin_stem)
+        mode = opt["mode"]
+        bg = opt["bg"]
+        rel = f"theme/ui/{bin_stem}.bin"
+        path = out_dir / rel
+        if mode == "solid":
+            pixels = make_solid_ui_icon_pixels(UI_ICON_SIZE, bg)
+            write_rgbh(path, UI_ICON_SIZE, UI_ICON_SIZE, pixels)
+            written.append(f"{rel}=solid#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}")
+            continue
+        src = find_ui_icon_src(base_dir, assets_stem)
+        if src is None:
+            missing.append(assets_stem)
+            continue
+        pixels = load_image_ui_icon(src, UI_ICON_SIZE)
+        write_rgbh(path, UI_ICON_SIZE, UI_ICON_SIZE, pixels)
+        written.append(f"{rel}←{src.name} (circle+chroma)")
+    parts = []
+    if written:
+        parts.append(
+            f"wrote {len(written)} UI icons ({UI_ICON_SIZE}x{UI_ICON_SIZE}): "
+            + ", ".join(written)
+        )
+    else:
+        parts.append("no UI icons written")
+    if missing:
+        parts.append("skipped (no PNG): " + ", ".join(missing))
+    return "; ".join(parts)
+
+
 def ensure_card_config(out_pet: Path) -> Path | None:
     """If out is .../pet, write sibling card-root config once (never overwrite)."""
     out_pet = Path(out_pet)
@@ -945,13 +1181,40 @@ def ensure_card_config(out_pet: Path) -> Path | None:
     return path
 
 
-def export_skin_zip(pet_dir: Path, zip_path: Path | None = None) -> Path:
-    """Zip pet/ contents (pack.bin, body/, boot/). Does not include card-root config."""
+def ensure_font_in_pet(pet_dir: Path) -> str | None:
+    """Copy caption.bin into pet/font/ if missing. Returns status line or None."""
     pet_dir = Path(pet_dir)
+    dest = pet_dir / "font" / "caption.bin"
+    if dest.is_file() and dest.stat().st_size > 0:
+        return f"font ok: {dest.relative_to(pet_dir).as_posix()} ({dest.stat().st_size} B)"
+
+    candidates = [
+        HERE.parents[0] / "font" / "out" / "caption.bin",  # tools/pet_tool/font/out
+        HERE / "font" / "caption.bin",
+        pet_dir.parent / "font" / "caption.bin",
+    ]
+    for src in candidates:
+        if not src.is_file() or src.stat().st_size <= 0:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(src.read_bytes())
+        return f"font copied → font/caption.bin ← {src}"
+    return None
+
+
+def export_skin_zip(pet_dir: Path, zip_path: Path | None = None) -> tuple[Path, str]:
+    """Zip pet/ for web upload. Includes font/ when present (or auto-copied).
+
+    Returns (zip_path, note). Device also preserves existing /sdcard/pet/font
+    when the zip has no caption.bin.
+    """
+    pet_dir = Path(pet_dir)
+    font_note = ensure_font_in_pet(pet_dir)
     if zip_path is None:
         zip_path = pet_dir.parent / "pet.zip"
     zip_path = Path(zip_path)
     zip_path.parent.mkdir(parents=True, exist_ok=True)
+    has_font = False
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for p in sorted(pet_dir.rglob("*")):
             if not p.is_file():
@@ -960,11 +1223,20 @@ def export_skin_zip(pet_dir: Path, zip_path: Path | None = None) -> Path:
             if rel == CARD_CONFIG_NAME or rel.startswith("record/"):
                 continue
             zf.write(p, rel)
-    return zip_path
+            if rel == "font/caption.bin":
+                has_font = True
+    if font_note:
+        note = font_note
+    elif has_font:
+        note = "font/caption.bin in zip"
+    else:
+        note = "no font in zip (device keeps existing pet/font if any)"
+    return zip_path, note
 
 
 def build_pack(cfg: dict, out_dir: Path, cfg_path: Path | None = None) -> str:
     """Write pack.bin + body/*.bin. Optional image sources resolved vs cfg_path parent."""
+    ensure_optional_clips(cfg)
     ensure_card_config(out_dir)
     body_dir = out_dir / "body"
     body_dir.mkdir(parents=True, exist_ok=True)
@@ -1075,7 +1347,11 @@ def find_ui_icon_src(base_dir: Path, assets_stem: str) -> Path | None:
 
 
 def default_ui_icon_bg(bin_stem: str) -> tuple[int, int, int]:
-    return UI_ICON_CHAT_BG if bin_stem == "chat" else UI_ICON_CARE_BG
+    if bin_stem == "chat":
+        return UI_ICON_CHAT_BG
+    if bin_stem in ("wifi_on", "wifi_off"):
+        return UI_ICON_NET_BG
+    return UI_ICON_CARE_BG
 
 
 def theme_ui_icon_cfg(cfg: dict, bin_stem: str) -> dict:
@@ -1110,105 +1386,3 @@ def set_theme_ui_icon_cfg(
         "mode": mode,
         "bg": f"#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}",
     }
-
-
-def make_solid_ui_icon_pixels(
-    size: int = UI_ICON_SIZE,
-    bg: tuple[int, int, int] = UI_ICON_CARE_BG,
-) -> bytes:
-    rows = [[bg] * size for _ in range(size)]
-    return pixels_from_rgb_rows(rows, size, size)
-
-
-def load_image_ui_icon(
-    src: Path,
-    size: int = UI_ICON_SIZE,
-    bg: tuple[int, int, int] = UI_ICON_CARE_BG,
-    fit: str = "contain",
-) -> bytes:
-    """Fit icon PNG into size×size; transparent → button bg (RGB565 has no alpha)."""
-    try:
-        from PIL import Image
-    except ImportError as exc:
-        raise RuntimeError(
-            "Pillow required for UI icons. Install: py -3 -m pip install Pillow"
-        ) from exc
-
-    im = Image.open(src).convert("RGBA")
-    px = im.load()
-    sw, sh = im.size
-
-    def get_rgba(x: int, y: int) -> tuple[int, int, int, int]:
-        return px[x, y]
-
-    content = fit_rgba_to_box(sw, sh, get_rgba, size, fit)
-    rows = [[(c if c is not None else bg) for c in row] for row in content]
-    return pixels_from_rgb_rows(rows, size, size)
-
-
-def preview_ui_icon_pixels(
-    base_dir: Path,
-    bin_stem: str,
-    assets_stem: str,
-    mode: str,
-    bg: tuple[int, int, int],
-) -> bytes:
-    """Pixels for Theme panel preview (solid or image+bg)."""
-    if mode == "solid":
-        return make_solid_ui_icon_pixels(UI_ICON_SIZE, bg)
-    src = find_ui_icon_src(base_dir, assets_stem)
-    if src is None:
-        return make_solid_ui_icon_pixels(UI_ICON_SIZE, bg)
-    return load_image_ui_icon(src, UI_ICON_SIZE, bg)
-
-
-def build_theme_ui_icons(
-    out_dir: Path,
-    base_dir: Path,
-    cfg: dict | None = None,
-) -> str:
-    """Write theme/ui/{feed,play,sleep,chat}.bin.
-
-    mode=image: needs assets/ui_*.* ; transparent filled with bg.
-    mode=solid: flat bg color (no PNG required).
-    Missing image-mode assets are skipped so firmware keeps letter fallback.
-    """
-    ensure_card_config(out_dir)
-    out_dir = Path(out_dir)
-    base_dir = Path(base_dir)
-    cfg = cfg if isinstance(cfg, dict) else {}
-    written: list[str] = []
-    missing: list[str] = []
-    for bin_stem, assets_stem, _default_bg in UI_ICONS:
-        opt = theme_ui_icon_cfg(cfg, bin_stem)
-        mode = opt["mode"]
-        bg = opt["bg"]
-        rel = f"theme/ui/{bin_stem}.bin"
-        path = out_dir / rel
-        if mode == "solid":
-            pixels = make_solid_ui_icon_pixels(UI_ICON_SIZE, bg)
-            write_rgbh(path, UI_ICON_SIZE, UI_ICON_SIZE, pixels)
-            written.append(f"{rel}=solid#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}")
-            continue
-        src = find_ui_icon_src(base_dir, assets_stem)
-        if src is None:
-            missing.append(assets_stem)
-            continue
-        pixels = load_image_ui_icon(src, UI_ICON_SIZE, bg)
-        write_rgbh(path, UI_ICON_SIZE, UI_ICON_SIZE, pixels)
-        written.append(
-            f"{rel}←{src.name}+bg#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}"
-        )
-    parts = []
-    if written:
-        parts.append(
-            f"wrote {len(written)} UI icons ({UI_ICON_SIZE}x{UI_ICON_SIZE}): "
-            + ", ".join(written)
-        )
-    else:
-        parts.append(
-            "no UI icons written (set solid color or add assets/ui_feed|ui_play|ui_sleep|ui_chat.*)"
-        )
-    if missing:
-        parts.append("skip missing image: " + ", ".join(missing))
-    return "; ".join(parts)

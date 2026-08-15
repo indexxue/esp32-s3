@@ -721,11 +721,35 @@ esp_err_t net_wifi_sta_disconnect(void)
     if ((s_running_mode != NET_WIFI_MODE_STA) && (s_running_mode != NET_WIFI_MODE_SOFTAP)) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (s_sta_ip_event_group != NULL) {
+        (void)xEventGroupClearBits(s_sta_ip_event_group, k_sta_got_ip_bit);
+    }
     err = esp_wifi_disconnect();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "esp_wifi_disconnect: %s", esp_err_to_name(err));
     }
+    net_wifi_notify_ipv4_event();
     return err;
+}
+
+esp_err_t net_wifi_sta_connect(void)
+{
+    esp_err_t err;
+
+    if (!s_wifi_iface_started || (s_running_mode != NET_WIFI_MODE_STA)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_sta_ip_event_group != NULL) {
+        (void)xEventGroupClearBits(s_sta_ip_event_group, k_sta_got_ip_bit);
+    }
+    err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_connect: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "STA reconnect requested");
+    net_wifi_notify_ipv4_event();
+    return ESP_OK;
 }
 
 esp_err_t net_wifi_stop(void)

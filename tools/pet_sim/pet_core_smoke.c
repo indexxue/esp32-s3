@@ -14,12 +14,32 @@ static void fail(const char *msg)
     exit(1);
 }
 
+static void drain_intents(void)
+{
+    pet_intent_t in;
+
+    while (pet_core_take_intent(&in)) {
+    }
+}
+
+static void tick_n(int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        (void)pet_core_post(PET_EVT_TICK_1S, 0);
+        pet_core_poll();
+    }
+}
+
 int main(void)
 {
     pet_needs_t n;
     pet_needs_cfg_t cfg = *pet_core_default_cfg();
     pet_intent_t in;
     int saw_clip = 0;
+    uint8_t hunger_after;
+    uint8_t mood_before;
 
     cfg.hunger_decay_s = 2;
     cfg.mood_decay_s = 2;
@@ -49,6 +69,7 @@ int main(void)
     if (n.hunger <= 70U) {
         fail("feed should raise hunger");
     }
+    hunger_after = n.hunger;
 
     /* eat is priority 20: poke must not interrupt */
     (void)pet_core_post(PET_EVT_TOUCH_TAP, 0);
@@ -57,16 +78,35 @@ int main(void)
         fail("poke must not interrupt eat");
     }
 
-    {
-        int i;
-        for (i = 0; i < 4; i++) {
-            (void)pet_core_post(PET_EVT_TICK_1S, 0);
-            pet_core_poll();
-        }
-    }
+    tick_n(4);
     if (pet_core_clip() == PET_CLIP_EAT) {
         fail("eat should finish");
     }
+
+    /* Second feed while full (>=85): refuse, hunger unchanged */
+    if (hunger_after < 85U) {
+        (void)pet_core_post(PET_EVT_CARE_FEED, 0);
+        pet_core_poll();
+        tick_n(4);
+        pet_core_get_needs(&n);
+        hunger_after = n.hunger;
+    }
+    drain_intents();
+    pet_core_get_needs(&n);
+    hunger_after = n.hunger;
+    if (hunger_after < 85U) {
+        fail("expected full hunger for refuse test");
+    }
+    (void)pet_core_post(PET_EVT_CARE_FEED, 0);
+    pet_core_poll();
+    if (pet_core_clip() != PET_CLIP_REFUSE) {
+        fail("full feed -> refuse");
+    }
+    pet_core_get_needs(&n);
+    if (n.hunger != hunger_after) {
+        fail("refuse must not raise hunger");
+    }
+    tick_n(3);
 
     (void)pet_core_post(PET_EVT_CARE_SLEEP, 0);
     pet_core_poll();
@@ -79,6 +119,24 @@ int main(void)
     pet_core_get_needs(&n);
     if (n.sleeping) {
         fail("tap wakes");
+    }
+
+    /* Decay mood below cold threshold, then tap -> refuse, mood unchanged */
+    tick_n(100);
+    pet_core_get_needs(&n);
+    if (n.mood >= 30U) {
+        fail("mood should be cold after decay");
+    }
+    mood_before = n.mood;
+    drain_intents();
+    (void)pet_core_post(PET_EVT_TOUCH_TAP, 0);
+    pet_core_poll();
+    if (pet_core_clip() != PET_CLIP_REFUSE) {
+        fail("cold poke -> refuse");
+    }
+    pet_core_get_needs(&n);
+    if (n.mood != mood_before) {
+        fail("cold poke must not raise mood");
     }
 
     printf("pet_core_smoke ok clip=%s face=%s h=%u m=%u e=%u\n",

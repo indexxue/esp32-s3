@@ -1,4 +1,4 @@
-# Download LVGL PC simulator into tools/lvgl_sim/ (gitignored — do not commit).
+﻿# Download LVGL PC simulator into tools/lvgl_sim/ (gitignored — do not commit).
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File .\tools\setup_lvgl_sim.ps1
 #   powershell -ExecutionPolicy Bypass -File .\tools\setup_lvgl_sim.ps1 -Update
@@ -9,7 +9,7 @@
 #   Set LvglWindowsSimulator as startup project → F5
 # Desktop pet panel: set simulator resolution to 240x240 (round GC9A01).
 # Then inject the pet framework:
-#   py -3 tools\pet_skin\cli.py --splash
+#   py -3 tools\pet_tool\skin\cli.py --splash
 #   powershell -ExecutionPolicy Bypass -File .\tools\pet_sim\install_into_lvgl_sim.ps1
 #
 # If clone fails with SSL verify errors (common on some Windows/corp nets):

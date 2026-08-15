@@ -8,9 +8,9 @@ Requires Node.js (npx lv_font_conv) and a CJK TTF/OTF, e.g. Source Han Sans SC
 or Noto Sans SC.
 
 Examples:
-  py -3 tools/pet_font/make_caption_bin.py --font path/to/NotoSansSC-Regular.otf
-  py -3 tools/pet_font/make_caption_bin.py --font X.otf --out D:/sdcard/pet/font/caption.bin
-  py -3 tools/pet_font/make_caption_bin.py --font X.otf --size 14 --bpp 4
+  py -3 tools/pet_tool/font/make_caption_bin.py --font path/to/NotoSansSC-Regular.otf
+  py -3 tools/pet_tool/font/make_caption_bin.py --font X.otf --out D:/sdcard/pet/font/caption.bin
+  py -3 tools/pet_tool/font/make_caption_bin.py --font X.otf --size 14 --bpp 4
 
 Charset default: ASCII + CJK punctuation + full GB2312 (~6.7k Han).
 Use --ascii-only to smoke-test the pipeline without a CJK face.
@@ -56,7 +56,7 @@ def main() -> int:
     ap.add_argument("--font", required=True, help="TTF/OTF with CJK glyphs")
     ap.add_argument(
         "--out",
-        default=str(Path("tools/pet_font/out/caption.bin")),
+        default=str(Path("tools/pet_tool/font/out/caption.bin")),
         help="Output LVGL .bin (copy to SD as pet/font/caption.bin)",
     )
     ap.add_argument("--size", type=int, default=14, help="Pixel size (default 14)")

@@ -69,6 +69,9 @@ typedef enum
     LED_SCENE_ID_BALLOT_VIOLATION, /**< 违规重复投票：红色急促闪（至取消） */
     LED_SCENE_ID_BALLOT_FAULT,     /**< 系统异常：红色常亮（至取消） */
     LED_SCENE_ID_BALLOT_WIFI_WARN, /**< Wi-Fi STA 离线：黄色常亮（至取消） */
+    /** desktop_pet 对话业务灯效（听 / 答） */
+    LED_SCENE_ID_PET_LISTEN, /**< 用户说话 / 聆听：青色呼吸（至取消） */
+    LED_SCENE_ID_PET_SPEAK,  /**< 助手回答 / 播放：暖橙呼吸（至取消） */
     LED_SCENE_ID_MAX_NUM,
 } led_scene_id_e;
 

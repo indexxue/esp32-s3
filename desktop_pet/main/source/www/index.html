@@ -70,7 +70,7 @@ details.card[open]>summary::after{content:" ▴"}
 
   <details class="card">
     <summary>上传皮肤包（pet.zip）</summary>
-    <p class="hint">覆盖 <code>/sdcard/pet/</code> 后自动重启；不会改卡根 <code>config</code>。</p>
+    <p class="hint">覆盖 <code>/sdcard/pet/</code> 后自动重启；不改卡根 <code>config</code>。zip 若无 <code>font/caption.bin</code>，保留卡上原字库。</p>
     <div class="actions" style="justify-content:flex-start;margin-bottom:8px">
       <input type="file" id="skinFile" accept=".zip,application/zip">
       <button type="button" class="btn btn-accent" id="btnSkin">上传并重启</button>

@@ -56,6 +56,12 @@ esp_err_t net_wifi_stop(void);
  */
 esp_err_t net_wifi_sta_disconnect(void);
 
+/**
+ * @brief 用已配置的 STA 凭据发起连接（`esp_wifi_connect`）；用于手动断连后的重连。
+ * @return `ESP_ERR_INVALID_STATE` 表示 Wi‑Fi 未启动或当前非 STA 模式。
+ */
+esp_err_t net_wifi_sta_connect(void);
+
 bool net_wifi_is_started(void);
 
 /** 当前 `net_wifi_start` 成功的模式；未启动时为 `NET_WIFI_MODE_OFF`。 */

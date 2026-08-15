@@ -86,6 +86,7 @@ static const char *const TAG = "nvs";
 #define NVS_KEY_CAMERA_CFG "cam_cfg"
 #define NVS_KEY_SERVO_CAL "servo_cal"
 #define NVS_KEY_TOUCH_CAL "touch_cal"
+#define NVS_KEY_PET_NEEDS "pet_needs"
 
 /** 与 board.h 舵机映射一致；nvs 不依赖 board，避免层倒挂。 */
 #define NVS_SERVO_CALIB_PULSE_MIN_US (500U)
@@ -1272,5 +1273,78 @@ bool nvs_touch_calib_delete(void)
         return false;
     }
     st = blob_del(NVS_KEY_TOUCH_CAL);
+    return (st == NVS_OK) || (st == NVS_ERR_NOT_FOUND);
+}
+
+void nvs_pet_needs_default(nvs_pet_needs_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    (void)memset(out, 0, sizeof(*out));
+    out->magic = NVS_PET_NEEDS_MAGIC;
+    out->hunger = 70U;
+    out->mood = 70U;
+    out->energy = 80U;
+    out->sleeping = 0U;
+}
+
+bool nvs_pet_needs_validate(const nvs_pet_needs_t *cfg)
+{
+    if (cfg == NULL) {
+        return false;
+    }
+    if (cfg->magic != NVS_PET_NEEDS_MAGIC) {
+        return false;
+    }
+    if ((cfg->hunger > 100U) || (cfg->mood > 100U) || (cfg->energy > 100U)) {
+        return false;
+    }
+    if (cfg->sleeping > 1U) {
+        return false;
+    }
+    return true;
+}
+
+_Static_assert(sizeof(nvs_pet_needs_t) <= NVS_KEY_VALUE_MAX, "pet needs blob must fit NVS_KEY_VALUE_MAX");
+
+bool nvs_pet_needs_get(nvs_pet_needs_t *out)
+{
+    nvs_pet_needs_t tmp;
+    size_t          len = sizeof(tmp);
+
+    if (out == NULL) {
+        return false;
+    }
+    if (blob_get(NVS_KEY_PET_NEEDS, &tmp, &len) != NVS_OK) {
+        return false;
+    }
+    if ((len != sizeof(tmp)) || !nvs_pet_needs_validate(&tmp)) {
+        (void)blob_del(NVS_KEY_PET_NEEDS);
+        return false;
+    }
+    *out = tmp;
+    return true;
+}
+
+bool nvs_pet_needs_set(const nvs_pet_needs_t *cfg)
+{
+    if (!s_ready || (cfg == NULL)) {
+        return false;
+    }
+    if (!nvs_pet_needs_validate(cfg)) {
+        return false;
+    }
+    return (blob_set(NVS_KEY_PET_NEEDS, cfg, sizeof(*cfg)) == NVS_OK);
+}
+
+bool nvs_pet_needs_delete(void)
+{
+    nvs_err_t st;
+
+    if (!s_ready) {
+        return false;
+    }
+    st = blob_del(NVS_KEY_PET_NEEDS);
     return (st == NVS_OK) || (st == NVS_ERR_NOT_FOUND);
 }

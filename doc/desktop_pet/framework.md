@@ -1,9 +1,9 @@
-# desktop_pet 框架地基
+﻿# desktop_pet 框架地基
 
-**版本**：1.2  
-**日期**：2026-08-14  
+**版本**：1.3  
+**日期**：2026-08-15  
 **工程**：[`desktop_pet/`](../../desktop_pet/)  
-**状态**：引擎 + 资源包 + 分层表演；语音会话只留事件口  
+**状态**：引擎 + 资源包 + 分层表演；照料分档（喂/戳）；语音会话只留事件口  
 **文档集**：[`README.md`](README.md) · [`CONTEXT.md`](CONTEXT.md) · [`product.md`](product.md) · [`cloud_asr.md`](cloud_asr.md)
 
 ---
@@ -27,7 +27,7 @@
 | 表演 | [`desktop_pet/main/source/pet/pet_view/`](../../desktop_pet/main/source/pet/pet_view/) | LVGL 9、`pet_core`、`pet_res` |
 | 板端口 | [`desktop_pet/main/source/ui.c`](../../desktop_pet/main/source/ui.c) | 板级 + 上列模块 |
 | 模拟器端口 | [`tools/pet_sim/`](../../tools/pet_sim/) | 上列模块 + Windows LVGL 模拟器 |
-| 打包工具 | [`tools/pet_skin/`](../../tools/pet_skin/) | Python 3 · Qt GUI + CLI |
+| 作者工具伞 | [`tools/pet_tool/`](../../tools/pet_tool/) | `skin` 打包 · `web` 预览 · `font` 字库 |
 
 `common/` 不放宠物逻辑（其它工程用不上）。
 
@@ -65,7 +65,7 @@
 |----|--------|--------|
 | `PET_INTENT_CLIP` | `pet_clip_id_t` | `pet_view` 换身体帧 |
 | `PET_INTENT_FACE` | `pet_face_id_t` | 预留：`pet_view` 消费但不画五官 |
-| `PET_INTENT_HUD` | —（读 `pet_core_get_needs`） | Needs 三点 |
+| `PET_INTENT_HUD` | —（读 `pet_core_get_needs`） | Needs 底弧 |
 | `PET_INTENT_LED` | 0=eat 1=play | `led_scene` |
 | `PET_INTENT_MOTOR` | 预留 | 未接 TB6612 |
 | `PET_INTENT_SFX` | 预留 | 未接 |
@@ -75,15 +75,38 @@
 
 ## 5. Needs 与 clip
 
-三格 0–100：`hunger` / `mood` / `energy`。无死亡、无进化；掉到 0 只切 `sad` / `sleepy`。
+三格 0–100%：`hunger` / `mood` / `energy`。无死亡、无进化；掉到 0 只切 `sad` / `sleepy`。值经 NVS（`pet_needs`）持久化。
 
-默认衰减（无 pack 时，桌面友好、小时级）：饥饿 180 s/点、心情 240 s/点、精力 300 s/点；睡觉时精力 20 s/点恢复。模拟器默认 pack 用数秒级，便于看见 HUD 变化。
+消耗在 **30 s** 节拍上结算（非每秒）：默认饥饿 900 s/%、心情 1200 s/%、精力 1500 s/%；睡觉时精力 180 s/% 恢复。pack 可覆盖。HUD 随消耗节拍或照料动作刷新。
 
 | clip | 优先级 | 时长 | 触发 |
 |------|--------|------|------|
 | `idle` / `sleepy` / `sad` / `sleep_loop` | 0 | 循环 | needs / 睡眠 |
-| `poke` | 10 | 1 s | 点身体 |
-| `eat` / `play` | 20 | 3 s / 4 s | 喂 / 玩；播完前回不去低优先级 |
+| `poke` | 10 | 1 s | 点身体（心情尚可） |
+| `refuse` | 15 | 2 s | 喂拒 / 冷戳；缺包帧时 `pet_res` fallback → `sad` |
+| `eat` / `play` | 20 | 3 s / 4 s | 喂（未拒）/ 玩；播完前回不去低优先级 |
+
+### 5.1 照料分档（反应深度 · 首版喂+戳）
+
+选型：**规则定档**（Needs 区间）+ **档内随机后置**；clip 采用**混合挂载**（复用 `eat`/`poke`，共享 one-shot `refuse`）。玩分档与 LED/SFX 强度后续专项。
+
+**喂**（看动作前 `hunger`；长按身体与照料「喂」同一路径）
+
+| 档 | 条件 | clip / face | Needs |
+|----|------|-------------|-------|
+| 爽 | `< 40` | `eat` + happy | hunger/mood 照常加 |
+| 平 | `40–84` | `eat` | 照常加 |
+| 拒 | `≥ 85` | `refuse` + sad | **不涨** hunger；mood 不变 |
+
+**戳**
+
+| 档 | 条件 | clip / face | Needs |
+|----|------|-------------|-------|
+| 醒 | 正在睡 | 无 poke；只 wake → idle | 仅醒 |
+| 平 | 醒着且 mood `≥ 30` | `poke` + happy | mood 小加（`tap_mood`） |
+| 冷 | 醒着且 mood `< 30` | `refuse` + sad | mood **不加** |
+
+玩（未分档）：仍 `play`；累玩软惩等后续。五官本阶段不画，冷/拒靠 `refuse` 身体帧可感知。
 
 眨眼由 `pet_view` 本地定时，不占 clip（**本阶段不画五官，眨眼也不做**）。
 
@@ -93,7 +116,7 @@
 
 ## 6. `pack.bin` 布局（小端）
 
-设备**不解析 JSON**。作者侧 [`pack.json`](../../tools/pet_skin/pack.json) → `skin_core` / `cli.py` → `pack.bin` + `body/*.bin`。
+设备**不解析 JSON**。作者侧 [`pack.json`](../../tools/pet_tool/skin/pack.json) → `skin_core` / `cli.py` → `pack.bin` + `body/*.bin`。
 
 ### 6.1 文件头 20 字节
 
@@ -115,7 +138,7 @@
 
 每条：`clip_id` u8、`frame_count` u8、`fps` u8、`reserved` u8，随后 `frame_count` 个 **32 字节** 相对路径（ASCII、NUL 填充），例如 `body/idle_0.bin`。
 
-`clip_id` 与 `pet_clip_id_t` 一致：0 idle，1 sleepy，2 eat，3 play，4 sad，5 sleep_loop，6 poke。
+`clip_id` 与 `pet_clip_id_t` 一致：0 idle，1 sleepy，2 eat，3 play，4 sad，5 sleep_loop，6 poke，7 refuse。旧包无 `refuse` 时加载器回退到 `sad` 帧。
 
 ### 6.3 身体帧 `.bin`（RGBH）
 
@@ -157,7 +180,7 @@
 - 省略任一零件 → 该零件用内置默认相对偏移 + `angle=0`。  
 - 整段省略 → 行为与 version 1 相同（屏中心固定叠脸）。
 
-工具：[`tools/pet_skin/`](../../tools/pet_skin/) Design 预览上拖拽位置、旋转角度后写回 JSON；**禁止**要求生图 AI 输出锚点。
+工具：[`tools/pet_tool/skin/`](../../tools/pet_tool/skin/) Design 预览上拖拽位置、旋转角度后写回 JSON；**禁止**要求生图 AI 输出锚点。
 
 #### `pack.bin`（version ≥ 2）
 
@@ -195,7 +218,7 @@ version 1 包：无五官块，继续中心对齐。
 产品目标分层见 [`product.md`](product.md) §B / §C。摘要：
 
 ```
-Needs 三点 → 身体（无五官）→ 左弧喂/玩/睡 + 右侧聊
+Needs 底弧 → 身体（无五官）→ 左弧喂/玩/睡 + 右侧聊
 对话页 D：大身体 + 字幕 + 波形（独立页；五官预留）
 ```
 
@@ -219,15 +242,15 @@ Needs 三点 → 身体（无五官）→ 左弧喂/玩/睡 + 右侧聊
 3. 用 Visual Studio 打开 `tools\lvgl_sim\lv_port_pc_visual_studio\LVGL.sln`，启动 `LvglWindowsSimulator`（240×240）。
 4. 键盘 `1` 喂、`2` 玩、`3` 睡、`4` 醒。工作目录为仓库根，才能读到 `tools/pet_sim/sdcard/pet`。
 
-重新生成资源：见 [`tools/pet_skin/README.md`](../../tools/pet_skin/README.md)。
+重新生成资源：见 [`tools/pet_tool/skin/README.md`](../../tools/pet_tool/skin/README.md)。
 
 ```powershell
-py -3 tools/pet_skin/run_gui.py
+py -3 tools/pet_tool/skin/run_gui.py
 # 或 CLI：绑定 assets/ 后打 pack + splash + UI icons
-py -3 tools/pet_skin/cli.py --bind --splash --theme-ui
+py -3 tools/pet_tool/skin/cli.py --bind --splash --theme-ui
 ```
 
-GUI 扩展：在 `tools/pet_skin/app/features/` 新增 `FeatureModule`，登记到 `registry.built_in_features()`；写盘只调用 `skin_core`。开机仅静态 splash。
+GUI 扩展：在 `tools/pet_tool/skin/app/features/` 新增 `FeatureModule`，登记到 `registry.built_in_features()`；写盘只调用 `skin_core`。开机仅静态 splash。
 
 ---
 

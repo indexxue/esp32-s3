@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>desktop_pet · 产品预览（同步固件）</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1c2030;
+    --ink: #e8eaf0;
+    --muted: #8b93a7;
+    --accent: #7ec8ff;
+    --line: #2a3148;
+    --screen-bg: #202020;
+    --safe: rgba(255, 120, 80, 0.35);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font: 14px/1.45 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(900px 500px at 20% -10%, #243056 0%, transparent 55%),
+      radial-gradient(700px 420px at 100% 0%, #1a2a28 0%, transparent 50%),
+      var(--bg);
+  }
+  .wrap {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) 1fr;
+    gap: 20px;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px 20px 40px;
+  }
+  @media (max-width: 860px) { .wrap { grid-template-columns: 1fr; } }
+  h1 { margin: 0 0 6px; font-size: 18px; font-weight: 650; }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
+  .sub code, .notes code, .meta code {
+    font: 12px/1 ui-monospace, Consolas, monospace;
+    color: #c9d4ff;
+    background: #0f1320;
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .panel {
+    background: color-mix(in srgb, var(--panel) 92%, black);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .panel + .panel { margin-top: 12px; }
+  .panel h2 {
+    margin: 0 0 10px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, select {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: #151925;
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover, select:hover { border-color: #3d4766; }
+  button.active {
+    border-color: var(--accent);
+    color: #081018;
+    background: var(--accent);
+    font-weight: 600;
+  }
+  label.chk {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+  }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .meta { margin-top: 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .notes { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+  .notes li { margin: 4px 0; }
+  .needs-readout { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
+
+  .stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    min-height: 520px;
+  }
+  .bezel {
+    position: relative;
+    padding: 18px;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 35% 28%, #2a2f3d, #0c0e14 62%, #050608 100%);
+    box-shadow:
+      0 0 0 1px #33384a,
+      0 18px 40px rgba(0,0,0,.45),
+      inset 0 1px 0 rgba(255,255,255,.06);
+    transform-origin: center center;
+  }
+  .screen {
+    position: relative;
+    width: 240px;
+    height: 240px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--screen-bg);
+    image-rendering: pixelated;
+  }
+  .page { display: none; position: absolute; inset: 0; }
+  .page.on { display: block; }
+
+  .guides { pointer-events: none; position: absolute; inset: 0; z-index: 50; }
+  .guides .cross {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(to right, transparent 119px, rgba(126,200,255,.35) 119px, rgba(126,200,255,.35) 121px, transparent 121px),
+      linear-gradient(to bottom, transparent 119px, rgba(126,200,255,.35) 119px, rgba(126,200,255,.35) 121px, transparent 121px);
+  }
+  .guides .safe-ring {
+    position: absolute; left: 50%; top: 50%;
+    width: 200px; height: 200px; margin: -100px 0 0 -100px;
+    border: 1px dashed var(--safe); border-radius: 50%;
+  }
+
+  /* Splash C — pet_view splash */
+  #splash { background: #10141c; }
+  #splash .pet {
+    position: absolute; left: 50%; top: 46%;
+    width: 96px; height: 96px; margin: -48px 0 0 -48px;
+    border-radius: 50%; background: #4aa3c8;
+    background-size: contain; background-repeat: no-repeat; background-position: center;
+  }
+  #splash .pet.has-skin { background-color: transparent; }
+  #splash .arc {
+    position: absolute; left: 50%; top: 46%;
+    width: 132px; height: 132px; margin: -66px 0 0 -66px;
+    border-radius: 50%;
+    background: conic-gradient(#7ec8ff 0 72%, #2a3148 72% 100%);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+            mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+    animation: spin 1.2s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #splash .hint {
+    position: absolute; left: 0; right: 0; bottom: 28px;
+    text-align: center; font: 10px/1 ui-monospace, Consolas, monospace; color: #66708a;
+  }
+
+  /* Home — product B: needs + wifi + left care arc + right chat */
+  #home { background: #202020; }
+  #home .body {
+    position: absolute; left: 50%; top: 50%;
+    width: 150px; height: 150px;
+    margin: -81px 0 0 -75px; /* center + -6 */
+    border-radius: 50%;
+    background: #4aa3c8;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  #home .body.has-skin { background: transparent; }
+  #home .body img.skin-frame {
+    width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none;
+  }
+  #home .needs {
+    position: absolute; left: 50%; top: 20px;
+    transform: translateX(-50%);
+    display: flex; gap: 8px; z-index: 3;
+  }
+  #home .needs b {
+    width: 10px; height: 10px; border-radius: 50%;
+    box-shadow: inset 0 0 0 2px rgba(0,0,0,.25);
+    opacity: 0.35;
+  }
+  #home .needs b.on { opacity: 1; }
+  #home .needs b:nth-child(1) { background: #7cff9a; }
+  #home .needs b:nth-child(2) { background: #7ec8ff; }
+  #home .needs b:nth-child(3) { background: #ffe27a; }
+  #home .wifi {
+    position: absolute; left: calc(50% + 42px); top: 16px;
+    width: 22px; height: 22px; margin-left: -11px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    z-index: 3;
+  }
+  #home .wifi img { width: 18px; height: 18px; object-fit: contain; }
+  #home .wifi.fb {
+    background: transparent;
+  }
+  #home .wifi.fb::before {
+    content: "";
+    width: 14px; height: 10px;
+    border: 2px solid #7ec8ff;
+    border-bottom: none;
+    border-radius: 14px 14px 0 0;
+    opacity: 0.95;
+  }
+  #home .wifi.off.fb::before { border-color: #606870; }
+  #home .toast {
+    position: absolute; left: 50%; top: 36px;
+    transform: translateX(-50%);
+    font: 10px/1 "Segoe UI", "PingFang SC", sans-serif;
+    color: #a0a0a0; opacity: 0; pointer-events: none; transition: opacity .3s;
+  }
+  #home .toast.show { opacity: 1; }
+  #home .care {
+    position: absolute; width: 28px; height: 28px; border-radius: 50%;
+    background: rgba(255,255,255,.12); color: #e8eaf0;
+    display: grid; place-items: center;
+    font: 600 11px/1 "Segoe UI", "PingFang SC", sans-serif;
+    cursor: pointer; z-index: 4; overflow: hidden;
+    border: none; padding: 0;
+  }
+  #home .care img { width: 22px; height: 22px; object-fit: contain; }
+  #home .care.f { left: calc(50% - 84px - 14px); top: calc(50% - 62px - 14px); }
+  #home .care.p { left: calc(50% - 104px - 14px); top: calc(50% - 14px); }
+  #home .care.s { left: calc(50% - 84px - 14px); top: calc(50% + 62px - 14px); }
+  #home .chat-btn {
+    position: absolute; right: 10px; top: calc(50% - 14px);
+    width: 28px; height: 28px; border-radius: 50%;
+    background: rgba(126, 200, 255, 0.28);
+    box-shadow: inset 0 0 0 1px rgba(126, 200, 255, 0.65);
+    color: #dceeff;
+    display: grid; place-items: center;
+    font: 600 11px/1 "Segoe UI", "PingFang SC", sans-serif;
+    cursor: pointer; z-index: 4; overflow: hidden;
+    border: none; padding: 0;
+  }
+  #home .chat-btn img { width: 22px; height: 22px; object-fit: contain; }
+
+  /* Chat D — overlay on darker home bg */
+  #chat { background: #141820; }
+  #chat .back {
+    position: absolute; left: 16px; top: 16px;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: rgba(255,255,255,.08); color: #c8d0e0;
+    display: grid; place-items: center; cursor: pointer;
+    font: 14px/1 sans-serif; z-index: 5; border: none;
+  }
+  #chat .mode {
+    position: absolute; left: 0; right: 0; top: 22px;
+    text-align: center;
+    font: 600 12px/1 "Segoe UI", "PingFang SC", sans-serif;
+    color: #7a849c; z-index: 5;
+  }
+  #chat .mode.listen { color: #7ec8ff; }
+  #chat .mode.speak { color: #6dd6a0; }
+  #chat .mode.connecting { color: #e0b060; }
+  #chat .body {
+    position: absolute; left: 50%; top: 46%;
+    width: 150px; height: 150px; margin: -75px 0 0 -75px;
+    border-radius: 50%; background: #4aa3c8; overflow: hidden; cursor: pointer;
+  }
+  #chat .body.has-skin { background: transparent; }
+  #chat .body img.skin-frame {
+    width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none;
+  }
+  #chat .cap {
+    position: absolute; left: 50%; bottom: 48px;
+    transform: translateX(-50%);
+    width: 196px; min-height: 40px; max-height: 56px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(0,0,0,.35);
+    color: #dce6f8;
+    font: 12px/1.35 "Segoe UI", "PingFang SC", sans-serif;
+    text-align: center;
+    overflow: hidden;
+    z-index: 5;
+  }
+  #chat .cap.muted { color: #6a7388; }
+  #chat .wave {
+    position: absolute; left: 50%; bottom: 14px;
+    transform: translateX(-50%);
+    display: none; gap: 4px; align-items: flex-end; height: 28px; z-index: 5;
+  }
+  #chat .wave.on { display: flex; }
+  #chat .wave span {
+    width: 4px; border-radius: 2px; background: #7ec8ff;
+    animation: bar 0.7s ease-in-out infinite alternate;
+  }
+  #chat .wave span:nth-child(1) { height: 8px; animation-delay: 0s; }
+  #chat .wave span:nth-child(2) { height: 16px; animation-delay: .1s; }
+  #chat .wave span:nth-child(3) { height: 22px; animation-delay: .2s; }
+  #chat .wave span:nth-child(4) { height: 14px; animation-delay: .15s; }
+  #chat .wave span:nth-child(5) { height: 10px; animation-delay: .05s; }
+  @keyframes bar { to { transform: scaleY(1.45); } }
+
+  .caption { color: var(--muted); font-size: 13px; text-align: center; max-width: 420px; }
+  .caption strong { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <aside>
+      <h1>产品预览</h1>
+      <p class="sub">与固件同步：开机 C · 主界面（左弧照料 + 右聊）· 对话 D。<br />
+        <code>py -3 tools/pet_tool/serve.py</code></p>
+
+      <div class="panel">
+        <h2>画面</h2>
+        <div class="row" id="pageBtns">
+          <button type="button" data-page="splash">开机</button>
+          <button type="button" data-page="home" class="active">主界面</button>
+          <button type="button" data-page="chat">对话</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>皮肤</h2>
+        <div class="row">
+          <select id="skinClip"></select>
+          <button type="button" id="skinReload">Reload</button>
+        </div>
+        <div class="meta" id="skinStatus">not loaded</div>
+      </div>
+
+      <div class="panel">
+        <h2>Needs 试玩（对齐 §5.1）</h2>
+        <div class="needs-readout" id="needsText">h=70 m=70 e=80</div>
+        <ul class="notes" style="margin-top:8px">
+          <li>喂：hunger≥85 → <code>refuse</code>，不涨</li>
+          <li>戳身体：mood&lt;30 → <code>refuse</code>；睡中只醒</li>
+          <li>玩 / 睡：弧钮；聊 → 对话页</li>
+        </ul>
+        <div class="row" style="margin-top:8px">
+          <button type="button" id="btnDecay">衰减一轮</button>
+          <button type="button" id="btnResetNeeds">重置 Needs</button>
+          <label class="chk"><input type="checkbox" id="chkOnline" checked /> Wi‑Fi 在线</label>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>调试</h2>
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="chkCross" /> 十字</label>
+          <label class="chk"><input type="checkbox" id="chkSafe" checked /> 安全圆 ø200</label>
+        </div>
+        <div style="margin-top:12px">
+          <label class="chk" style="width:100%; justify-content:space-between">
+            放大 <span id="scaleVal">2.0×</span>
+          </label>
+          <input type="range" id="scale" min="1" max="3" step="0.25" value="2" />
+        </div>
+        <div class="meta" id="meta">page=home</div>
+      </div>
+
+      <div class="panel">
+        <h2>约定</h2>
+        <ul class="notes">
+          <li>五官本阶段不画</li>
+          <li>无底弧四钮 / 无备选开机 A·B / 无对话 A·B·C</li>
+          <li>文档：<code>product.md</code> §B–C · <code>framework.md</code> §5.1</li>
+          <li>可交互对话细测：<a href="chat.html" style="color:#7ec8ff">chat.html</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <div class="bezel" id="bezel">
+        <div class="screen" id="screen">
+          <div class="page" id="splash">
+            <div class="arc"></div>
+            <div class="pet" id="splashPet"></div>
+            <div class="hint">loading… · Splash Gate ≥1s</div>
+          </div>
+
+          <div class="page on" id="home">
+            <div class="needs" id="needsDots" title="hunger / mood / energy"><b></b><b></b><b></b></div>
+            <div class="wifi fb" id="wifiIcon" title="net"></div>
+            <div class="toast" id="toast"></div>
+            <div class="body" id="homeBody" data-skin-body title="tap / hold→feed"></div>
+            <button type="button" class="care f" id="careFeed" title="feed">F</button>
+            <button type="button" class="care p" id="carePlay" title="play">P</button>
+            <button type="button" class="care s" id="careSleep" title="sleep">S</button>
+            <button type="button" class="chat-btn" id="careChat" title="chat">C</button>
+          </div>
+
+          <div class="page" id="chat">
+            <button type="button" class="back" id="chatBack">←</button>
+            <div class="mode" id="chatMode">ready</div>
+            <div class="body" id="chatBody" data-skin-body title="tap listen toggle"></div>
+            <div class="cap muted" id="chatCap">tap to talk</div>
+            <div class="wave" id="chatWave"><span></span><span></span><span></span><span></span><span></span></div>
+          </div>
+
+          <div class="guides" id="guides">
+            <div class="cross" id="gCross" hidden></div>
+            <div class="safe-ring" id="gSafe"></div>
+          </div>
+        </div>
+      </div>
+      <p class="caption" id="caption">
+        <strong>主界面</strong> — Needs 三点 · 左弧喂/玩/睡 · 右聊 · 身体点按。
+      </p>
+    </main>
+  </div>
+
+<script src="skin_loader.js"></script>
+<script src="pet_preview.js"></script>
+</body>
+</html>

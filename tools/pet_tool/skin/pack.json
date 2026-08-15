@@ -3,10 +3,10 @@
   "width": 157,
   "height": 157,
   "needs": {
-    "hunger_decay_s": 6,
-    "mood_decay_s": 8,
-    "energy_decay_s": 10,
-    "energy_recover_s": 2,
+    "hunger_decay_s": 600,
+    "mood_decay_s": 900,
+    "energy_decay_s": 1200,
+    "energy_recover_s": 180,
     "feed_hunger": 28,
     "play_mood": 24,
     "tap_mood": 4
@@ -15,7 +15,7 @@
     {
       "id": "idle",
       "fps": 4,
-      "frames": 3,
+      "frames": 2,
       "color": [
         255,
         255,
@@ -76,38 +76,10 @@
             "y": 56,
             "angle": 0
           }
-        },
-        {
-          "eye_l": {
-            "x": 62,
-            "y": 72,
-            "angle": 0
-          },
-          "eye_r": {
-            "x": 98,
-            "y": 72,
-            "angle": 0
-          },
-          "mouth": {
-            "x": 80,
-            "y": 108,
-            "angle": 0
-          },
-          "brow_l": {
-            "x": 62,
-            "y": 56,
-            "angle": 0
-          },
-          "brow_r": {
-            "x": 98,
-            "y": 56,
-            "angle": 0
-          }
         }
       ],
       "sources": [
-        "assets/idle.png",
-        "assets/idle_2.png",
+        "assets/idle_1.png",
         "assets/idle_2.png"
       ]
     },
@@ -177,10 +149,7 @@
           }
         }
       ],
-      "sources": [
-        "assets/sleepy.png",
-        "assets/sleepy.png"
-      ]
+      "source": "assets/sleepy.png"
     },
     {
       "id": "eat",
@@ -439,6 +408,45 @@
           "angle": 0
         }
       }
+    },
+    {
+      "id": "refuse",
+      "fps": 6,
+      "frames": 1,
+      "color": [
+        180,
+        100,
+        120
+      ],
+      "fit": "contain",
+      "face": {
+        "eye_l": {
+          "x": 62,
+          "y": 78,
+          "angle": 0
+        },
+        "eye_r": {
+          "x": 98,
+          "y": 78,
+          "angle": 0
+        },
+        "mouth": {
+          "x": 80,
+          "y": 114,
+          "angle": 0
+        },
+        "brow_l": {
+          "x": 62,
+          "y": 62,
+          "angle": -8
+        },
+        "brow_r": {
+          "x": 98,
+          "y": 62,
+          "angle": 8
+        }
+      },
+      "source": "assets/refuse.png"
     }
   ],
   "splash": {
@@ -463,6 +471,14 @@
       "chat": {
         "mode": "image",
         "bg": "#000770"
+      },
+      "wifi_on": {
+        "mode": "image",
+        "bg": "#2a2f3a"
+      },
+      "wifi_off": {
+        "mode": "image",
+        "bg": "#2a2f3a"
       }
     }
   }

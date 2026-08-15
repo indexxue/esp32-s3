@@ -29,10 +29,16 @@
 #define CONFIG_WEB_CTRL_STA_CONNECT_TIMEOUT_MS (15000)
 #endif
 
+#define WEB_CTRL_STA_RETRY_STACK (10240U)
+#define WEB_CTRL_STA_RETRY_PRIO  (3U)
+
 static const char *TAG = "web_ctrl";
 
 static bool s_web_ctrl_started;
 static bool s_wifi_cmd_registered;
+static web_ctrl_config_t s_last_cfg;
+static bool s_last_cfg_valid;
+static volatile bool s_sta_retry_busy;
 
 static void cmd_wifi(int argc, const char *argv[])
 {
@@ -128,6 +134,8 @@ esp_err_t web_ctrl_start(const web_ctrl_config_t *cfg_in)
     }
 
     cfg = *cfg_in;
+    s_last_cfg = *cfg_in;
+    s_last_cfg_valid = true;
 
     {
         const bool try_sta = (cfg.wifi.sta_ssid[0] != '\0');
@@ -239,4 +247,48 @@ esp_err_t web_ctrl_stop(void)
 bool web_ctrl_is_running(void)
 {
     return s_web_ctrl_started;
+}
+
+static void web_ctrl_sta_retry_task(void *arg)
+{
+    esp_err_t err;
+
+    (void)arg;
+    ESP_LOGI(TAG, "STA retry: restart web_ctrl (try STA then SoftAP)");
+    (void)web_ctrl_stop();
+    vTaskDelay(pdMS_TO_TICKS(300));
+    web_ctrl_config_merge_nvs(&s_last_cfg);
+    err = web_ctrl_start(&s_last_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "STA retry failed: %s", esp_err_to_name(err));
+    }
+    s_sta_retry_busy = false;
+    vTaskDelete(NULL);
+}
+
+esp_err_t web_ctrl_sta_retry_async(void)
+{
+    if (!s_last_cfg_valid) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    web_ctrl_config_merge_nvs(&s_last_cfg);
+    if (s_last_cfg.wifi.sta_ssid[0] == '\0') {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Already STA radio: just reconnect association. */
+    if (s_web_ctrl_started && (net_wifi_get_mode() == NET_WIFI_MODE_STA)) {
+        return net_wifi_sta_connect();
+    }
+
+    if (s_sta_retry_busy) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_sta_retry_busy = true;
+    if (xTaskCreate(web_ctrl_sta_retry_task, "sta_retry", WEB_CTRL_STA_RETRY_STACK, NULL,
+                    WEB_CTRL_STA_RETRY_PRIO, NULL) != pdPASS) {
+        s_sta_retry_busy = false;
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }

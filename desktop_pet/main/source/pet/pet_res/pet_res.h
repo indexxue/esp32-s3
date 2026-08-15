@@ -30,6 +30,9 @@ extern "C" {
 #define PET_RES_UI_ICON_PLAY_REL "theme/ui/play.bin"
 #define PET_RES_UI_ICON_SLEEP_REL "theme/ui/sleep.bin"
 #define PET_RES_UI_ICON_CHAT_REL "theme/ui/chat.bin"
+#define PET_RES_UI_ICON_WIFI_ON_REL "theme/ui/wifi_on.bin"
+#define PET_RES_UI_ICON_WIFI_OFF_REL "theme/ui/wifi_off.bin"
+#define PET_RES_UI_ICON_SETTINGS_REL "theme/ui/settings.bin"
 /** LVGL binary font for chat captions (GB2312+ASCII). Missing → embedded CJK. */
 #define PET_RES_FONT_CAPTION_REL "font/caption.bin"
 #define PET_RES_FACE_BLOCK_LEN (32U)
@@ -39,6 +42,9 @@ typedef enum {
     PET_UI_ICON_PLAY,
     PET_UI_ICON_SLEEP,
     PET_UI_ICON_CHAT,
+    PET_UI_ICON_WIFI_ON,
+    PET_UI_ICON_WIFI_OFF,
+    PET_UI_ICON_SETTINGS,
     PET_UI_ICON_COUNT
 } pet_ui_icon_id_t;
 

@@ -16,7 +16,7 @@ def main() -> int:
     except ImportError:
         print(
             "PySide6 required. Install:\n"
-            "  py -3 -m pip install -r tools/pet_skin/requirements.txt",
+            "  py -3 -m pip install -r tools/pet_tool/skin/requirements.txt",
             file=sys.stderr,
         )
         return 2

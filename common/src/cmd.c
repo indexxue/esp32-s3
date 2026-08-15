@@ -528,6 +528,8 @@ static bool ledfx_name_to_id(const char *name, led_scene_id_e *out_id)
         {"ballot_violation", LED_SCENE_ID_BALLOT_VIOLATION},
         {"ballot_fault", LED_SCENE_ID_BALLOT_FAULT},
         {"ballot_wifi_warn", LED_SCENE_ID_BALLOT_WIFI_WARN},
+        {"pet_listen", LED_SCENE_ID_PET_LISTEN},
+        {"pet_speak", LED_SCENE_ID_PET_SPEAK},
     };
 
     if ((name == NULL) || (out_id == NULL)) {
@@ -1230,8 +1232,7 @@ void cmd_register_defaults(void)
     (void)cmd_register("mac", cmd_mac, "get/set mac blob (set: 8 decimal digits)");
     (void)cmd_register("led", cmd_led, "led r|b|all on|off");
     (void)cmd_register("ledfx", cmd_ledfx,
-                       "ledfx run|switch|cancel <scene>|all [force] (scene: bootup pairing trigger error success net_offline working "
-                       "alarm net_online config charging low_battery)");
+                       "ledfx run|switch|cancel <scene>|all [force] (scene: bootup pairing trigger ... pet_listen pet_speak)");
     (void)cmd_register("reboot", cmd_reboot, "software reset");
     (void)cmd_register("boot_a", cmd_boot_a, "next boot app_a (ota_0) + reset");
     (void)cmd_register("boot_b", cmd_boot_b, "next boot app_b (ota_1) + reset");

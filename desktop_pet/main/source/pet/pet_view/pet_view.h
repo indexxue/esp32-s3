@@ -1,6 +1,7 @@
 /**
  * @file pet_view.h
- * @brief LVGL layered pet: SD body + Needs + care/Chat; chat surface D (voice-first).
+ * @brief LVGL layered pet: SD body + Needs + net/settings + care/Chat; chat surface D.
+ *        Settings: scrollable device info + touch calib + EN/ZH; skin switch reserved.
  *        Face overlay reserved (PET_VIEW_ENABLE_FACE).
  */
 

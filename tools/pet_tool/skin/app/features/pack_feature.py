@@ -178,7 +178,10 @@ class PackPanel(QWidget):
             )
             if not path:
                 return
-            z = skin_core.export_skin_zip(self.ctx.out_dir, Path(path))
-            self.ctx.info(f"wrote {z} — upload on device web page, then the board reboots")
+            z, note = skin_core.export_skin_zip(self.ctx.out_dir, Path(path))
+            self.ctx.info(
+                f"wrote {z} — {note}; upload on device web, board reboots "
+                "(existing SD font kept if zip has none)"
+            )
         except Exception as exc:  # noqa: BLE001
             self.ctx.info(f"export zip error: {exc}")

@@ -39,6 +39,8 @@
 #define WEB_SKIN_ZIP_REL      "skinup.zip"
 #define WEB_SKIN_NEXT_REL     "petnext"
 #define WEB_SKIN_LIVE_REL     "pet"
+/* Staging zip 无字库时，换肤前暂存 live font/，提交后再挂回 */
+#define WEB_SKIN_FONT_KEEP_REL "fontkeep"
 
 static const char *TAG = "web_skin";
 
@@ -396,29 +398,97 @@ static void skin_abs(char *out, size_t cap, const char *rel)
     (void)path_join(out, cap, BOARD_SDCARD_MOUNT_POINT, rel);
 }
 
+static bool path_is_reg(const char *abs)
+{
+    struct stat st;
+
+    return (abs != NULL) && (stat(abs, &st) == 0) && S_ISREG(st.st_mode);
+}
+
+static bool path_is_dir(const char *abs)
+{
+    struct stat st;
+
+    return (abs != NULL) && (stat(abs, &st) == 0) && S_ISDIR(st.st_mode);
+}
+
+/** True if staging already carries caption.bin (zip included a font). */
+static bool staging_has_caption(const char *staging)
+{
+    char p[WEB_SKIN_PATH_MAX];
+
+    if (!path_join(p, sizeof(p), staging, "font")) {
+        return false;
+    }
+    if (!path_join(p, sizeof(p), p, "caption.bin")) {
+        return false;
+    }
+    return path_is_reg(p);
+}
+
 void web_skin_commit_pending(void)
 {
     char staging[WEB_SKIN_PATH_MAX];
     char live[WEB_SKIN_PATH_MAX];
     char pack[WEB_SKIN_PATH_MAX];
-    struct stat st;
+    char keep[WEB_SKIN_PATH_MAX];
+    char live_font[WEB_SKIN_PATH_MAX];
+    char new_font[WEB_SKIN_PATH_MAX];
+    bool saved_font = false;
 
     if (sdcard_get_card() == NULL) {
         return;
     }
     skin_abs(staging, sizeof(staging), WEB_SKIN_NEXT_REL);
     skin_abs(live, sizeof(live), WEB_SKIN_LIVE_REL);
+    skin_abs(keep, sizeof(keep), WEB_SKIN_FONT_KEEP_REL);
     if (!path_join(pack, sizeof(pack), staging, "pack.bin")) {
         return;
     }
-    if ((stat(pack, &st) != 0) || !S_ISREG(st.st_mode)) {
+    if (!path_is_reg(pack)) {
         return;
     }
+    if (!path_join(live_font, sizeof(live_font), live, "font")) {
+        return;
+    }
+
+    /*
+     * Full replace of /sdcard/pet would drop caption.bin when the zip only has
+     * body/theme. Keep live font/ aside unless the new pack already ships one.
+     */
+    if (!staging_has_caption(staging) && path_is_dir(live_font)) {
+        rmtree(keep, 0U);
+        if (rename(live_font, keep) == 0) {
+            saved_font = true;
+            ESP_LOGI(TAG, "preserved live font/ -> %s", keep);
+        } else {
+            ESP_LOGW(TAG, "could not preserve font/ (errno=%d)", errno);
+        }
+    }
+
     ESP_LOGI(TAG, "commit pending skin -> %s", live);
     rmtree(live, 0U);
     if (rename(staging, live) != 0) {
         ESP_LOGE(TAG, "rename staging failed");
+        if (saved_font && path_is_dir(keep)) {
+            (void)rename(keep, live_font);
+        }
         return;
+    }
+
+    if (saved_font) {
+        if (!path_join(new_font, sizeof(new_font), live, "font")) {
+            rmtree(keep, 0U);
+            return;
+        }
+        if (path_is_dir(new_font) || path_is_reg(new_font)) {
+            /* Zip brought its own font; drop the stash. */
+            rmtree(keep, 0U);
+        } else if (rename(keep, new_font) != 0) {
+            ESP_LOGW(TAG, "restore font/ failed (errno=%d)", errno);
+        } else {
+            ESP_LOGI(TAG, "restored font/ into new skin");
+        }
     }
 }
 

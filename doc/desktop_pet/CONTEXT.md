@@ -1,4 +1,4 @@
-# desktop_pet 术语
+﻿# desktop_pet 术语
 
 桌宠产品域：圆屏 LVGL 表演、SD 皮肤、板端输入与云端会话边界。
 
@@ -11,7 +11,7 @@ SD 挂载根上的 `config`（现路径 `/sdcard/config`）。UTF-8 `KEY=VALUE`�
 _Avoid_：把设备配置写进 `/sdcard/pet/`、卡上 JSON（首版不解析 JSON）、无文件时拒绝启动
 
 **皮肤包 (Skin Pack)**：
-作者侧生成、可整包替换的只读内容树；含身体 clip、开机画面、以及后续主题/音效索引。设备挂载根现为 `/sdcard/pet/`。可用 zip（根为 `pack.bin` 或 `pet/pack.bin`）经网页 `POST /api/pet/skin` 覆盖后重启；不覆盖卡根 `config`。
+作者侧生成、可整包替换的只读内容树；含身体 clip、开机画面、以及后续主题/音效索引。设备挂载根现为 `/sdcard/pet/`。可用 zip（根为 `pack.bin` 或 `pet/pack.bin`）经网页 `POST /api/pet/skin` 覆盖后重启；不覆盖卡根 `config`。若 zip **不含** `font/caption.bin`，提交时保留卡上原有 `pet/font/`（避免换肤丢字幕字库）。
 _Avoid_：资源包（仅指 `pack.bin` 时）、主题包（未定前勿混用）、固件资源
 
 **运行时数据 (Runtime Data)**：
@@ -35,8 +35,8 @@ _Avoid_：空目录占位、未文档化的随意路径
 _Avoid_：卡上 PNG/JPEG、开机专用魔数容器
 
 **皮肤打包工具 (Skin Pack Tool / `pet_skin`)**：
-作者侧入口，落在 [`tools/pet_skin/`](../../tools/pet_skin/)；以 CLI/库生成合法路径下的二进制。GUI 为 Qt（PySide6）壳，按 FeatureModule 扩展，写盘只经 `skin_core`。开机 splash **仅静态单帧**。
-_Avoid_：与 `skin_core` 平行的第二套写盘逻辑、让用户手写 RGB565、本阶段实现 `boot/anim`
+作者侧入口，落在 [`tools/pet_tool/skin/`](../../tools/pet_tool/skin/)（伞目录 [`pet_tool`](../../tools/pet_tool/)）；以 CLI/库生成合法路径下的二进制。GUI 为 Qt（PySide6）壳，按 FeatureModule 扩展，写盘只经 `skin_core`。开机 splash **仅静态单帧**。网页预览：读 `skin/pack.json` + PNG；画面仅产品态（开机 C / 左弧主界面 / 对话 D）。
+_Avoid_：与 `skin_core` 平行的第二套写盘逻辑、让用户手写 RGB565、本阶段实现 `boot/anim`、在预览里保留已废弃备选构图
 
 **开机图适配 (Splash Fit)**：
 工具默认将源图 **contain** 进 240×240，外侧填背景色（默认 `#202020`）；可用参数改 cover。变形拉伸不是默认。
@@ -50,9 +50,21 @@ _Avoid_：纯固定时长无门闩、等到网络全就绪
 圆形主界面以宠物身体为视觉主体（约 ø140–160）；needs / 照料控件贴边且克制，不与身体抢权重。
 _Avoid_：仪表盘式大 HUD、无铬沉浸（首版仍保留可发现的照料入口）
 
-**Needs 指示 (Needs Dots)**：
-主界面常显顶中三颗小圆点表示饥饿/心情/精力（色区分维度，填充/亮度表高低）；不以细条为默认。
-_Avoid_：常显三细条、默认完全隐藏 needs
+**Needs 指示 (Needs Arcs)**：
+主界面底部三段弧条（圆屏内缩），绿/蓝/黄 = 饥饿/心情/精力（0–100%）；值存 NVS；约每 30 s 消耗一拍（默认十数分钟掉 1%），照料即时刷新并落盘。
+_Avoid_：顶中三点、过密每秒衰减、常显数字百分比
+
+**网络状态 (Net Status)**：
+主界面顶部偏右常显网络图形（落在 ø200 安全圆内，避免圆屏切角）；STA 已获 IPv4 为在线。可选皮肤 `theme/ui/wifi_on.bin` / `wifi_off.bin`，缺则固件绘制扇形（在线青 / 离线灰）。单击：在线断连、离线重连（STA；不改凭据）。进对话页 / 设置页随主界面铬隐藏。
+_Avoid_：贴矩形屏角（圆屏不可见）、常显 IP 字符串、用文字替代图标为默认产品态
+
+**设置入口 (Settings Entry)**：
+主界面顶铬：WiFi 右侧偏下同弧小钮；可选 `theme/ui/settings.bin`，缺则字母 S。进入可滑动设置页（圆屏安全区内滚动）。
+_Avoid_：贴矩形角、与身体热区抢点、把设置嵌进主界面仪表盘
+
+**设置页 (Settings Surface)**：
+独立层，返回钮 + 竖直滚动列表。首版：固件/皮肤包版本、MAC、网络/SSID/IP；有 CJK 字库时可切 EN/中文（默认 EN）；触摸校准入口。换肤切换 reserved（首版显示 soon，仍走网页换肤）。
+_Avoid_：首版塞清 WiFi/重启等危险动作、无字库时强切中文、把网页换肤做成未完成的屏上流程
 
 **产品主界面 (Product Home)**：
 用户日常看到的圆形宠物界面。GPIO0 单击切换的 Rec/Play/Conn/Talk **debug 覆盖层不作为产品方向**（后续移除；研发改走串口 / `web_ctrl`）。
@@ -70,6 +82,10 @@ _Avoid_：现网大矩形文字键为默认、无常显照料入口、与身体�
 **照料反馈 (Care Feedback)**：
 照料动作可伴随可感知演出（移动、跟随、睡姿等），由意图消费（clip / LED / 电机等）实现；具体动效后续专项定，不改「输入只产事件」边界。
 _Avoid_：在按钮回调里直接驱电机/改 LVGL 动画抢 `pet_core`
+
+**照料分档 (Care Tier)**：
+喂/戳等按 Needs 规则选档（爽/平/拒或冷），再映射 clip；首版喂+戳，共享 one-shot `refuse`。档内随机与玩分档后置。详见 [`framework.md`](framework.md) §5.1。
+_Avoid_：按钮里写死单一动画、把分档逻辑放进 `pet_view`
 
 **主界面文案 (Home Chrome Text)**：
 产品主界面默认不常显状态句（如 `idle`）；仅异常短暂提示（如 `NO PACK`）后淡出。

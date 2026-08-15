@@ -1155,7 +1155,20 @@ static void ui_intent_hook(const pet_intent_t *in)
     if (in == NULL) {
         return;
     }
-    if (in->id == PET_INTENT_LED) {
+    if (in->id == PET_INTENT_HUD) {
+        pet_needs_t n;
+        nvs_pet_needs_t st;
+
+        pet_core_get_needs(&n);
+        st.magic = NVS_PET_NEEDS_MAGIC;
+        st.hunger = n.hunger;
+        st.mood = n.mood;
+        st.energy = n.energy;
+        st.sleeping = n.sleeping ? 1U : 0U;
+        if (!nvs_pet_needs_set(&st)) {
+            LOG_WARN("pet needs NVS save failed");
+        }
+    } else if (in->id == PET_INTENT_LED) {
         if (in->arg0 == 0) {
             led_scene_run(LED_SCENE_ID_SUCCESS);
         } else {
@@ -1548,6 +1561,28 @@ static void ui_screen_pet_create(void)
     } else {
         pet_core_init(NULL);
         LOG_WARN("pet pack missing (%s); fallback body", pet_fs_root());
+    }
+    {
+        nvs_pet_needs_t st;
+        pet_needs_t n;
+
+        if (nvs_pet_needs_get(&st)) {
+            n.hunger = st.hunger;
+            n.mood = st.mood;
+            n.energy = st.energy;
+            n.sleeping = (st.sleeping != 0U);
+            pet_core_set_needs(&n);
+            LOG_INFO("pet needs from NVS h=%u m=%u e=%u sleep=%u", (unsigned)n.hunger,
+                     (unsigned)n.mood, (unsigned)n.energy, (unsigned)st.sleeping);
+        } else {
+            pet_core_get_needs(&n);
+            st.magic = NVS_PET_NEEDS_MAGIC;
+            st.hunger = n.hunger;
+            st.mood = n.mood;
+            st.energy = n.energy;
+            st.sleeping = 0U;
+            (void)nvs_pet_needs_set(&st);
+        }
     }
     pet_view_boot_pack_done();
 }

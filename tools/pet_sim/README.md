@@ -1,4 +1,4 @@
-# Desktop pet LVGL simulator overlay
+﻿# Desktop pet LVGL simulator overlay
 
 `tools/lvgl_sim/` is gitignored (clone via [`setup_lvgl_sim.ps1`](../setup_lvgl_sim.ps1)). This folder is the **in-repo** port: pack files + `pet_sim_app.c`.
 
@@ -6,7 +6,7 @@
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\setup_lvgl_sim.ps1
-py -3 tools\pet_skin\cli.py --splash
+py -3 tools\pet_tool\skin\cli.py --splash
 powershell -ExecutionPolicy Bypass -File .\tools\pet_sim\install_into_lvgl_sim.ps1
 ```
 
@@ -14,7 +14,7 @@ Open `tools\lvgl_sim\lv_port_pc_visual_studio\LVGL.sln`, set **LvglWindowsSimula
 
 Boot: splash C (≥1s + pack load) then home. Debugger working directory is the **repo root** so `tools/pet_sim/sdcard` resolves (`config` + `pet/`). Optional: `PET_PACK_ROOT`.
 
-Skin tool: [`tools/pet_skin/README.md`](../pet_skin/README.md).
+Skin tool: [`tools/pet_tool/skin/README.md`](../pet_tool/skin/README.md).
 
 Keys: `1` feed, `2` play, `3` sleep, `4` wake, `0` shake. On-screen Feed / Play / Sleep also work. Display 240×240.
 

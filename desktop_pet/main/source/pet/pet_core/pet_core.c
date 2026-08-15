@@ -9,10 +9,13 @@
 
 #define PET_Q_LEN (16U)
 #define PET_NEED_MAX (100U)
+#define PET_NEEDS_PERIOD_S (30U) /* consume / HUD persist cadence */
 #define PET_HUNGRY_TH (25U)
 #define PET_SAD_TH (25U)
 #define PET_SLEEPY_TH (25U)
 #define PET_PLAY_ENERGY_COST (8U)
+#define PET_FEED_FULL_TH (85U) /* hunger >= → refuse, no hunger gain */
+#define PET_POKE_COLD_TH (30U) /* mood < → refuse, no mood gain */
 
 typedef struct {
     pet_evt_id_t id;
@@ -20,10 +23,11 @@ typedef struct {
 } pet_evt_t;
 
 static const pet_needs_cfg_t s_default_cfg = {
-    .hunger_decay_s = 180U,
-    .mood_decay_s = 240U,
-    .energy_decay_s = 300U,
-    .energy_recover_s = 20U,
+    /* Desktop-friendly: ~1% per many minutes; applied in 30s steps. */
+    .hunger_decay_s = 900U,   /* 15 min / % */
+    .mood_decay_s = 1200U,    /* 20 min / % */
+    .energy_decay_s = 1500U,  /* 25 min / % */
+    .energy_recover_s = 180U, /* sleep: +1% / 3 min */
     .feed_hunger = 28U,
     .play_mood = 24U,
     .tap_mood = 4U,
@@ -35,6 +39,7 @@ static const uint8_t s_clip_prio[PET_CLIP_COUNT] = {
     [PET_CLIP_SAD] = 0U,
     [PET_CLIP_SLEEP_LOOP] = 0U,
     [PET_CLIP_POKE] = 10U,
+    [PET_CLIP_REFUSE] = 15U,
     [PET_CLIP_EAT] = 20U,
     [PET_CLIP_PLAY] = 20U,
 };
@@ -45,6 +50,7 @@ static const uint8_t s_clip_dur_s[PET_CLIP_COUNT] = {
     [PET_CLIP_SAD] = 0U,
     [PET_CLIP_SLEEP_LOOP] = 0U,
     [PET_CLIP_POKE] = 1U,
+    [PET_CLIP_REFUSE] = 2U,
     [PET_CLIP_EAT] = 3U,
     [PET_CLIP_PLAY] = 4U,
 };
@@ -57,6 +63,7 @@ static uint8_t s_clip_remain_s;
 static uint16_t s_hunger_acc;
 static uint16_t s_mood_acc;
 static uint16_t s_energy_acc;
+static uint8_t s_needs_period_s; /* counts to PET_NEEDS_PERIOD_S */
 
 static pet_evt_t s_evt_q[PET_Q_LEN];
 static uint8_t s_evt_head;
@@ -141,6 +148,8 @@ static bool start_clip(pet_clip_id_t clip)
         set_face(PET_FACE_HAPPY);
     } else if (clip == PET_CLIP_POKE) {
         set_face(PET_FACE_HAPPY);
+    } else if (clip == PET_CLIP_REFUSE) {
+        set_face(PET_FACE_SAD);
     }
     return true;
 }
@@ -191,34 +200,72 @@ static void pick_idle_clip(void)
     set_face(PET_FACE_IDLE);
 }
 
-static void decay_one(uint8_t *need, uint16_t *acc, uint16_t period_s)
+static bool decay_one(uint8_t *need, uint16_t *acc, uint16_t period_s, uint16_t step_s)
 {
-    if ((period_s == 0U) || (need == NULL) || (acc == NULL)) {
-        return;
+    bool changed = false;
+
+    if ((period_s == 0U) || (need == NULL) || (acc == NULL) || (step_s == 0U)) {
+        return false;
     }
-    (*acc)++;
-    if (*acc >= period_s) {
-        *acc = 0U;
+    *acc = (uint16_t)(*acc + step_s);
+    while (*acc >= period_s) {
+        *acc = (uint16_t)(*acc - period_s);
         *need = sat_sub_u8(*need, 1U);
+        changed = true;
+    }
+    return changed;
+}
+
+static bool recover_one(uint8_t *need, uint16_t *acc, uint16_t period_s, uint16_t step_s)
+{
+    bool changed = false;
+
+    if ((period_s == 0U) || (need == NULL) || (acc == NULL) || (step_s == 0U)) {
+        return false;
+    }
+    *acc = (uint16_t)(*acc + step_s);
+    while (*acc >= period_s) {
+        *acc = (uint16_t)(*acc - period_s);
+        *need = sat_add_u8(*need, 1U);
+        changed = true;
+    }
+    return changed;
+}
+
+static void handle_needs_period(void)
+{
+    bool changed = false;
+
+    if (s_needs.sleeping) {
+        if (decay_one(&s_needs.hunger, &s_hunger_acc, s_cfg.hunger_decay_s, PET_NEEDS_PERIOD_S)) {
+            changed = true;
+        }
+        s_mood_acc = 0U;
+        if (recover_one(&s_needs.energy, &s_energy_acc, s_cfg.energy_recover_s, PET_NEEDS_PERIOD_S)) {
+            changed = true;
+        }
+    } else {
+        if (decay_one(&s_needs.hunger, &s_hunger_acc, s_cfg.hunger_decay_s, PET_NEEDS_PERIOD_S)) {
+            changed = true;
+        }
+        if (decay_one(&s_needs.mood, &s_mood_acc, s_cfg.mood_decay_s, PET_NEEDS_PERIOD_S)) {
+            changed = true;
+        }
+        if (decay_one(&s_needs.energy, &s_energy_acc, s_cfg.energy_decay_s, PET_NEEDS_PERIOD_S)) {
+            changed = true;
+        }
+    }
+    if (changed) {
         emit_hud();
     }
 }
 
 static void handle_tick(void)
 {
-    if (s_needs.sleeping) {
-        decay_one(&s_needs.hunger, &s_hunger_acc, s_cfg.hunger_decay_s);
-        s_mood_acc = 0U;
-        s_energy_acc++;
-        if ((s_cfg.energy_recover_s > 0U) && (s_energy_acc >= s_cfg.energy_recover_s)) {
-            s_energy_acc = 0U;
-            s_needs.energy = sat_add_u8(s_needs.energy, 1U);
-            emit_hud();
-        }
-    } else {
-        decay_one(&s_needs.hunger, &s_hunger_acc, s_cfg.hunger_decay_s);
-        decay_one(&s_needs.mood, &s_mood_acc, s_cfg.mood_decay_s);
-        decay_one(&s_needs.energy, &s_energy_acc, s_cfg.energy_decay_s);
+    s_needs_period_s++;
+    if (s_needs_period_s >= PET_NEEDS_PERIOD_S) {
+        s_needs_period_s = 0U;
+        handle_needs_period();
     }
 
     if (s_clip_remain_s > 0U) {
@@ -253,9 +300,15 @@ static void do_sleep(void)
 static void do_feed(void)
 {
     do_wake();
+    /* Full: hard refuse — no hunger/mood gain. */
+    if (s_needs.hunger >= PET_FEED_FULL_TH) {
+        (void)start_clip(PET_CLIP_REFUSE);
+        return;
+    }
     s_needs.hunger = sat_add_u8(s_needs.hunger, s_cfg.feed_hunger);
     s_needs.mood = sat_add_u8(s_needs.mood, (uint8_t)(s_cfg.tap_mood + 2U));
     emit_hud();
+    /* yum (<40) vs ok share eat until pack variants exist. */
     (void)start_clip(PET_CLIP_EAT);
 }
 
@@ -272,6 +325,11 @@ static void do_tap(void)
 {
     if (s_needs.sleeping) {
         do_wake();
+        return;
+    }
+    /* Cold: visible refuse, no mood gain. */
+    if (s_needs.mood < PET_POKE_COLD_TH) {
+        (void)start_clip(PET_CLIP_REFUSE);
         return;
     }
     s_needs.mood = sat_add_u8(s_needs.mood, s_cfg.tap_mood);
@@ -367,6 +425,7 @@ void pet_core_init(const pet_needs_cfg_t *cfg)
     s_hunger_acc = 0U;
     s_mood_acc = 0U;
     s_energy_acc = 0U;
+    s_needs_period_s = 0U;
     s_evt_head = 0U;
     s_evt_tail = 0U;
     s_evt_count = 0U;
@@ -375,6 +434,23 @@ void pet_core_init(const pet_needs_cfg_t *cfg)
     s_int_count = 0U;
     intent_push(PET_INTENT_CLIP, (int16_t)PET_CLIP_IDLE, 0);
     intent_push(PET_INTENT_FACE, (int16_t)PET_FACE_IDLE, 0);
+    emit_hud();
+}
+
+void pet_core_set_needs(const pet_needs_t *needs)
+{
+    if (needs == NULL) {
+        return;
+    }
+    s_needs.hunger = (needs->hunger > PET_NEED_MAX) ? PET_NEED_MAX : needs->hunger;
+    s_needs.mood = (needs->mood > PET_NEED_MAX) ? PET_NEED_MAX : needs->mood;
+    s_needs.energy = (needs->energy > PET_NEED_MAX) ? PET_NEED_MAX : needs->energy;
+    s_needs.sleeping = needs->sleeping;
+    s_hunger_acc = 0U;
+    s_mood_acc = 0U;
+    s_energy_acc = 0U;
+    s_needs_period_s = 0U;
+    pick_idle_clip();
     emit_hud();
 }
 
@@ -436,7 +512,7 @@ bool pet_core_take_intent(pet_intent_t *out)
 const char *pet_clip_name(pet_clip_id_t id)
 {
     static const char *const names[PET_CLIP_COUNT] = {
-        "idle", "sleepy", "eat", "play", "sad", "sleep_loop", "poke",
+        "idle", "sleepy", "eat", "play", "sad", "sleep_loop", "poke", "refuse",
     };
 
     if (id >= PET_CLIP_COUNT) {

@@ -62,9 +62,11 @@ camera/.signing_profile
 keys/dev/
 keys/prod/
 
-# Python cache
+# Python cache / local venv
 __pycache__/
 *.pyc
+.venv/
+tools/**/.venv/
 
 # SoftAP steel-ball annotate: captured frames / labels (keep classes.txt + data.yaml)
 camera/tools/steel_ball_annotate/dataset/images/*

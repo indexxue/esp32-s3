@@ -476,6 +476,66 @@ static const led_scene_t led_scene_ballot_wifi_warn = {
     },
 };
 
+/** desktop_pet：聆听 — 青色慢呼吸（暗↔亮） */
+static const led_scene_t led_scene_pet_listen = {
+    .cycle = CYCLE_ALWAYS,
+    .num = 2,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_FADE,
+        .sub.fade.start_value.r = 0x00,
+        .sub.fade.start_value.g = 0x28,
+        .sub.fade.start_value.b = 0x40,
+        .sub.fade.end_value.r = 0x00,
+        .sub.fade.end_value.g = 0xD0,
+        .sub.fade.end_value.b = 0xF0,
+        .sub.fade.step = 8,
+        .sub.fade.interval = 50 * LED_SCENE_MSEC,
+    },
+    .action[1] = {
+        .cycle = 1,
+        .type = ACTION_FADE,
+        .sub.fade.start_value.r = 0x00,
+        .sub.fade.start_value.g = 0xD0,
+        .sub.fade.start_value.b = 0xF0,
+        .sub.fade.end_value.r = 0x00,
+        .sub.fade.end_value.g = 0x28,
+        .sub.fade.end_value.b = 0x40,
+        .sub.fade.step = 8,
+        .sub.fade.interval = 50 * LED_SCENE_MSEC,
+    },
+};
+
+/** desktop_pet：回答 — 暖橙慢呼吸（暗↔亮） */
+static const led_scene_t led_scene_pet_speak = {
+    .cycle = CYCLE_ALWAYS,
+    .num = 2,
+    .action[0] = {
+        .cycle = 1,
+        .type = ACTION_FADE,
+        .sub.fade.start_value.r = 0x40,
+        .sub.fade.start_value.g = 0x18,
+        .sub.fade.start_value.b = 0x00,
+        .sub.fade.end_value.r = 0xFF,
+        .sub.fade.end_value.g = 0x90,
+        .sub.fade.end_value.b = 0x20,
+        .sub.fade.step = 10,
+        .sub.fade.interval = 40 * LED_SCENE_MSEC,
+    },
+    .action[1] = {
+        .cycle = 1,
+        .type = ACTION_FADE,
+        .sub.fade.start_value.r = 0xFF,
+        .sub.fade.start_value.g = 0x90,
+        .sub.fade.start_value.b = 0x20,
+        .sub.fade.end_value.r = 0x40,
+        .sub.fade.end_value.g = 0x18,
+        .sub.fade.end_value.b = 0x00,
+        .sub.fade.step = 10,
+        .sub.fade.interval = 40 * LED_SCENE_MSEC,
+    },
+};
+
 static const led_scene_tab_t scene_table[LED_SCENE_ID_MAX_NUM] = {
     [LED_SCENE_ID_BOOTUP]      = {.prio = LED_SCENE_PRIO_LOW,    .scene = &led_scene_bootup,},
     [LED_SCENE_ID_PAIRING]     = {.prio = LED_SCENE_PRIO_PAIR,   .scene = &led_scene_pairing,},
@@ -497,6 +557,8 @@ static const led_scene_tab_t scene_table[LED_SCENE_ID_MAX_NUM] = {
     [LED_SCENE_ID_BALLOT_VIOLATION] = {.prio = LED_SCENE_PRIO_PAIR,   .scene = &led_scene_ballot_violation,},
     [LED_SCENE_ID_BALLOT_FAULT]     = {.prio = LED_SCENE_PRIO_FACTORY,.scene = &led_scene_ballot_fault,},
     [LED_SCENE_ID_BALLOT_WIFI_WARN] = {.prio = LED_SCENE_PRIO_LOW,    .scene = &led_scene_ballot_wifi_warn,},
+    [LED_SCENE_ID_PET_LISTEN]       = {.prio = LED_SCENE_PRIO_NORMAL, .scene = &led_scene_pet_listen,},
+    [LED_SCENE_ID_PET_SPEAK]        = {.prio = LED_SCENE_PRIO_NORMAL, .scene = &led_scene_pet_speak,},
 };
 
 static uint8_t led_scene_scale8(uint8_t c, uint8_t scale)

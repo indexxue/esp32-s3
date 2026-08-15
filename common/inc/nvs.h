@@ -262,6 +262,26 @@ bool nvs_touch_calib_get(nvs_touch_calib_t *out);
 bool nvs_touch_calib_set(const nvs_touch_calib_t *cfg);
 bool nvs_touch_calib_delete(void);
 
+/* -------------------------------------------------------------------------- */
+/* 桌宠 Needs：hunger/mood/energy 百分比 0–100（NVS 键 pet_needs）                */
+/* -------------------------------------------------------------------------- */
+
+#define NVS_PET_NEEDS_MAGIC 0x504E4431u /* "PND1" LE */
+
+typedef struct __attribute__((packed)) {
+    uint32_t magic;
+    uint8_t  hunger;   /* 0–100 */
+    uint8_t  mood;     /* 0–100 */
+    uint8_t  energy;   /* 0–100 */
+    uint8_t  sleeping; /* 0/1 */
+} nvs_pet_needs_t;
+
+void nvs_pet_needs_default(nvs_pet_needs_t *out);
+bool nvs_pet_needs_validate(const nvs_pet_needs_t *cfg);
+bool nvs_pet_needs_get(nvs_pet_needs_t *out);
+bool nvs_pet_needs_set(const nvs_pet_needs_t *cfg);
+bool nvs_pet_needs_delete(void);
+
 #ifdef __cplusplus
 }
 #endif

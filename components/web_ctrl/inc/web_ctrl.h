@@ -41,3 +41,9 @@ esp_err_t web_ctrl_start(const web_ctrl_config_t *cfg);
 esp_err_t web_ctrl_stop(void);
 
 bool web_ctrl_is_running(void);
+
+/**
+ * @brief SoftAP 回落或 STA 掉线后，异步再试 NVS 里的 STA（stop→start，失败仍 SoftAP）。
+ * @note 已在 STA 且无 IPv4 时直接 `esp_wifi_connect`；无 STA 凭据返回 `ESP_ERR_NOT_FOUND`。
+ */
+esp_err_t web_ctrl_sta_retry_async(void);

@@ -37,6 +37,7 @@ typedef enum {
     PET_CLIP_SAD,
     PET_CLIP_SLEEP_LOOP,
     PET_CLIP_POKE,
+    PET_CLIP_REFUSE, /* one-shot: feed full / cold poke; pack may omit → sad frames */
     PET_CLIP_COUNT
 } pet_clip_id_t;
 
@@ -86,6 +87,8 @@ typedef struct {
 
 void pet_core_init(const pet_needs_cfg_t *cfg);
 void pet_core_set_cfg(const pet_needs_cfg_t *cfg);
+/** Apply persisted percentages (0–100) + sleeping; call after init. */
+void pet_core_set_needs(const pet_needs_t *needs);
 bool pet_core_post(pet_evt_id_t id, int16_t arg0);
 void pet_core_poll(void);
 void pet_core_get_needs(pet_needs_t *out);

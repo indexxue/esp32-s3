@@ -104,7 +104,7 @@ def main() -> None:
     ap.add_argument(
         "--theme-ui",
         action="store_true",
-        help="Write theme/ui/{feed,play,sleep,chat}.bin from assets/ui_*.* (skip missing)",
+        help="Write theme/ui/{feed,play,sleep,chat,wifi_on,wifi_off,settings}.bin from assets/ui_*.* (skip missing)",
     )
     ap.add_argument(
         "--zip",
@@ -170,8 +170,8 @@ def main() -> None:
 
     if args.zip is not None:
         zpath = Path(args.zip) if args.zip else (out_dir.parent / "pet.zip")
-        z = export_skin_zip(out_dir, zpath)
-        print(f"wrote {z}")
+        z, note = export_skin_zip(out_dir, zpath)
+        print(f"wrote {z} ({note})")
 
 
 if __name__ == "__main__":

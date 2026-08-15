@@ -23,6 +23,7 @@
 #include "esp_wifi.h"
 
 #include "audio.h"
+#include "led_scene.h"
 #include "pet_opus.h"
 #include "log.h"
 #include "net_wifi.h"
@@ -154,9 +155,22 @@ static void agent_notify_ui(desktop_pet_agent_ui_evt_t evt, const char *text)
     }
 }
 
+/** LISTENING=青呼吸，SPEAKING=暖橙呼吸；其它状态熄灭对话灯效。 */
+static void agent_led_on_state(desktop_pet_agent_state_t st)
+{
+    led_scene_cancel(LED_SCENE_ID_PET_LISTEN);
+    led_scene_cancel(LED_SCENE_ID_PET_SPEAK);
+    if (st == DESKTOP_PET_AGENT_STATE_LISTENING) {
+        led_scene_run(LED_SCENE_ID_PET_LISTEN);
+    } else if (st == DESKTOP_PET_AGENT_STATE_SPEAKING) {
+        led_scene_run(LED_SCENE_ID_PET_SPEAK);
+    }
+}
+
 static void agent_set_state(desktop_pet_agent_state_t st)
 {
     s_state = st;
+    agent_led_on_state(st);
     agent_notify_ui(DESKTOP_PET_AGENT_UI_STATE, NULL);
 }
 

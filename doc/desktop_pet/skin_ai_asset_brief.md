@@ -1,4 +1,4 @@
-# 桌宠皮肤 — 生图自动化任务（直接复制）
+﻿# 桌宠皮肤 — 生图自动化任务（直接复制）
 
 上传参考图后，把下面「任务正文」整段复制给生图 AI。  
 它应按步骤自动出完全部图，你只需收图验收。
@@ -97,13 +97,13 @@
 
 ## 你收到图后怎么用（给人看，不用复制给生图 AI）
 
-1. 把 PNG 放进 `tools/pet_skin/assets/`（文件名保持上表不变），或 GUI **Import folder…**。
+1. 把 PNG 放进 `tools/pet_tool/skin/assets/`（文件名保持上表不变），或 GUI **Import folder…**。
 2. **Bind assets/** → 圆屏预览各 clip → **Build pack + splash + UI icons**。
 3. 拷 `tools/pet_sim/sdcard/` 到设备 `/sdcard/`（含根目录 `config` 与 `pet/`）。
 
 可选按键皮肤：另备 `ui_feed.png` / `ui_play.png` / `ui_sleep.png` / `ui_chat.png`（约 28×28，透明底），
 在 `pet_skin` **Theme** 面板导入并 Build，或 CLI `--theme-ui`。缺图时设备显示字母 F/P/S/C。
 
-固件本阶段不叠五官，预览也不必开锚点。逐步说明见 [`tools/pet_skin/README.md`](../../tools/pet_skin/README.md)。
+固件本阶段不叠五官，预览也不必开锚点。逐步说明见 [`tools/pet_tool/skin/README.md`](../../tools/pet_tool/skin/README.md)。
 
 约定详情：[`framework.md`](framework.md) §6 · [`product.md`](product.md) §A / §B.3。
