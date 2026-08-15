@@ -1,6 +1,6 @@
 /**
  * @file pet_view.c
- * @brief Round-screen compositor: body, Needs, net/settings chrome, left care, right Chat.
+ * @brief Round-screen compositor: body, Needs, bat/net/settings chrome, left care, right Chat.
  *        Chat surface D: tap toggle listen/wait overlay.
  *        Settings: scrollable info + touch calib + EN/ZH (CJK font); skin switch reserved.
  *        Face overlay is reserved: PET_VIEW_ENABLE_FACE=0 does not draw 五官.
@@ -10,7 +10,10 @@
 
 #include "pet_core.h"
 #include "pet_fs.h"
+#include "pet_i18n.h"
 #include "pet_res.h"
+#include "pet_sfx.h"
+#include "battery.h"
 #include "board.h"
 #include "log.h"
 #include "net_wifi.h"
@@ -41,9 +44,21 @@
 #define PET_BODY_PIXELS ((uint32_t)PET_RES_FRAME_MAX_W * (uint32_t)PET_RES_FRAME_MAX_H)
 #define PET_SPLASH_PIXELS ((uint32_t)PET_RES_SPLASH_MAX_W * (uint32_t)PET_RES_SPLASH_MAX_H)
 #define PET_SPLASH_GATE_MS (1000U)
-#define PET_SPLASH_POLL_MS (50U)
-#define PET_SPLASH_ARC_SIZE (132)
+#define PET_SPLASH_POLL_MS (33U)
+#define PET_SPLASH_FADE_IN_MS (250U)
+#define PET_SPLASH_FADE_OUT_MS (180U)
+#define PET_SPLASH_BREATH_MS (1400U)
+#define PET_SPLASH_BREATH_OPA_MIN (217) /* ~85% of LV_OPA_COVER */
+#define PET_SPLASH_ARC_SIZE (140)
+#define PET_SPLASH_ARC_WIDTH (5)
+#define PET_SPLASH_ARC_STEP (8) /* ~240 deg/s at POLL_MS */
 #define PET_SPLASH_FALLBACK_SIZE (96)
+
+typedef enum {
+    SPLASH_PHASE_ENTERING = 0,
+    SPLASH_PHASE_HOLD,
+    SPLASH_PHASE_EXITING,
+} splash_phase_t;
 /* Needs：底缘三条短直线 + 字，整体上移避开切边 */
 #define PET_NEED_BAR_W (40)
 #define PET_NEED_BAR_H (5)
@@ -56,6 +71,19 @@
 /** 相对 TOP_MID：顶中偏右，落在 ø200 安全圆内 */
 #define PET_NET_OFS_X (42)
 #define PET_NET_OFS_Y (16)
+/** 电量：WiFi 左侧偏上，同顶弧 */
+#define PET_BAT_OFS_X (18)
+#define PET_BAT_OFS_Y (6)
+#define PET_BAT_BODY_W (14)
+#define PET_BAT_BODY_H (8)
+#define PET_BAT_TIP_W (2)
+#define PET_BAT_TIP_H (4)
+#define PET_BAT_FILL_PAD (1)
+#define PET_BAT_COLOR_OUT (0xA8B0C0U)
+#define PET_BAT_COLOR_HI (0x7CFF9AU)
+#define PET_BAT_COLOR_MID (0xFFE27AU)
+#define PET_BAT_COLOR_LO (0xFF6666U)
+#define PET_BAT_COLOR_CHG (0x7EC8FFU)
 /** 设置钮：WiFi 右侧偏下，同弧（约 48° / R≈102） */
 #define PET_SET_OFS_X (72)
 #define PET_SET_OFS_Y (40)
@@ -111,8 +139,10 @@ static lv_image_dsc_t s_splash_dsc;
 static uint16_t *s_splash_pix;
 static lv_timer_t *s_splash_timer;
 static uint32_t s_splash_t0;
+static uint32_t s_splash_phase_t0;
 static bool s_splash_pack_done;
 static bool s_splash_active;
+static splash_phase_t s_splash_phase;
 static int16_t s_splash_arc_rot;
 
 static lv_obj_t *s_body_fallback;
@@ -146,6 +176,12 @@ static lv_obj_t *s_net_fb_arc[3];
 static lv_obj_t *s_net_fb_dot;
 static int8_t s_net_shown; /* -1 unset, 0 offline, 1 online */
 static uint32_t s_net_tap_last_ms;
+static lv_obj_t *s_bat_wrap;
+static lv_obj_t *s_bat_body;
+static lv_obj_t *s_bat_fill;
+static lv_obj_t *s_bat_tip;
+static int16_t s_bat_shown_pct; /* -1 unset; 0..100 */
+static int8_t s_bat_shown_chg;  /* -1 unset; 0/1 */
 static lv_obj_t *s_set_btn;
 static lv_obj_t *s_set_btn_lbl;
 static lv_obj_t *s_home_parent;
@@ -186,6 +222,8 @@ static lv_obj_t *s_set_lbl_ssid_k;
 static lv_obj_t *s_set_lbl_ssid_v;
 static lv_obj_t *s_set_lbl_ip_k;
 static lv_obj_t *s_set_lbl_ip_v;
+static lv_obj_t *s_set_lbl_bat_k;
+static lv_obj_t *s_set_lbl_bat_v;
 static lv_obj_t *s_set_lbl_lang_k;
 static lv_obj_t *s_set_lbl_lang_v;
 static lv_obj_t *s_set_row_lang;
@@ -582,8 +620,137 @@ static void make_net_status(lv_obj_t *parent)
     apply_net_status();
 }
 
+static uint32_t battery_fill_color(uint8_t percent, bool charging)
+{
+    if (charging) {
+        return PET_BAT_COLOR_CHG;
+    }
+    if (percent <= 20U) {
+        return PET_BAT_COLOR_LO;
+    }
+    if (percent <= 50U) {
+        return PET_BAT_COLOR_MID;
+    }
+    return PET_BAT_COLOR_HI;
+}
+
+static void apply_battery_status(void)
+{
+    battery_info_t info;
+    bool ok;
+    uint8_t pct;
+    bool charging;
+    int32_t inner_w;
+    int32_t fill_w;
+    uint32_t color;
+
+    if (s_bat_wrap == NULL) {
+        return;
+    }
+
+    ok = (battery_percent_update() != FALSE) && (battery_info_read(&info, NULL) != FALSE);
+    if (!ok) {
+        pct = 0U;
+        charging = false;
+    } else {
+        pct = info.percent;
+        charging = (info.charging != FALSE);
+    }
+
+    if (((int16_t)pct == s_bat_shown_pct) && ((int8_t)(charging ? 1 : 0) == s_bat_shown_chg)) {
+        return;
+    }
+    s_bat_shown_pct = (int16_t)pct;
+    s_bat_shown_chg = (int8_t)(charging ? 1 : 0);
+
+    color = ok ? battery_fill_color(pct, charging) : PET_NET_COLOR_OFF;
+    if (s_bat_body != NULL) {
+        lv_obj_set_style_border_color(s_bat_body, lv_color_hex(ok ? PET_BAT_COLOR_OUT : PET_NET_COLOR_OFF), 0);
+    }
+    if (s_bat_tip != NULL) {
+        lv_obj_set_style_bg_color(s_bat_tip, lv_color_hex(ok ? (charging ? PET_BAT_COLOR_CHG : PET_BAT_COLOR_OUT)
+                                                             : PET_NET_COLOR_OFF),
+                                  0);
+    }
+    if (s_bat_fill != NULL) {
+        inner_w = PET_BAT_BODY_W - (2 * PET_BAT_FILL_PAD);
+        if (inner_w < 1) {
+            inner_w = 1;
+        }
+        if (!ok) {
+            fill_w = 0;
+        } else {
+            fill_w = (int32_t)(((uint32_t)pct * (uint32_t)inner_w + 50U) / 100U);
+            if ((pct > 0U) && (fill_w < 1)) {
+                fill_w = 1;
+            }
+            if (fill_w > inner_w) {
+                fill_w = inner_w;
+            }
+        }
+        lv_obj_set_width(s_bat_fill, fill_w);
+        lv_obj_set_style_bg_color(s_bat_fill, lv_color_hex(color), 0);
+        if (fill_w <= 0) {
+            lv_obj_add_flag(s_bat_fill, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(s_bat_fill, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+static void make_battery_status(lv_obj_t *parent)
+{
+    s_bat_wrap = lv_obj_create(parent);
+    lv_obj_remove_style_all(s_bat_wrap);
+    lv_obj_set_size(s_bat_wrap, PET_NET_ICON_SIZE, PET_NET_ICON_SIZE);
+    lv_obj_set_style_radius(s_bat_wrap, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_bat_wrap, lv_color_hex(0x2A2F3A), 0);
+    lv_obj_set_style_bg_opa(s_bat_wrap, LV_OPA_70, 0);
+    /* WiFi 左侧偏上，同顶弧 */
+    lv_obj_align(s_bat_wrap, LV_ALIGN_TOP_MID, PET_BAT_OFS_X, PET_BAT_OFS_Y);
+    lv_obj_remove_flag(s_bat_wrap, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_bat_wrap, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_bat_body = lv_obj_create(s_bat_wrap);
+    lv_obj_remove_style_all(s_bat_body);
+    lv_obj_set_size(s_bat_body, PET_BAT_BODY_W, PET_BAT_BODY_H);
+    lv_obj_set_style_radius(s_bat_body, 2, 0);
+    lv_obj_set_style_bg_opa(s_bat_body, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_bat_body, 1, 0);
+    lv_obj_set_style_border_opa(s_bat_body, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_bat_body, lv_color_hex(PET_BAT_COLOR_OUT), 0);
+    lv_obj_align(s_bat_body, LV_ALIGN_CENTER, -1, 0);
+    lv_obj_remove_flag(s_bat_body, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_bat_body, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_bat_fill = lv_obj_create(s_bat_body);
+    lv_obj_remove_style_all(s_bat_fill);
+    lv_obj_set_size(s_bat_fill, 0, PET_BAT_BODY_H - (2 * PET_BAT_FILL_PAD));
+    lv_obj_set_style_radius(s_bat_fill, 1, 0);
+    lv_obj_set_style_bg_opa(s_bat_fill, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_bat_fill, lv_color_hex(PET_BAT_COLOR_HI), 0);
+    lv_obj_align(s_bat_fill, LV_ALIGN_LEFT_MID, PET_BAT_FILL_PAD, 0);
+    lv_obj_remove_flag(s_bat_fill, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_bat_fill, LV_OBJ_FLAG_HIDDEN);
+
+    s_bat_tip = lv_obj_create(s_bat_wrap);
+    lv_obj_remove_style_all(s_bat_tip);
+    lv_obj_set_size(s_bat_tip, PET_BAT_TIP_W, PET_BAT_TIP_H);
+    lv_obj_set_style_radius(s_bat_tip, 1, 0);
+    lv_obj_set_style_bg_opa(s_bat_tip, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_bat_tip, lv_color_hex(PET_BAT_COLOR_OUT), 0);
+    /* 相对电池本体右侧凸出电极 */
+    lv_obj_align(s_bat_tip, LV_ALIGN_CENTER, (PET_BAT_BODY_W / 2) + (PET_BAT_TIP_W / 2) - 1, 0);
+    lv_obj_remove_flag(s_bat_tip, LV_OBJ_FLAG_CLICKABLE);
+
+    s_bat_shown_pct = -1;
+    s_bat_shown_chg = -1;
+    apply_battery_status();
+}
+
 static const lv_font_t *chat_caption_font(void);
 static void chat_set_home_chrome_visible(bool visible);
+static void chat_apply_mode_ui(pet_chat_mode_t mode);
 
 static bool settings_cjk_available(void)
 {
@@ -594,9 +761,26 @@ static bool settings_cjk_available(void)
 #endif
 }
 
+static bool settings_use_zh(void)
+{
+    return (s_ui_lang == PET_UI_LANG_ZH) && settings_cjk_available();
+}
+
+static const char *ui_tr(const char *key)
+{
+    return pet_i18n_tr_ex(key, settings_use_zh());
+}
+
+static void ui_i18n_reload(void)
+{
+    pet_i18n_lang_t lang =
+        (s_ui_lang == PET_UI_LANG_ZH) ? PET_I18N_LANG_ZH : PET_I18N_LANG_EN;
+    pet_i18n_load(lang);
+}
+
 static const lv_font_t *settings_ui_font(void)
 {
-    if ((s_ui_lang == PET_UI_LANG_ZH) && settings_cjk_available()) {
+    if (settings_use_zh()) {
         return chat_caption_font();
     }
 #if LV_FONT_MONTSERRAT_14
@@ -604,14 +788,6 @@ static const lv_font_t *settings_ui_font(void)
 #else
     return LV_FONT_DEFAULT;
 #endif
-}
-
-static const char *settings_tr(const char *en, const char *zh)
-{
-    if ((s_ui_lang == PET_UI_LANG_ZH) && settings_cjk_available() && (zh != NULL)) {
-        return zh;
-    }
-    return en;
 }
 
 static void settings_style_label(lv_obj_t *lbl, uint32_t color)
@@ -659,13 +835,13 @@ static void settings_fill_info(void)
     }
     if (s_set_lbl_net_v != NULL) {
         if (!net_wifi_is_started()) {
-            lv_label_set_text(s_set_lbl_net_v, settings_tr("off", "关闭"));
+            lv_label_set_text(s_set_lbl_net_v, ui_tr("settings.net_off"));
         } else if (net_wifi_get_mode() == NET_WIFI_MODE_SOFTAP) {
-            lv_label_set_text(s_set_lbl_net_v, settings_tr("AP", "热点"));
+            lv_label_set_text(s_set_lbl_net_v, ui_tr("settings.net_ap"));
         } else if (online) {
-            lv_label_set_text(s_set_lbl_net_v, settings_tr("online", "在线"));
+            lv_label_set_text(s_set_lbl_net_v, ui_tr("settings.net_online"));
         } else {
-            lv_label_set_text(s_set_lbl_net_v, settings_tr("offline", "离线"));
+            lv_label_set_text(s_set_lbl_net_v, ui_tr("settings.net_offline"));
         }
     }
     if (s_set_lbl_ssid_v != NULL) {
@@ -682,11 +858,28 @@ static void settings_fill_info(void)
             lv_label_set_text(s_set_lbl_ip_v, "—");
         }
     }
+    if (s_set_lbl_bat_v != NULL) {
+        battery_info_t bi;
+
+        if ((battery_percent_update() != FALSE) && (battery_info_read(&bi, NULL) != FALSE)) {
+            if (bi.charging != FALSE) {
+                (void)snprintf(buf, sizeof(buf), "%u%% %s", (unsigned)bi.percent,
+                               ui_tr("settings.chg"));
+            } else {
+                (void)snprintf(buf, sizeof(buf), "%u%%", (unsigned)bi.percent);
+            }
+            lv_label_set_text(s_set_lbl_bat_v, buf);
+        } else {
+            lv_label_set_text(s_set_lbl_bat_v, "—");
+        }
+    }
     if (s_set_lbl_lang_v != NULL) {
-        lv_label_set_text(s_set_lbl_lang_v, (s_ui_lang == PET_UI_LANG_ZH) ? "中文" : "EN");
+        lv_label_set_text(s_set_lbl_lang_v,
+                          (s_ui_lang == PET_UI_LANG_ZH) ? ui_tr("settings.lang_zh")
+                                                       : ui_tr("settings.lang_en"));
     }
     if (s_set_lbl_skin_v != NULL) {
-        lv_label_set_text(s_set_lbl_skin_v, settings_tr("soon", "即将"));
+        lv_label_set_text(s_set_lbl_skin_v, ui_tr("settings.soon"));
     }
 }
 
@@ -695,7 +888,7 @@ static void settings_apply_i18n(void)
     const lv_font_t *font = settings_ui_font();
 
     if (s_set_title != NULL) {
-        lv_label_set_text(s_set_title, settings_tr("Settings", "设置"));
+        lv_label_set_text(s_set_title, ui_tr("settings.title"));
         lv_obj_set_style_text_font(s_set_title, font, 0);
     }
     settings_style_label(s_set_lbl_fw_k, 0x8A94A8U);
@@ -704,6 +897,7 @@ static void settings_apply_i18n(void)
     settings_style_label(s_set_lbl_net_k, 0x8A94A8U);
     settings_style_label(s_set_lbl_ssid_k, 0x8A94A8U);
     settings_style_label(s_set_lbl_ip_k, 0x8A94A8U);
+    settings_style_label(s_set_lbl_bat_k, 0x8A94A8U);
     settings_style_label(s_set_lbl_lang_k, 0x8A94A8U);
     settings_style_label(s_set_lbl_skin_k, 0x8A94A8U);
     settings_style_label(s_set_lbl_fw_v, 0xDCE6F8U);
@@ -712,19 +906,20 @@ static void settings_apply_i18n(void)
     settings_style_label(s_set_lbl_net_v, 0xDCE6F8U);
     settings_style_label(s_set_lbl_ssid_v, 0xDCE6F8U);
     settings_style_label(s_set_lbl_ip_v, 0xDCE6F8U);
+    settings_style_label(s_set_lbl_bat_v, 0xDCE6F8U);
     settings_style_label(s_set_lbl_lang_v, 0x7EC8FFU);
     settings_style_label(s_set_lbl_skin_v, 0x6A7388U);
     if (s_set_lbl_fw_k != NULL) {
-        lv_label_set_text(s_set_lbl_fw_k, settings_tr("Firmware", "固件"));
+        lv_label_set_text(s_set_lbl_fw_k, ui_tr("settings.firmware"));
     }
     if (s_set_lbl_pack_k != NULL) {
-        lv_label_set_text(s_set_lbl_pack_k, settings_tr("Skin pack", "皮肤包"));
+        lv_label_set_text(s_set_lbl_pack_k, ui_tr("settings.skin_pack"));
     }
     if (s_set_lbl_mac_k != NULL) {
         lv_label_set_text(s_set_lbl_mac_k, "MAC");
     }
     if (s_set_lbl_net_k != NULL) {
-        lv_label_set_text(s_set_lbl_net_k, settings_tr("Network", "网络"));
+        lv_label_set_text(s_set_lbl_net_k, ui_tr("settings.network"));
     }
     if (s_set_lbl_ssid_k != NULL) {
         lv_label_set_text(s_set_lbl_ssid_k, "SSID");
@@ -732,14 +927,17 @@ static void settings_apply_i18n(void)
     if (s_set_lbl_ip_k != NULL) {
         lv_label_set_text(s_set_lbl_ip_k, "IP");
     }
+    if (s_set_lbl_bat_k != NULL) {
+        lv_label_set_text(s_set_lbl_bat_k, ui_tr("settings.battery"));
+    }
     if (s_set_lbl_lang_k != NULL) {
-        lv_label_set_text(s_set_lbl_lang_k, settings_tr("Language", "语言"));
+        lv_label_set_text(s_set_lbl_lang_k, ui_tr("settings.language"));
     }
     if (s_set_lbl_skin_k != NULL) {
-        lv_label_set_text(s_set_lbl_skin_k, settings_tr("Skin", "皮肤"));
+        lv_label_set_text(s_set_lbl_skin_k, ui_tr("settings.skin"));
     }
     if (s_set_lbl_calib != NULL) {
-        lv_label_set_text(s_set_lbl_calib, settings_tr("Touch calib", "触摸校准"));
+        lv_label_set_text(s_set_lbl_calib, ui_tr("settings.touch_calib"));
         lv_obj_set_style_text_font(s_set_lbl_calib, font, 0);
     }
     if (s_set_row_lang != NULL) {
@@ -801,6 +999,33 @@ static void settings_btn_cb(lv_event_t *e)
     settings_open_internal();
 }
 
+static void settings_lang_load(void)
+{
+    nvs_pet_ui_t ui;
+
+    s_ui_lang = PET_UI_LANG_EN;
+    if (!nvs_pet_ui_get(&ui)) {
+        return;
+    }
+    if (ui.lang == NVS_PET_UI_LANG_ZH) {
+        /* 无 CJK 时仍记住偏好，展示退回英文直到字库可用 */
+        s_ui_lang = PET_UI_LANG_ZH;
+    }
+}
+
+static bool settings_lang_save(pet_ui_lang_t lang)
+{
+    nvs_pet_ui_t ui;
+
+    nvs_pet_ui_default(&ui);
+    ui.lang = (lang == PET_UI_LANG_ZH) ? NVS_PET_UI_LANG_ZH : NVS_PET_UI_LANG_EN;
+    if (!nvs_pet_ui_set(&ui)) {
+        LOG_WARN("settings: lang NVS save failed");
+        return false;
+    }
+    return true;
+}
+
 static void settings_lang_cb(lv_event_t *e)
 {
     (void)e;
@@ -808,7 +1033,12 @@ static void settings_lang_cb(lv_event_t *e)
         return;
     }
     s_ui_lang = (s_ui_lang == PET_UI_LANG_EN) ? PET_UI_LANG_ZH : PET_UI_LANG_EN;
+    (void)settings_lang_save(s_ui_lang);
+    ui_i18n_reload();
     settings_apply_i18n();
+    if (s_chat_open) {
+        chat_apply_mode_ui(s_chat_mode_id);
+    }
 }
 
 static void settings_calib_cb(lv_event_t *e)
@@ -969,6 +1199,7 @@ static void settings_create_layer(lv_obj_t *parent)
     (void)settings_make_row(s_set_scroll, &s_set_lbl_net_k, &s_set_lbl_net_v, false, NULL);
     (void)settings_make_row(s_set_scroll, &s_set_lbl_ssid_k, &s_set_lbl_ssid_v, false, NULL);
     (void)settings_make_row(s_set_scroll, &s_set_lbl_ip_k, &s_set_lbl_ip_v, false, NULL);
+    (void)settings_make_row(s_set_scroll, &s_set_lbl_bat_k, &s_set_lbl_bat_v, false, NULL);
     s_set_row_lang =
         settings_make_row(s_set_scroll, &s_set_lbl_lang_k, &s_set_lbl_lang_v, true, settings_lang_cb);
 
@@ -998,7 +1229,8 @@ static void settings_create_layer(lv_obj_t *parent)
     lv_obj_remove_flag(spacer, LV_OBJ_FLAG_CLICKABLE);
 
     s_set_open = false;
-    s_ui_lang = PET_UI_LANG_EN;
+    settings_lang_load();
+    ui_i18n_reload();
     settings_apply_i18n();
 }
 
@@ -1339,6 +1571,9 @@ static void chat_set_home_chrome_visible(bool visible)
         if (s_net_wrap != NULL) {
             lv_obj_remove_flag(s_net_wrap, LV_OBJ_FLAG_HIDDEN);
         }
+        if (s_bat_wrap != NULL) {
+            lv_obj_remove_flag(s_bat_wrap, LV_OBJ_FLAG_HIDDEN);
+        }
         if (s_set_btn != NULL) {
             lv_obj_remove_flag(s_set_btn, LV_OBJ_FLAG_HIDDEN);
         }
@@ -1376,6 +1611,9 @@ static void chat_set_home_chrome_visible(bool visible)
         if (s_net_wrap != NULL) {
             lv_obj_add_flag(s_net_wrap, LV_OBJ_FLAG_HIDDEN);
         }
+        if (s_bat_wrap != NULL) {
+            lv_obj_add_flag(s_bat_wrap, LV_OBJ_FLAG_HIDDEN);
+        }
         if (s_set_btn != NULL) {
             lv_obj_add_flag(s_set_btn, LV_OBJ_FLAG_HIDDEN);
         }
@@ -1403,34 +1641,36 @@ static void chat_apply_wave_visible(bool on)
 
 static void chat_apply_mode_ui(pet_chat_mode_t mode)
 {
-    const char *label = "ready";
+    const char *label = ui_tr("chat.mode_ready");
     uint32_t color = 0x7A849CU;
 
     s_chat_mode_id = mode;
     switch (mode) {
     case PET_CHAT_MODE_CONNECTING:
-        label = "connecting";
+        label = ui_tr("chat.mode_connecting");
         color = 0xE0B060U;
         break;
     case PET_CHAT_MODE_LISTENING:
-        label = "listen";
+        label = ui_tr("chat.mode_listen");
         color = 0x7EC8FFU;
         break;
     case PET_CHAT_MODE_SPEAKING:
-        label = "speak";
+        label = ui_tr("chat.mode_speak");
         color = 0x6DD6A0U;
         break;
     case PET_CHAT_MODE_IDLE:
     default:
-        label = "ready";
+        label = ui_tr("chat.mode_ready");
         color = 0x7A849CU;
         break;
     }
     if (s_chat_mode != NULL) {
         lv_label_set_text(s_chat_mode, label);
         lv_obj_set_style_text_color(s_chat_mode, lv_color_hex(color), 0);
+        lv_obj_set_style_text_font(s_chat_mode, settings_ui_font(), 0);
     }
     chat_apply_wave_visible(mode == PET_CHAT_MODE_LISTENING);
+    pet_sfx_set_chat_busy((mode == PET_CHAT_MODE_LISTENING) || (mode == PET_CHAT_MODE_SPEAKING));
 }
 
 static void chat_set_caption_internal(const char *utf8)
@@ -1462,6 +1702,7 @@ static void chat_close_internal(bool notify)
     s_chat_listen_on = false;
     s_chat_listen_ui_pending = false;
     s_chat_idle_ms = 0U;
+    pet_sfx_set_chat_busy(false);
     if (s_chat_layer != NULL) {
         lv_obj_add_flag(s_chat_layer, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1496,7 +1737,7 @@ static void chat_open_internal(void)
     if (s_body_hit != NULL) {
         lv_obj_move_foreground(s_body_hit);
     }
-    chat_set_caption_internal("tap to talk");
+    chat_set_caption_internal(ui_tr("chat.tap_to_talk"));
     chat_apply_mode_ui(PET_CHAT_MODE_CONNECTING);
     if (s_chat_hook != NULL) {
         s_chat_hook(PET_CHAT_ACT_ENTER);
@@ -1512,7 +1753,7 @@ static void chat_toggle_listen(void)
     if (s_chat_listen_on) {
         s_chat_listen_on = false;
         s_chat_listen_ui_pending = false;
-        chat_set_caption_internal("tap to talk");
+        chat_set_caption_internal(ui_tr("chat.tap_to_talk"));
         if (s_chat_hook != NULL) {
             s_chat_hook(PET_CHAT_ACT_LISTEN_OFF);
         }
@@ -1640,7 +1881,7 @@ static void chat_create_layer(lv_obj_t *parent)
     }
 
     s_chat_mode = lv_label_create(s_chat_layer);
-    lv_label_set_text(s_chat_mode, "listen");
+    lv_label_set_text(s_chat_mode, ui_tr("chat.mode_listen"));
     lv_obj_set_style_text_color(s_chat_mode, lv_color_hex(0x7EC8FF), 0);
 #if LV_FONT_MONTSERRAT_14
     lv_obj_set_style_text_font(s_chat_mode, &lv_font_montserrat_14, 0);
@@ -1887,6 +2128,7 @@ static void splash_destroy(void)
     }
     (void)memset(&s_splash_dsc, 0, sizeof(s_splash_dsc));
     s_splash_active = false;
+    s_splash_phase = SPLASH_PHASE_ENTERING;
 }
 
 static void splash_enter_home(void)
@@ -1894,8 +2136,10 @@ static void splash_enter_home(void)
     lv_obj_t *parent = s_boot_parent;
     pet_view_boot_done_fn done = s_boot_done;
 
-    /* Gate 已满足（≥1s + pack）：此时再拉字库，避免卡死首帧刷新导致“无开机动画”。 */
+    /* Gate 已满足（≥1s + pack + fade-out）：此时再拉字库与 UI 铬语言，避免卡死首帧刷新。 */
     chat_font_try_load_sd();
+    settings_lang_load();
+    ui_i18n_reload();
     splash_destroy();
     pet_view_create(parent);
     if (done != NULL) {
@@ -1903,8 +2147,77 @@ static void splash_enter_home(void)
     }
 }
 
+static lv_opa_t splash_lerp_opa(uint32_t elapsed_ms, uint32_t dur_ms, lv_opa_t from, lv_opa_t to)
+{
+    int32_t delta;
+
+    if (dur_ms == 0U) {
+        return to;
+    }
+    if (elapsed_ms >= dur_ms) {
+        return to;
+    }
+    delta = (int32_t)to - (int32_t)from;
+    return (lv_opa_t)((int32_t)from + ((delta * (int32_t)elapsed_ms) / (int32_t)dur_ms));
+}
+
+static lv_opa_t splash_breath_opa(uint32_t elapsed_ms)
+{
+    uint32_t half = PET_SPLASH_BREATH_MS / 2U;
+    uint32_t t;
+    uint32_t amp;
+    uint32_t rise;
+
+    if (half == 0U) {
+        return LV_OPA_COVER;
+    }
+    t = elapsed_ms % PET_SPLASH_BREATH_MS;
+    amp = (uint32_t)LV_OPA_COVER - (uint32_t)PET_SPLASH_BREATH_OPA_MIN;
+    if (t < half) {
+        rise = (t * amp) / half;
+    } else {
+        rise = ((PET_SPLASH_BREATH_MS - t) * amp) / half;
+    }
+    return (lv_opa_t)((uint32_t)PET_SPLASH_BREATH_OPA_MIN + rise);
+}
+
+static void splash_set_pet_opa(lv_opa_t opa)
+{
+    if (s_splash_img != NULL) {
+        lv_obj_set_style_opa(s_splash_img, opa, 0);
+    }
+    if (s_splash_fallback != NULL) {
+        lv_obj_set_style_opa(s_splash_fallback, opa, 0);
+    }
+}
+
+static void splash_set_chrome_opa(lv_opa_t opa)
+{
+    splash_set_pet_opa(opa);
+    if (s_splash_arc != NULL) {
+        lv_obj_set_style_opa(s_splash_arc, opa, 0);
+    }
+}
+
+static void splash_begin_exit(void)
+{
+    s_splash_phase = SPLASH_PHASE_EXITING;
+    s_splash_phase_t0 = lv_tick_get();
+    /* Restore pet to full before layer fade so exit looks even. */
+    splash_set_pet_opa(LV_OPA_COVER);
+    if (s_splash_arc != NULL) {
+        lv_obj_set_style_opa(s_splash_arc, LV_OPA_COVER, 0);
+    }
+    if (s_splash_layer != NULL) {
+        lv_obj_set_style_opa(s_splash_layer, LV_OPA_COVER, 0);
+    }
+}
+
 static void splash_timer_cb(lv_timer_t *t)
 {
+    uint32_t elapsed;
+    lv_opa_t opa;
+
     (void)t;
     if (!s_splash_active) {
         return;
@@ -1912,17 +2225,40 @@ static void splash_timer_cb(lv_timer_t *t)
 
     /* Spin the progress ring (visual C). */
     if (s_splash_arc != NULL) {
-        s_splash_arc_rot = (int16_t)((s_splash_arc_rot + 12) % 360);
+        s_splash_arc_rot = (int16_t)((s_splash_arc_rot + PET_SPLASH_ARC_STEP) % 360);
         lv_arc_set_rotation(s_splash_arc, (int32_t)s_splash_arc_rot);
     }
 
-    if (!s_splash_pack_done) {
+    if (s_splash_phase == SPLASH_PHASE_ENTERING) {
+        elapsed = lv_tick_elaps(s_splash_t0);
+        opa = splash_lerp_opa(elapsed, PET_SPLASH_FADE_IN_MS, LV_OPA_TRANSP, LV_OPA_COVER);
+        splash_set_chrome_opa(opa);
+        if (elapsed >= PET_SPLASH_FADE_IN_MS) {
+            s_splash_phase = SPLASH_PHASE_HOLD;
+            s_splash_phase_t0 = lv_tick_get();
+            splash_set_chrome_opa(LV_OPA_COVER);
+        }
         return;
     }
-    if (lv_tick_elaps(s_splash_t0) < PET_SPLASH_GATE_MS) {
+
+    if (s_splash_phase == SPLASH_PHASE_HOLD) {
+        elapsed = lv_tick_elaps(s_splash_phase_t0);
+        splash_set_pet_opa(splash_breath_opa(elapsed));
+        if (s_splash_pack_done && (lv_tick_elaps(s_splash_t0) >= PET_SPLASH_GATE_MS)) {
+            splash_begin_exit();
+        }
         return;
     }
-    splash_enter_home();
+
+    /* EXITING */
+    elapsed = lv_tick_elaps(s_splash_phase_t0);
+    opa = splash_lerp_opa(elapsed, PET_SPLASH_FADE_OUT_MS, LV_OPA_COVER, LV_OPA_TRANSP);
+    if (s_splash_layer != NULL) {
+        lv_obj_set_style_opa(s_splash_layer, opa, 0);
+    }
+    if (elapsed >= PET_SPLASH_FADE_OUT_MS) {
+        splash_enter_home();
+    }
 }
 
 void pet_view_set_alloc(pet_view_alloc_fn alloc_fn, pet_view_free_fn free_fn)
@@ -1955,6 +2291,8 @@ void pet_view_boot_start(lv_obj_t *parent, pet_view_boot_done_fn on_home)
     s_splash_pack_done = false;
     s_splash_arc_rot = 270;
     s_splash_t0 = lv_tick_get();
+    s_splash_phase_t0 = s_splash_t0;
+    s_splash_phase = SPLASH_PHASE_ENTERING;
     s_splash_active = true;
 
     lv_obj_set_style_bg_color(parent, lv_color_hex(0x202020), 0);
@@ -1964,6 +2302,7 @@ void pet_view_boot_start(lv_obj_t *parent, pet_view_boot_done_fn on_home)
     lv_obj_set_size(s_splash_layer, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(s_splash_layer, lv_color_hex(0x202020), 0);
     lv_obj_set_style_bg_opa(s_splash_layer, LV_OPA_COVER, 0);
+    lv_obj_set_style_opa(s_splash_layer, LV_OPA_COVER, 0);
     lv_obj_align(s_splash_layer, LV_ALIGN_CENTER, 0, 0);
     lv_obj_remove_flag(s_splash_layer, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -1979,6 +2318,7 @@ void pet_view_boot_start(lv_obj_t *parent, pet_view_boot_done_fn on_home)
         lv_image_set_src(s_splash_img, &s_splash_dsc);
         lv_obj_set_size(s_splash_img, (int32_t)w, (int32_t)h);
         lv_obj_align(s_splash_img, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_style_opa(s_splash_img, LV_OPA_TRANSP, 0);
     } else {
         s_splash_fallback = lv_obj_create(s_splash_layer);
         lv_obj_remove_style_all(s_splash_fallback);
@@ -1986,6 +2326,7 @@ void pet_view_boot_start(lv_obj_t *parent, pet_view_boot_done_fn on_home)
         lv_obj_set_style_bg_color(s_splash_fallback, lv_color_hex(0x4AA3C8), 0);
         lv_obj_set_style_bg_opa(s_splash_fallback, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(s_splash_fallback, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_opa(s_splash_fallback, LV_OPA_TRANSP, 0);
         lv_obj_align(s_splash_fallback, LV_ALIGN_CENTER, 0, -8);
         if (s_splash_pix != NULL) {
             view_free(s_splash_pix);
@@ -2002,10 +2343,11 @@ void pet_view_boot_start(lv_obj_t *parent, pet_view_boot_done_fn on_home)
     lv_arc_set_rotation(s_splash_arc, s_splash_arc_rot);
     lv_obj_remove_style(s_splash_arc, NULL, LV_PART_KNOB);
     lv_obj_remove_flag(s_splash_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_splash_arc, 4, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_splash_arc, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_splash_arc, PET_SPLASH_ARC_WIDTH, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_splash_arc, PET_SPLASH_ARC_WIDTH, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_splash_arc, lv_color_hex(0x2A3148), LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_splash_arc, lv_color_hex(0x7EC8FF), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_splash_arc, lv_color_hex(0x9AD8FF), LV_PART_INDICATOR);
+    lv_obj_set_style_opa(s_splash_arc, LV_OPA_TRANSP, 0);
 
     s_splash_timer = lv_timer_create(splash_timer_cb, PET_SPLASH_POLL_MS, NULL);
 }
@@ -2104,6 +2446,7 @@ void pet_view_create(lv_obj_t *parent)
     s_need_lbl_e = make_need_label(parent, PET_NEED_X_E, 0xFFE27AU);
 
     make_net_status(parent);
+    make_battery_status(parent);
     make_settings_btn(parent);
 
     s_pack_hint = lv_label_create(parent);
@@ -2117,7 +2460,10 @@ void pet_view_create(lv_obj_t *parent)
         lv_obj_add_flag(s_pack_hint, LV_OBJ_FLAG_HIDDEN);
         show_body_clip(PET_CLIP_IDLE);
     } else {
-        lv_label_set_text(s_pack_hint, "NO PACK");
+        lv_label_set_text(s_pack_hint, ui_tr("home.no_pack"));
+        if (settings_use_zh()) {
+            lv_obj_set_style_text_font(s_pack_hint, settings_ui_font(), 0);
+        }
         s_hint_timer = lv_timer_create(hint_fade_cb, PET_HINT_FADE_MS, NULL);
         lv_timer_set_repeat_count(s_hint_timer, 1);
     }
@@ -2146,6 +2492,9 @@ void pet_view_create(lv_obj_t *parent)
     if (s_net_wrap != NULL) {
         lv_obj_move_foreground(s_net_wrap);
     }
+    if (s_bat_wrap != NULL) {
+        lv_obj_move_foreground(s_bat_wrap);
+    }
     if (s_set_btn != NULL) {
         lv_obj_move_foreground(s_set_btn);
     }
@@ -2166,6 +2515,7 @@ void pet_view_poll(void)
     drain_intents();
     advance_frame();
     apply_net_status();
+    apply_battery_status();
 
     s_tick_div++;
     if (s_tick_div >= PET_VIEW_TICK_DIV) {

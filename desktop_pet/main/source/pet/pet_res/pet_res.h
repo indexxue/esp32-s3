@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 #define PET_RES_MAX_CLIPS (8U)
-#define PET_RES_MAX_FRAMES (8U)
+#define PET_RES_MAX_FRAMES (12U)
 #define PET_RES_NAME_LEN (32U)
 #define PET_RES_FRAME_MAX_W (180U)
 #define PET_RES_FRAME_MAX_H (180U)

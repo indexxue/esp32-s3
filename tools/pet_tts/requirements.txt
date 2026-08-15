@@ -1,0 +1,5 @@
+edge-tts>=6.1.0
+piper-tts>=1.2.0
+numpy>=1.26
+soundfile>=0.12
+imageio-ffmpeg>=0.5.1

@@ -10,10 +10,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from skin_core import (
+    CLIP_FRAMES_MAX,
     DEFAULT_CFG,
     DEFAULT_OUT,
     SPLASH_CONTENT_DEFAULT,
     SPLASH_SIZE,
+    SkinZipError,
     bind_assets,
     build_pack,
     build_splash,
@@ -21,6 +23,7 @@ from skin_core import (
     check_pack,
     check_has_errors,
     export_skin_zip,
+    extract_video_frames_to_clip,
     idle_color_from_cfg,
     import_asset_folder,
     install_splash_image,
@@ -49,6 +52,24 @@ def main() -> None:
         default=None,
         metavar="DIR",
         help="Copy known filenames (idle_0.png … splash.png) into assets/",
+    )
+    ap.add_argument(
+        "--import-video",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Evenly sample video into --clip frames (see --frames)",
+    )
+    ap.add_argument(
+        "--clip",
+        default="idle",
+        help="Clip id for --import-video (default: idle)",
+    )
+    ap.add_argument(
+        "--frames",
+        type=int,
+        default=CLIP_FRAMES_MAX,
+        help=f"Frame count for --import-video (1..{CLIP_FRAMES_MAX}, default {CLIP_FRAMES_MAX})",
     )
     ap.add_argument(
         "--bind",
@@ -114,6 +135,11 @@ def main() -> None:
         metavar="FILE",
         help="Write pet.zip for web upload (default: <out>/../pet.zip)",
     )
+    ap.add_argument(
+        "--no-font",
+        action="store_true",
+        help="With --zip: omit font/ (device keeps existing caption.bin)",
+    )
     args = ap.parse_args()
 
     cfg_path = args.cfg
@@ -123,6 +149,19 @@ def main() -> None:
 
     if args.import_dir is not None:
         _log_lines(import_asset_folder(args.import_dir, assets))
+        args.bind = True
+
+    if args.import_video is not None:
+        n = max(1, min(CLIP_FRAMES_MAX, int(args.frames)))
+        _log_lines(
+            extract_video_frames_to_clip(
+                args.import_video,
+                assets,
+                str(args.clip),
+                frame_count=n,
+                cfg=cfg,
+            )
+        )
         args.bind = True
 
     if args.bind:
@@ -170,7 +209,13 @@ def main() -> None:
 
     if args.zip is not None:
         zpath = Path(args.zip) if args.zip else (out_dir.parent / "pet.zip")
-        z, note = export_skin_zip(out_dir, zpath)
+        try:
+            z, note = export_skin_zip(
+                out_dir, zpath, include_font=not args.no_font
+            )
+        except SkinZipError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from exc
         print(f"wrote {z} ({note})")
 
 

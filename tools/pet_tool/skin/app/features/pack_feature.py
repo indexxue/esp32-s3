@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -80,6 +81,13 @@ class PackPanel(QWidget):
         row3.addWidget(btn_zip)
         row3.addStretch(1)
         lay.addLayout(row3)
+        self.chk_font = QCheckBox("Include font/caption.bin in zip")
+        self.chk_font.setChecked(True)
+        self.chk_font.setToolTip(
+            "Uncheck if caption.bin exceeds device WEB_SKIN_FILE_MAX "
+            "(device keeps existing pet/font)."
+        )
+        lay.addWidget(self.chk_font)
         lay.addWidget(QLabel("Summary"))
         lay.addWidget(self.summary, 1)
 
@@ -178,10 +186,15 @@ class PackPanel(QWidget):
             )
             if not path:
                 return
-            z, note = skin_core.export_skin_zip(self.ctx.out_dir, Path(path))
+            z, note = skin_core.export_skin_zip(
+                self.ctx.out_dir,
+                Path(path),
+                include_font=self.chk_font.isChecked(),
+            )
             self.ctx.info(
                 f"wrote {z} — {note}; upload on device web, board reboots "
                 "(existing SD font kept if zip has none)"
             )
         except Exception as exc:  # noqa: BLE001
             self.ctx.info(f"export zip error: {exc}")
+            self.summary.setPlainText(str(exc))

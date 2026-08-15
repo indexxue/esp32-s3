@@ -68,7 +68,7 @@
 | `PET_INTENT_HUD` | —（读 `pet_core_get_needs`） | Needs 底弧 |
 | `PET_INTENT_LED` | 0=eat 1=play | `led_scene` |
 | `PET_INTENT_MOTOR` | 预留 | 未接 TB6612 |
-| `PET_INTENT_SFX` | 预留 | 未接 |
+| `PET_INTENT_SFX` | `pet_clip_id_t` | Care SFX：`pet_sfx` 从 `sfx/<clip>/` 抽一句 WAV |
 | `PET_INTENT_OPEN_CHAT` | — | 右侧「聊」；`pet_view` 直投 hook，不经 core |
 
 ---

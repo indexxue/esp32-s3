@@ -73,6 +73,13 @@ status_t desktop_pet_audio_playout_stop(void);
 bool desktop_pet_audio_is_playouting(void);
 status_t desktop_pet_audio_playout_write_mono(const int16_t *pcm, size_t samples, uint32_t timeout_ms);
 
+/**
+ * 从绝对路径播放 16 kHz mono 16-bit PCM WAV（照料提示音）。
+ * 与 recording / stream / playout / 内存 play 互斥；可打断上一句文件播放。
+ * 超过约 8 s 的 data 截断播放。
+ */
+status_t desktop_pet_audio_play_wav_path(const char *abs_path);
+
 #ifdef __cplusplus
 }
 #endif

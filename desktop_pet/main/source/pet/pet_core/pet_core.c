@@ -136,15 +136,17 @@ static bool start_clip(pet_clip_id_t clip)
     s_clip = clip;
     s_clip_remain_s = s_clip_dur_s[clip];
     intent_push(PET_INTENT_CLIP, (int16_t)clip, 0);
+    if ((clip == PET_CLIP_EAT) || (clip == PET_CLIP_PLAY) || (clip == PET_CLIP_POKE) ||
+        (clip == PET_CLIP_REFUSE)) {
+        intent_push(PET_INTENT_SFX, (int16_t)clip, 0);
+    }
     if (clip == PET_CLIP_EAT) {
         intent_push(PET_INTENT_LED, 0, 0);
         intent_push(PET_INTENT_MOTOR, 0, 0);
-        intent_push(PET_INTENT_SFX, 0, 0);
         set_face(PET_FACE_HAPPY);
     } else if (clip == PET_CLIP_PLAY) {
         intent_push(PET_INTENT_LED, 1, 0);
         intent_push(PET_INTENT_MOTOR, 1, 0);
-        intent_push(PET_INTENT_SFX, 1, 0);
         set_face(PET_FACE_HAPPY);
     } else if (clip == PET_CLIP_POKE) {
         set_face(PET_FACE_HAPPY);
@@ -294,6 +296,7 @@ static void do_sleep(void)
     s_needs.sleeping = true;
     s_clip_remain_s = 0U;
     emit_hud();
+    intent_push(PET_INTENT_SFX, (int16_t)PET_CLIP_SLEEP_LOOP, 0);
     pick_idle_clip();
 }
 

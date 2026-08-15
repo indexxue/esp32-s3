@@ -15,6 +15,7 @@
 #include "pet_core.h"
 #include "pet_fs.h"
 #include "pet_res.h"
+#include "pet_sfx.h"
 #include "pet_view.h"
 #include "sd_cfg.h"
 #include "qmi8658a.h"
@@ -1177,9 +1178,11 @@ static void ui_intent_hook(const pet_intent_t *in)
     } else if (in->id == PET_INTENT_OPEN_CHAT) {
         /* Chat surface opens inside pet_view; keep hook for LED/SFX later. */
         (void)in;
-    } else if (in->id == PET_INTENT_MOTOR || in->id == PET_INTENT_SFX) {
-        /* 量产路径暂未接 TB6612 / 音效；显式吞掉避免误以为已驱动。 */
+    } else if (in->id == PET_INTENT_MOTOR) {
+        /* 量产路径暂未接 TB6612；显式吞掉避免误以为已驱动。 */
         (void)in;
+    } else if (in->id == PET_INTENT_SFX) {
+        pet_sfx_play_for_clip((pet_clip_id_t)in->arg0);
     }
 }
 

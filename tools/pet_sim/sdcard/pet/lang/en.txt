@@ -1,0 +1,27 @@
+# UI chrome locale (EN) — optional overlay on firmware table
+# Keys match pet_i18n firmware table; unknown keys ignored.
+
+settings.title=Settings
+settings.firmware=Firmware
+settings.skin_pack=Skin pack
+settings.network=Network
+settings.battery=Battery
+settings.language=Language
+settings.skin=Skin
+settings.touch_calib=Touch calib
+settings.soon=soon
+settings.net_off=off
+settings.net_ap=AP
+settings.net_online=online
+settings.net_offline=offline
+settings.chg=chg
+settings.lang_en=EN
+settings.lang_zh=中文
+
+chat.tap_to_talk=tap to talk
+chat.mode_listen=listen
+chat.mode_speak=speak
+chat.mode_connecting=connecting
+chat.mode_ready=ready
+
+home.no_pack=NO PACK

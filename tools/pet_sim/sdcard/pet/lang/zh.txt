@@ -1,0 +1,27 @@
+# UI 铬语言（中文）— 可选，按 key 覆盖固件底表
+# 未知 key 忽略。
+
+settings.title=设置
+settings.firmware=固件
+settings.skin_pack=皮肤包
+settings.network=网络
+settings.battery=电量
+settings.language=语言
+settings.skin=皮肤
+settings.touch_calib=触摸校准
+settings.soon=即将
+settings.net_off=关闭
+settings.net_ap=热点
+settings.net_online=在线
+settings.net_offline=离线
+settings.chg=充
+settings.lang_en=EN
+settings.lang_zh=中文
+
+chat.tap_to_talk=点按说话
+chat.mode_listen=听
+chat.mode_speak=说
+chat.mode_connecting=连接中
+chat.mode_ready=就绪
+
+home.no_pack=无皮肤

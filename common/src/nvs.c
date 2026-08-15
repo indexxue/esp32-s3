@@ -87,6 +87,7 @@ static const char *const TAG = "nvs";
 #define NVS_KEY_SERVO_CAL "servo_cal"
 #define NVS_KEY_TOUCH_CAL "touch_cal"
 #define NVS_KEY_PET_NEEDS "pet_needs"
+#define NVS_KEY_PET_UI "pet_ui"
 
 /** 与 board.h 舵机映射一致；nvs 不依赖 board，避免层倒挂。 */
 #define NVS_SERVO_CALIB_PULSE_MIN_US (500U)
@@ -1346,5 +1347,72 @@ bool nvs_pet_needs_delete(void)
         return false;
     }
     st = blob_del(NVS_KEY_PET_NEEDS);
+    return (st == NVS_OK) || (st == NVS_ERR_NOT_FOUND);
+}
+
+void nvs_pet_ui_default(nvs_pet_ui_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    (void)memset(out, 0, sizeof(*out));
+    out->magic = NVS_PET_UI_MAGIC;
+    out->lang = NVS_PET_UI_LANG_EN;
+}
+
+bool nvs_pet_ui_validate(const nvs_pet_ui_t *cfg)
+{
+    if (cfg == NULL) {
+        return false;
+    }
+    if (cfg->magic != NVS_PET_UI_MAGIC) {
+        return false;
+    }
+    if ((cfg->lang != NVS_PET_UI_LANG_EN) && (cfg->lang != NVS_PET_UI_LANG_ZH)) {
+        return false;
+    }
+    return true;
+}
+
+_Static_assert(sizeof(nvs_pet_ui_t) <= NVS_KEY_VALUE_MAX, "pet ui blob must fit NVS_KEY_VALUE_MAX");
+
+bool nvs_pet_ui_get(nvs_pet_ui_t *out)
+{
+    nvs_pet_ui_t tmp;
+    size_t       len = sizeof(tmp);
+
+    if (out == NULL) {
+        return false;
+    }
+    if (blob_get(NVS_KEY_PET_UI, &tmp, &len) != NVS_OK) {
+        return false;
+    }
+    if ((len != sizeof(tmp)) || !nvs_pet_ui_validate(&tmp)) {
+        (void)blob_del(NVS_KEY_PET_UI);
+        return false;
+    }
+    *out = tmp;
+    return true;
+}
+
+bool nvs_pet_ui_set(const nvs_pet_ui_t *cfg)
+{
+    if (!s_ready || (cfg == NULL)) {
+        return false;
+    }
+    if (!nvs_pet_ui_validate(cfg)) {
+        return false;
+    }
+    return (blob_set(NVS_KEY_PET_UI, cfg, sizeof(*cfg)) == NVS_OK);
+}
+
+bool nvs_pet_ui_delete(void)
+{
+    nvs_err_t st;
+
+    if (!s_ready) {
+        return false;
+    }
+    st = blob_del(NVS_KEY_PET_UI);
     return (st == NVS_OK) || (st == NVS_ERR_NOT_FOUND);
 }

@@ -40,6 +40,9 @@
 /** 仅去直流：R≈0.995 → fc≈12Hz @16kHz（不做噪声门，避免卡断/爆音）。 */
 #define AUDIO_HPF_R_Q15 (32604)
 #define AUDIO_SD_DIR BOARD_SDCARD_MOUNT_POINT "/record"
+/** Care SFX / file play: max PCM payload @ 16k mono 16-bit */
+#define AUDIO_WAV_MAX_DATA_BYTES ((size_t)DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ * 2U * 8U)
+#define AUDIO_WAV_PATH_MAX (200U)
 
 static es8311_t s_codec;
 static i2s_chan_handle_t s_i2s_tx;
@@ -59,10 +62,15 @@ static uint64_t s_stream_energy_r;
 static size_t s_play_pos_samples;
 static TaskHandle_t s_rec_task;
 static TaskHandle_t s_play_task;
+static TaskHandle_t s_wav_task;
 static SemaphoreHandle_t s_lock;
 static uint16_t s_rec_file_seq;
 static int32_t s_hpf_x1;
 static int32_t s_hpf_y1;
+static volatile bool s_wav_playing;
+static char s_wav_path[AUDIO_WAV_PATH_MAX];
+static uint32_t s_wav_data_off;
+static uint32_t s_wav_data_bytes;
 
 /*
  * 板丝印 I2S_DIN/DOUT 按 Codec 脚命名时：
@@ -553,7 +561,7 @@ bool desktop_pet_audio_is_recording(void)
 
 bool desktop_pet_audio_is_playing(void)
 {
-    return s_playing;
+    return s_playing || s_wav_playing;
 }
 
 bool desktop_pet_audio_is_paused(void)
@@ -686,6 +694,13 @@ status_t desktop_pet_audio_play_stop(void)
     if (!s_ready) {
         return STATUS_FAIL;
     }
+    if (s_wav_playing || (s_wav_task != NULL)) {
+        s_wav_playing = false;
+        audio_wait_task_end(&s_wav_task);
+        audio_pa_set(false);
+        (void)es8311_stop(&s_codec);
+        LOG_INFO("audio: wav play stop");
+    }
     if (!s_playing && (s_play_task == NULL)) {
         return STATUS_OK;
     }
@@ -726,8 +741,9 @@ status_t desktop_pet_audio_play_start(void)
         LOG_WARN("audio: play ignored, recording");
         return STATUS_FAIL;
     }
-    if (s_streaming || s_playouting) {
-        LOG_WARN("audio: play ignored, stream=%d playout=%d", (int)s_streaming, (int)s_playouting);
+    if (s_streaming || s_playouting || s_wav_playing) {
+        LOG_WARN("audio: play ignored, stream=%d playout=%d wav=%d", (int)s_streaming,
+                 (int)s_playouting, (int)s_wav_playing);
         return STATUS_FAIL;
     }
 
@@ -1052,10 +1068,13 @@ status_t desktop_pet_audio_playout_start(void)
     if (s_playouting) {
         return STATUS_OK;
     }
-    if (s_recording || s_playing || s_streaming) {
-        LOG_WARN("audio: playout blocked, rec=%d play=%d stream=%d", (int)s_recording, (int)s_playing,
-                 (int)s_streaming);
+    if (s_recording || s_streaming) {
+        LOG_WARN("audio: playout blocked, rec=%d stream=%d", (int)s_recording, (int)s_streaming);
         return STATUS_INVALID_STATE;
+    }
+    /* Agent TTS wins over Care SFX / debug PCM play. */
+    if (s_playing || s_wav_playing) {
+        (void)desktop_pet_audio_play_stop();
     }
 
     audio_i2s_prepare_playback();
@@ -1161,5 +1180,219 @@ status_t desktop_pet_audio_playout_write_mono(const int16_t *pcm, size_t samples
         LOG_INFO("audio: playout pcm frames=%u samples=%u peak=%d", (unsigned)s_write_frames, (unsigned)samples,
                  (int)peak);
     }
+    return STATUS_OK;
+}
+
+static uint32_t audio_rd32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint16_t audio_rd16(const uint8_t *p)
+{
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+/**
+ * Parse PCM WAV: require 16 kHz / mono / 16-bit. Sets s_wav_data_off / s_wav_data_bytes.
+ */
+static bool audio_wav_parse(FILE *fp)
+{
+    uint8_t hdr[12];
+    uint32_t rate = 0U;
+    uint16_t channels = 0U;
+    uint16_t bits = 0U;
+    uint16_t audio_fmt = 0U;
+    bool got_fmt = false;
+    long file_pos;
+
+    s_wav_data_off = 0U;
+    s_wav_data_bytes = 0U;
+    if (fread(hdr, 1, 12, fp) != 12U) {
+        return false;
+    }
+    if ((memcmp(hdr, "RIFF", 4) != 0) || (memcmp(&hdr[8], "WAVE", 4) != 0)) {
+        return false;
+    }
+    for (;;) {
+        uint8_t ch[8];
+        uint32_t csize;
+        long skip;
+
+        if (fread(ch, 1, 8, fp) != 8U) {
+            break;
+        }
+        csize = audio_rd32(&ch[4]);
+        file_pos = ftell(fp);
+        if (file_pos < 0) {
+            return false;
+        }
+        if (memcmp(ch, "fmt ", 4) == 0) {
+            uint8_t fmt[16];
+
+            if (csize < 16U) {
+                return false;
+            }
+            if (fread(fmt, 1, 16, fp) != 16U) {
+                return false;
+            }
+            audio_fmt = audio_rd16(&fmt[0]);
+            channels = audio_rd16(&fmt[2]);
+            rate = audio_rd32(&fmt[4]);
+            bits = audio_rd16(&fmt[14]);
+            got_fmt = true;
+            skip = (long)csize - 16L;
+            if (skip > 0) {
+                if (fseek(fp, skip, SEEK_CUR) != 0) {
+                    return false;
+                }
+            }
+        } else if (memcmp(ch, "data", 4) == 0) {
+            s_wav_data_off = (uint32_t)file_pos;
+            s_wav_data_bytes = csize;
+            break;
+        } else {
+            skip = (long)csize;
+            if ((skip & 1L) != 0) {
+                skip++;
+            }
+            if (fseek(fp, skip, SEEK_CUR) != 0) {
+                return false;
+            }
+            continue;
+        }
+        if ((csize & 1U) != 0U) {
+            (void)fseek(fp, 1, SEEK_CUR);
+        }
+    }
+    if (!got_fmt || (s_wav_data_bytes == 0U) || (s_wav_data_off == 0U)) {
+        return false;
+    }
+    if ((audio_fmt != 1U) || (channels != DESKTOP_PET_AUDIO_CHANNELS) ||
+        (rate != DESKTOP_PET_AUDIO_SAMPLE_RATE_HZ) || (bits != DESKTOP_PET_AUDIO_BITS)) {
+        LOG_WARN("audio: wav fmt unsupported fmt=%u ch=%u rate=%u bits=%u", (unsigned)audio_fmt,
+                 (unsigned)channels, (unsigned)rate, (unsigned)bits);
+        return false;
+    }
+    if (s_wav_data_bytes > AUDIO_WAV_MAX_DATA_BYTES) {
+        LOG_WARN("audio: wav truncate %u -> %u", (unsigned)s_wav_data_bytes,
+                 (unsigned)AUDIO_WAV_MAX_DATA_BYTES);
+        s_wav_data_bytes = (uint32_t)AUDIO_WAV_MAX_DATA_BYTES;
+    }
+    return true;
+}
+
+static void audio_wav_play_task(void *arg)
+{
+    FILE *fp;
+    int16_t mono[AUDIO_CHUNK_SAMPLES];
+    int16_t stereo[AUDIO_CHUNK_SAMPLES * 2U];
+    uint32_t left;
+
+    (void)arg;
+    fp = fopen(s_wav_path, "rb");
+    if ((fp == NULL) || (fseek(fp, (long)s_wav_data_off, SEEK_SET) != 0)) {
+        if (fp != NULL) {
+            (void)fclose(fp);
+        }
+        LOG_WARN("audio: wav open/seek fail %s", s_wav_path);
+        s_wav_playing = false;
+        audio_pa_set(false);
+        (void)es8311_stop(&s_codec);
+        s_wav_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    left = s_wav_data_bytes;
+    while (s_wav_playing && (left > 0U)) {
+        size_t want_bytes =
+            (left < (AUDIO_CHUNK_SAMPLES * 2U)) ? (size_t)left : (AUDIO_CHUNK_SAMPLES * 2U);
+        size_t nread;
+        size_t samples;
+        size_t i;
+        size_t nbytes = 0U;
+
+        nread = fread(mono, 1, want_bytes, fp);
+        if (nread < 2U) {
+            break;
+        }
+        nread &= ~(size_t)1U;
+        samples = nread / 2U;
+        for (i = 0U; i < samples; i++) {
+            stereo[i * 2U] = mono[i];
+            stereo[i * 2U + 1U] = mono[i];
+        }
+        (void)i2s_channel_write(s_i2s_tx, stereo, samples * 2U * sizeof(int16_t), &nbytes,
+                                pdMS_TO_TICKS(200));
+        if (left >= (uint32_t)nread) {
+            left -= (uint32_t)nread;
+        } else {
+            left = 0U;
+        }
+    }
+
+    (void)fclose(fp);
+    audio_pa_set(false);
+    (void)es8311_stop(&s_codec);
+    s_wav_playing = false;
+    s_wav_task = NULL;
+    LOG_INFO("audio: wav play end");
+    vTaskDelete(NULL);
+}
+
+status_t desktop_pet_audio_play_wav_path(const char *abs_path)
+{
+    FILE *fp;
+    size_t n;
+
+    if (!s_ready || (abs_path == NULL) || (abs_path[0] == '\0')) {
+        return STATUS_INVALID_ARG;
+    }
+    if (s_recording || s_streaming || s_playouting) {
+        LOG_WARN("audio: wav ignored, rec=%d stream=%d playout=%d", (int)s_recording, (int)s_streaming,
+                 (int)s_playouting);
+        return STATUS_FAIL;
+    }
+
+    n = strlen(abs_path);
+    if ((n == 0U) || (n >= AUDIO_WAV_PATH_MAX)) {
+        return STATUS_INVALID_ARG;
+    }
+
+    (void)desktop_pet_audio_play_stop();
+
+    fp = fopen(abs_path, "rb");
+    if (fp == NULL) {
+        LOG_WARN("audio: wav fopen fail %s errno=%d", abs_path, errno);
+        return STATUS_FAIL;
+    }
+    if (!audio_wav_parse(fp)) {
+        (void)fclose(fp);
+        LOG_WARN("audio: wav parse fail %s", abs_path);
+        return STATUS_FAIL;
+    }
+    (void)fclose(fp);
+
+    (void)memcpy(s_wav_path, abs_path, n + 1U);
+    audio_i2s_prepare_playback();
+    if (es8311_set_mode(&s_codec, ES8311_MODE_PLAYBACK) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    if (es8311_start(&s_codec) != ES8311_OK) {
+        return STATUS_FAIL;
+    }
+    (void)es8311_set_dac_volume(&s_codec, AUDIO_DAC_VOLUME_REG);
+    audio_pa_set(true);
+    s_wav_playing = true;
+    if (xTaskCreate(audio_wav_play_task, "pet_wav", AUDIO_TASK_STACK, NULL, AUDIO_TASK_PRIO,
+                    &s_wav_task) != pdPASS) {
+        s_wav_playing = false;
+        audio_pa_set(false);
+        (void)es8311_stop(&s_codec);
+        LOG_ERROR("audio: wav task create failed");
+        return STATUS_FAIL;
+    }
+    LOG_INFO("audio: wav play %s (%u B)", abs_path, (unsigned)s_wav_data_bytes);
     return STATUS_OK;
 }

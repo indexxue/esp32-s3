@@ -15,7 +15,7 @@
     {
       "id": "idle",
       "fps": 4,
-      "frames": 2,
+      "frames": 1,
       "color": [
         255,
         255,
@@ -49,39 +49,9 @@
             "y": 56,
             "angle": 0
           }
-        },
-        {
-          "eye_l": {
-            "x": 62,
-            "y": 72,
-            "angle": 0
-          },
-          "eye_r": {
-            "x": 98,
-            "y": 72,
-            "angle": 0
-          },
-          "mouth": {
-            "x": 80,
-            "y": 108,
-            "angle": 0
-          },
-          "brow_l": {
-            "x": 62,
-            "y": 56,
-            "angle": 0
-          },
-          "brow_r": {
-            "x": 98,
-            "y": 56,
-            "angle": 0
-          }
         }
       ],
-      "sources": [
-        "assets/idle_1.png",
-        "assets/idle_2.png"
-      ]
+      "source": "assets/idle.png"
     },
     {
       "id": "sleepy",
@@ -452,7 +422,7 @@
   "splash": {
     "fit": "contain",
     "bg": "#202020",
-    "content_size": 240
+    "content_size": 178
   },
   "theme": {
     "ui": {

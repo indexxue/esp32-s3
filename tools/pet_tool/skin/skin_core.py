@@ -48,7 +48,15 @@ BODY_SIZE_DEFAULT = 160
 BODY_SIZE_MIN = 48
 BODY_SIZE_MAX = 180
 # Matches firmware PET_RES_MAX_FRAMES.
-CLIP_FRAMES_MAX = 8
+CLIP_FRAMES_MAX = 12
+# Device web_skin.c upload limits (keep in sync with desktop_pet web_skin.c).
+WEB_SKIN_FILE_MAX = 1536 * 1024
+WEB_SKIN_ZIP_MAX = 4 * 1024 * 1024
+WEB_SKIN_MAX_ENTRIES = 64
+WEB_SKIN_REL_MAX = 160
+# Skip non-runtime files when packing for device upload.
+ZIP_SKIP_NAMES = frozenset({"sfx/README.md"})
+VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v")
 HERE = Path(__file__).resolve().parent
 # tools/pet_tool/skin → repo root is parents[2]
 REPO = HERE.parents[2]
@@ -667,12 +675,155 @@ def duplicate_clip_frame(clip: dict, frame_i: int) -> int:
 
 def clear_clip_assets(assets_dir: Path, clip_id: str, frames: int) -> None:
     n = max(1, int(frames))
-    stems = [clip_id] + [f"{clip_id}_{i}" for i in range(n)]
+    stems = [clip_id] + [f"{clip_id}_{i}" for i in range(max(n, CLIP_FRAMES_MAX))]
     for stem in stems:
         for ext in IMAGE_EXTS:
             p = assets_dir / f"{stem}{ext}"
             if p.is_file():
                 p.unlink()
+
+
+def rgba_fit_to_canvas(im, canvas: int, fit: str = "contain"):
+    """Pillow RGBA → transparent canvas×canvas."""
+    from PIL import Image
+
+    im = im.convert("RGBA")
+    sw, sh = im.size
+    if sw < 1 or sh < 1:
+        return Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
+    if fit == "cover":
+        scale = max(canvas / sw, canvas / sh)
+    else:
+        scale = min(canvas / sw, canvas / sh)
+    dw = max(1, int(round(sw * scale)))
+    dh = max(1, int(round(sh * scale)))
+    im2 = im.resize((dw, dh), Image.Resampling.LANCZOS)
+    out = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
+    ox = (canvas - dw) // 2
+    oy = (canvas - dh) // 2
+    out.paste(im2, (ox, oy), im2)
+    return out
+
+
+def _sample_frame_indices(n_src: int, n_out: int) -> list[int]:
+    if n_src <= 0:
+        return []
+    n_out = max(1, int(n_out))
+    if n_out == 1:
+        return [n_src // 2]
+    if n_src == 1:
+        return [0] * n_out
+    return [int(round(i * (n_src - 1) / (n_out - 1))) for i in range(n_out)]
+
+
+def extract_video_frames_to_clip(
+    video_path: Path,
+    assets_dir: Path,
+    clip_id: str,
+    *,
+    frame_count: int = 12,
+    canvas: int | None = None,
+    fit: str = "contain",
+    cfg: dict | None = None,
+) -> list[str]:
+    """Evenly sample frames from a local video into assets/<clip>_i.png.
+
+    Updates cfg clip frames/sources when cfg is provided. Returns note lines.
+    """
+    from PIL import Image
+    import imageio.v2 as imageio
+
+    video_path = Path(video_path)
+    if not video_path.is_file():
+        raise FileNotFoundError(f"video not found: {video_path}")
+
+    is_splash = clip_id == "splash"
+    n = 1 if is_splash else max(1, min(CLIP_FRAMES_MAX, int(frame_count)))
+    box = int(canvas) if canvas is not None else (SPLASH_SIZE if is_splash else BODY_SIZE_DEFAULT)
+    if is_splash:
+        box = SPLASH_SIZE
+    else:
+        box = clamp_body_size(box)
+
+    notes: list[str] = []
+    reader = imageio.get_reader(str(video_path), "ffmpeg")
+    try:
+        meta = reader.get_meta_data()
+        try:
+            n_src = int(reader.count_frames())
+        except Exception:  # noqa: BLE001
+            n_src = 0
+        if n_src <= 0:
+            fps = float(meta.get("fps") or 25.0) or 25.0
+            duration = float(meta.get("duration") or 0.0)
+            n_src = max(1, int(round(duration * fps))) if duration > 0 else 1
+
+        indices = _sample_frame_indices(n_src, n)
+        # Deduplicate while preserving order for short videos.
+        uniq: list[int] = []
+        for idx in indices:
+            if not uniq or idx != uniq[-1]:
+                uniq.append(idx)
+        while len(uniq) < n:
+            uniq.append(uniq[-1] if uniq else 0)
+        indices = uniq[:n]
+
+        frames_rgba: list = []
+        for idx in indices:
+            arr = reader.get_data(int(idx))
+            im = Image.fromarray(arr).convert("RGBA")
+            frames_rgba.append(rgba_fit_to_canvas(im, box, fit))
+    finally:
+        reader.close()
+
+    if not frames_rgba:
+        raise RuntimeError(f"no frames decoded from {video_path}")
+
+    assets_dir = Path(assets_dir)
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    if is_splash:
+        clear_splash_assets(assets_dir)
+        dest = assets_dir / "splash.png"
+        frames_rgba[0].save(dest, "PNG")
+        notes.append(f"video → splash.png ({box}×{box}) ← {video_path.name}")
+        return notes
+
+    old_n = CLIP_FRAMES_MAX
+    if cfg is not None:
+        for c in cfg.get("clips", []):
+            if c.get("id") == clip_id:
+                old_n = max(1, int(c.get("frames", 1)))
+                break
+    clear_clip_assets(assets_dir, clip_id, max(old_n, n))
+
+    rels: dict[int, str] = {}
+    for i, im in enumerate(frames_rgba):
+        stem = clip_frame_stem(clip_id, i, n)
+        dest = assets_dir / f"{stem}.png"
+        for ext in IMAGE_EXTS:
+            stale = assets_dir / f"{stem}{ext}"
+            if stale.is_file() and stale.resolve() != dest.resolve():
+                stale.unlink()
+        im.save(dest, "PNG")
+        rels[i] = f"assets/{stem}.png"
+
+    if cfg is not None:
+        clip = None
+        for c in cfg.get("clips", []):
+            if c.get("id") == clip_id:
+                clip = c
+                break
+        if clip is None:
+            raise ValueError(f"clip not in pack.json: {clip_id}")
+        set_clip_frame_count(clip, n)
+        set_clip_sources(clip, rels, apply_all=True)
+
+    notes.append(
+        f"video → {clip_id} ×{n} @ {box}×{box} ({fit}) ← {video_path.name} "
+        f"(sampled {len(indices)}/{n_src} src frames)"
+    )
+    return notes
 
 
 def _rel_asset(path: Path, base_dir: Path) -> str:
@@ -1202,35 +1353,131 @@ def ensure_font_in_pet(pet_dir: Path) -> str | None:
     return None
 
 
-def export_skin_zip(pet_dir: Path, zip_path: Path | None = None) -> tuple[Path, str]:
-    """Zip pet/ for web upload. Includes font/ when present (or auto-copied).
+def web_skin_rel_ok(rel: str) -> bool:
+    """Match desktop_pet web_skin.c rel_ok (ASCII path segments)."""
+    if not rel or rel.startswith("/"):
+        return False
+    if len(rel) > WEB_SKIN_REL_MAX:
+        return False
+    seg = 0
+    for i, c in enumerate(rel):
+        if c == "/":
+            if seg == 0 or (seg == 2 and rel[i - 2 : i] == ".."):
+                return False
+            seg = 0
+            continue
+        if c in "._-" or ("0" <= c <= "9") or ("A" <= c <= "Z") or ("a" <= c <= "z"):
+            seg += 1
+            continue
+        return False
+    return seg > 0 and not (seg == 2 and rel.endswith(".."))
+
+
+def iter_zip_pet_files(pet_dir: Path, *, include_font: bool) -> list[tuple[str, Path]]:
+    """Files that would be written into pet.zip (rel, abs)."""
+    pet_dir = Path(pet_dir)
+    rows: list[tuple[str, Path]] = []
+    for p in sorted(pet_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(pet_dir).as_posix()
+        if rel == CARD_CONFIG_NAME or rel.startswith("record/"):
+            continue
+        if rel in ZIP_SKIP_NAMES:
+            continue
+        if not include_font and (rel == "font/caption.bin" or rel.startswith("font/")):
+            continue
+        rows.append((rel, p))
+    return rows
+
+
+def validate_skin_zip_files(files: list[tuple[str, Path]]) -> list[str]:
+    """Return error strings if files would fail device unzip (web_skin)."""
+    errors: list[str] = []
+    if len(files) > WEB_SKIN_MAX_ENTRIES:
+        errors.append(
+            f"error: zip would have {len(files)} entries > WEB_SKIN_MAX_ENTRIES "
+            f"({WEB_SKIN_MAX_ENTRIES})"
+        )
+    has_pack = False
+    for rel, path in files:
+        if not web_skin_rel_ok(rel):
+            errors.append(f"error: path not allowed on device: {rel}")
+        size = path.stat().st_size
+        if size > WEB_SKIN_FILE_MAX:
+            hint = ""
+            if rel == "font/caption.bin":
+                hint = " (use include_font=False / --no-font to keep device font)"
+            errors.append(
+                f"error: {rel} is {size} B > WEB_SKIN_FILE_MAX ({WEB_SKIN_FILE_MAX}){hint}"
+            )
+        if rel == "pack.bin":
+            has_pack = True
+    if not has_pack:
+        errors.append("error: pack.bin missing under pet/")
+    return errors
+
+
+class SkinZipError(RuntimeError):
+    """Raised when export_skin_zip preflight fails."""
+
+
+def export_skin_zip(
+    pet_dir: Path,
+    zip_path: Path | None = None,
+    *,
+    include_font: bool = True,
+) -> tuple[Path, str]:
+    """Zip pet/ for web upload. Preflight against device web_skin limits.
 
     Returns (zip_path, note). Device also preserves existing /sdcard/pet/font
     when the zip has no caption.bin.
     """
     pet_dir = Path(pet_dir)
-    font_note = ensure_font_in_pet(pet_dir)
+    font_note: str | None = None
+    if include_font:
+        font_note = ensure_font_in_pet(pet_dir)
+    else:
+        font_note = "font omitted (device keeps existing pet/font if any)"
+
+    files = iter_zip_pet_files(pet_dir, include_font=include_font)
+    errors = validate_skin_zip_files(files)
+    if errors:
+        raise SkinZipError("\n".join(errors))
+
     if zip_path is None:
         zip_path = pet_dir.parent / "pet.zip"
     zip_path = Path(zip_path)
     zip_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write to temp then replace so a failed write does not leave a half zip.
+    tmp = zip_path.with_suffix(zip_path.suffix + ".tmp")
     has_font = False
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in sorted(pet_dir.rglob("*")):
-            if not p.is_file():
-                continue
-            rel = p.relative_to(pet_dir).as_posix()
-            if rel == CARD_CONFIG_NAME or rel.startswith("record/"):
-                continue
-            zf.write(p, rel)
-            if rel == "font/caption.bin":
-                has_font = True
-    if font_note:
+    try:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for rel, p in files:
+                zf.write(p, rel)
+                if rel == "font/caption.bin":
+                    has_font = True
+        # Re-check compressed zip size.
+        zsize = tmp.stat().st_size
+        if zsize > WEB_SKIN_ZIP_MAX:
+            tmp.unlink(missing_ok=True)
+            raise SkinZipError(
+                f"error: zip size {zsize} B > WEB_SKIN_ZIP_MAX ({WEB_SKIN_ZIP_MAX})"
+            )
+        tmp.replace(zip_path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+    if font_note and include_font:
         note = font_note
     elif has_font:
         note = "font/caption.bin in zip"
     else:
         note = "no font in zip (device keeps existing pet/font if any)"
+    note = f"{note}; entries={len(files)} size={zip_path.stat().st_size}"
     return zip_path, note
 
 

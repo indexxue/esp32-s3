@@ -45,9 +45,9 @@ void pet_view_set_alloc(pet_view_alloc_fn alloc_fn, pet_view_free_fn free_fn);
 void pet_view_set_intent_hook(pet_view_intent_hook_t hook);
 void pet_view_set_chat_hook(pet_view_chat_hook_t hook);
 /**
- * Show splash C (body + ring). Call pet_view_boot_pack_done() after pack
- * load attempt; gate ≥1s + pack done, then load caption font and open home.
- * Does not wait for Wi‑Fi / agent.
+ * Show splash C (body + ring). Fade-in → breath + spin → short fade-out.
+ * Call pet_view_boot_pack_done() after pack load attempt; gate ≥1s + pack
+ * done, then load caption font and open home. Does not wait for Wi‑Fi / agent.
  */
 void pet_view_boot_start(lv_obj_t *parent, pet_view_boot_done_fn on_home);
 /** Mark pack load attempt finished (Splash Gate half). */

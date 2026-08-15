@@ -162,6 +162,12 @@ class DesignPanel(QWidget):
         btn_clear.clicked.connect(self.canvas.clear)
         btn_import = QPushButton("Import PNG…")
         btn_import.clicked.connect(self._import_png)
+        btn_import_vid = QPushButton("Import video…")
+        btn_import_vid.clicked.connect(self._import_video)
+        self.video_frames_spin = QSpinBox()
+        self.video_frames_spin.setRange(1, skin_core.CLIP_FRAMES_MAX)
+        self.video_frames_spin.setValue(skin_core.CLIP_FRAMES_MAX)
+        self.video_frames_spin.setToolTip("Video sample count (1–12)")
         btn_apply = QPushButton("Apply doodle → clip")
         btn_apply.clicked.connect(self._apply_doodle)
         btn_clear_src = QPushButton("Use color only")
@@ -185,10 +191,11 @@ class DesignPanel(QWidget):
 
         help_lbl = QLabel(
             "<b>怎么用</b>"
-            "<p>每个动作（clip）最多 <b>8 帧</b>，设备按 fps 循环播放。"
+            f"<p>每个动作（clip）最多 <b>{skin_core.CLIP_FRAMES_MAX} 帧</b>，设备按 fps 循环播放。"
             "idle 默认 2 帧，就是呼吸。</p>"
             "<b>1. 选动作</b><br/>idle 呼吸 · eat 吃 · play 玩 · 其余多为单帧。<br/><br/>"
             "<b>2. 设帧数</b><br/>用「帧数」或「复制帧 / 删除帧」。"
+            "也可 <b>Import video</b> 均匀抽帧（默认最多 12）。"
             "新帧会复制上一帧，再单独改差别。<br/><br/>"
             "<b>3. 点右侧缩略图选中要改的帧</b><br/>"
             "再 Import PNG，或圆内涂鸦后 Apply。默认<b>只改当前帧</b>。<br/><br/>"
@@ -270,6 +277,12 @@ class DesignPanel(QWidget):
         doodle_row.addWidget(btn_clear)
         doodle_row.addWidget(btn_import)
         form.addLayout(doodle_row)
+        vid_row = QHBoxLayout()
+        vid_row.addWidget(btn_import_vid)
+        vid_row.addWidget(QLabel("抽帧"))
+        vid_row.addWidget(self.video_frames_spin)
+        vid_row.addStretch(1)
+        form.addLayout(vid_row)
         form.addWidget(btn_apply)
         form.addWidget(btn_clear_src)
         form.addWidget(self.src_lbl)
@@ -790,6 +803,44 @@ class DesignPanel(QWidget):
             self._build()
         except Exception as exc:  # noqa: BLE001
             self.ctx.info(f"design import error: {exc}")
+
+    def _import_video(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import video → current clip frames",
+            "",
+            "Video (*.mp4 *.webm *.mov *.mkv *.avi *.m4v);;All (*.*)",
+        )
+        if not path:
+            return
+        clip = self._clip()
+        if clip is None:
+            return
+        n = int(self.video_frames_spin.value())
+        fit = "cover" if self.fit_cover.isChecked() else "contain"
+        w = skin_core.clamp_body_size(int(self._cfg.get("width", skin_core.BODY_SIZE_DEFAULT)))
+        assets = self.ctx.cfg_path.parent / "assets"
+        try:
+            notes = skin_core.extract_video_frames_to_clip(
+                Path(path),
+                assets,
+                self._clip_id,
+                frame_count=n,
+                canvas=w,
+                fit=fit,
+                cfg=self._cfg,
+            )
+            for line in notes:
+                self.ctx.info(f"design: {line}")
+            self._frame_i = 0
+            self._play_i = 0
+            self._load_clip_ui()
+            self._load_source_image()
+            self._save_json()
+            self._build()
+            self.refresh_preview()
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.info(f"design video import error: {exc}")
 
     def _apply_doodle(self) -> None:
         clip = self._clip()

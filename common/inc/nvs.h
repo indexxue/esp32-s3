@@ -282,6 +282,26 @@ bool nvs_pet_needs_get(nvs_pet_needs_t *out);
 bool nvs_pet_needs_set(const nvs_pet_needs_t *cfg);
 bool nvs_pet_needs_delete(void);
 
+/* -------------------------------------------------------------------------- */
+/* 桌宠 UI 偏好：语言等（NVS 键 pet_ui）                                         */
+/* -------------------------------------------------------------------------- */
+
+#define NVS_PET_UI_MAGIC 0x50554931u /* "PUI1" LE */
+#define NVS_PET_UI_LANG_EN (0U)
+#define NVS_PET_UI_LANG_ZH (1U)
+
+typedef struct __attribute__((packed)) {
+    uint32_t magic;
+    uint8_t  lang; /* NVS_PET_UI_LANG_EN / ZH */
+    uint8_t  reserved[3];
+} nvs_pet_ui_t;
+
+void nvs_pet_ui_default(nvs_pet_ui_t *out);
+bool nvs_pet_ui_validate(const nvs_pet_ui_t *cfg);
+bool nvs_pet_ui_get(nvs_pet_ui_t *out);
+bool nvs_pet_ui_set(const nvs_pet_ui_t *cfg);
+bool nvs_pet_ui_delete(void);
+
 #ifdef __cplusplus
 }
 #endif

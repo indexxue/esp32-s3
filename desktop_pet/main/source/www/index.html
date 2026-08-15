@@ -49,6 +49,8 @@ details.card[open]>summary::after{content:" ▴"}
     <a href="#/">SD 根目录</a>
     <a href="#/pet">pet/</a>
     <a href="#/pet/font">字库 font/</a>
+    <a href="#/pet/lang">语言 lang/</a>
+    <a href="#/pet/sfx">音效 sfx/</a>
     <a href="#/record">录音</a>
     <button type="button" class="btn" id="btnRefresh">刷新</button>
     <a href="/provision">Wi‑Fi</a>
@@ -70,7 +72,7 @@ details.card[open]>summary::after{content:" ▴"}
 
   <details class="card">
     <summary>上传皮肤包（pet.zip）</summary>
-    <p class="hint">覆盖 <code>/sdcard/pet/</code> 后自动重启；不改卡根 <code>config</code>。zip 若无 <code>font/caption.bin</code>，保留卡上原字库。</p>
+    <p class="hint">覆盖 <code>/sdcard/pet/</code> 后自动重启；不改卡根 <code>config</code>。zip 若无 <code>font/caption.bin</code>，保留卡上原字库；若无 <code>lang/en.txt</code> 与 <code>lang/zh.txt</code>，保留原 <code>lang/</code>；若无 <code>sfx/**/*.wav</code>，保留原 <code>sfx/</code>。</p>
     <div class="actions" style="justify-content:flex-start;margin-bottom:8px">
       <input type="file" id="skinFile" accept=".zip,application/zip">
       <button type="button" class="btn btn-accent" id="btnSkin">上传并重启</button>

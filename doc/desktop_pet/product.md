@@ -1,7 +1,7 @@
 ﻿# desktop_pet 产品约定
 
-**版本**：0.4（卡根 `/sdcard/config` 上电读取）  
-**日期**：2026-08-14  
+**版本**：0.6（卡根 config；可选 UI 铬 `lang/` + 照料提示音 `sfx/`）  
+**日期**：2026-08-15  
 **入口**：[`README.md`](README.md) · 术语 [`CONTEXT.md`](CONTEXT.md) · 引擎 [`framework.md`](framework.md) · 语音 [`cloud_asr.md`](cloud_asr.md)  
 **预览**：`py -3 tools/pet_tool/serve.py` → 仅产品态 [`web/`](../../tools/pet_tool/web/)（开机 C / 主界面 / 对话 D）
 
@@ -30,8 +30,11 @@
     pack.bin
     body/*.bin          ← RGBH 身体帧
     boot/splash.bin     ← 开机单帧 RGBH（可选）
-      theme/ui/*.bin      ← 按键/网络图标 RGBH（可选；缺则字母或绘制）
-      record/               ← 运行时（固件写；目录可缺）
+    theme/ui/*.bin      ← 按键/网络图标 RGBH（可选；缺则字母或绘制）
+    font/caption.bin    ← 字幕字库（可选）
+    lang/{en,zh}.txt    ← UI 铬文案（可选；覆盖固件底表）
+    sfx/<clip>/*.wav    ← 照料提示音（可选；每 clip 多句随机抽 1）
+  record/               ← 运行时（固件写；目录可缺）
 ```
 
 模拟器镜像：[`tools/pet_sim/sdcard/`](../../tools/pet_sim/sdcard/)（含 `config` + `pet/`）。`pack.bin` / `RGBH` 见 [`framework.md`](framework.md) §6。拷卡时拷整棵 `sdcard/` 到设备挂载根，不要只拷 `pet/`。
@@ -48,10 +51,44 @@
 | `pet/theme/ui/{wifi_on,wifi_off}.bin` | `RGBH`，28×28（≤32） | 主界面网络状态；缺则绘制扇形 |
 | `pet/theme/ui/settings.bin` | `RGBH`，28×28（≤32） | 设置入口；缺则字母 S |
 | `pet/font/caption.bin` | LVGL binary 字库（14px 建议） | 内置思源 CJK 子集（约 1k 字） |
+| `pet/lang/en.txt` | UTF-8 `KEY=VALUE`（`#` 注释） | 固件 EN 底表 |
+| `pet/lang/zh.txt` | 同上 | 固件 ZH 底表 |
+| `pet/sfx/<clip>/*.wav` | 16 kHz mono 16-bit PCM WAV | 该 clip 静默 |
 
 `config` 首版键：`version`、`content_root`、`record_root`。未知键保留在内存。凡键名以 `_root` 结尾且值为相对路径的，上电后扫描该目录（深度 2）并记下文件名与大小。
 
-Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/theme/` 下除 `ui/` 外、`pet/boot/anim/`。
+`lang/*.txt` 按 key **覆盖**固件内建 UI 铬表（设置/对话模式/短提示）；未知 key 忽略。用户语种偏好在 NVS，不在皮肤包。
+
+**照料提示音 (Care SFX)**：`pet/sfx/<clip>/` 下可放多句 `.wav`（建议 ≤8；文件名 8.3 友好）。触发跟身体 clip：`eat` / `play` / `poke` / `refuse` / `sleep`（引擎 `SLEEP_LOOP`→目录 `sleep`）。每次只播一句：随机；池 ≥2 时尽量不连播同一文件。可打断上一句 Care SFX；对话页听/说中不播。缺目录或空 → 静默。网页换肤 zip **无**任一 `sfx/**/*.wav` 时保留卡上原 `pet/sfx/`。
+
+首版 key 表（与固件 `pet_i18n` / [`tools/pet_sim/sdcard/pet/lang/`](../../tools/pet_sim/sdcard/pet/lang/) 对齐）：
+
+| Key | EN 默认 | ZH 默认 |
+|-----|---------|---------|
+| `settings.title` | Settings | 设置 |
+| `settings.firmware` | Firmware | 固件 |
+| `settings.skin_pack` | Skin pack | 皮肤包 |
+| `settings.network` | Network | 网络 |
+| `settings.battery` | Battery | 电量 |
+| `settings.language` | Language | 语言 |
+| `settings.skin` | Skin | 皮肤 |
+| `settings.touch_calib` | Touch calib | 触摸校准 |
+| `settings.soon` | soon | 即将 |
+| `settings.net_off` | off | 关闭 |
+| `settings.net_ap` | AP | 热点 |
+| `settings.net_online` | online | 在线 |
+| `settings.net_offline` | offline | 离线 |
+| `settings.chg` | chg | 充 |
+| `settings.lang_en` | EN | EN |
+| `settings.lang_zh` | 中文 | 中文 |
+| `chat.tap_to_talk` | tap to talk | 点按说话 |
+| `chat.mode_listen` | listen | 听 |
+| `chat.mode_speak` | speak | 说 |
+| `chat.mode_connecting` | connecting | 连接中 |
+| `chat.mode_ready` | ready | 就绪 |
+| `home.no_pack` | NO PACK | 无皮肤 |
+
+Reserved（卡上不预建空目录；固件暂不读）：`pet/theme/` 下除 `ui/` 外、`pet/boot/anim/`。
 
 字幕完整汉字：用 [`tools/pet_tool/font/make_caption_bin.py`](../../tools/pet_tool/font/make_caption_bin.py) 从 TTF 生成 `caption.bin`，拷/网页上传到 `pet/font/` 后**需重启**（开机 Splash 阶段加载进内存）。
 
@@ -62,8 +99,8 @@ Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/the
 | 路径 | `boot/splash.bin` **静态单帧**；与 `pack.bin` 解耦 |
 | 视觉 | **C**：身体 + 环形进度（LVGL 弧可绑加载） |
 | 工具 | 画布固定 240×240；背景/身体色与内容尺寸可调；`--fit contain|cover` |
-| Splash Gate | ≥1000 ms 且皮肤 pack 加载尝试结束 → 再读字幕字库 → 进主界面；**不等** WiFi / agent |
-| 动画 | `boot/anim/` reserved，**暂不做** |
+| Splash Gate | ≥1000 ms 且皮肤 pack 加载尝试结束 → 再读字幕字库与 UI 铬 `lang/` → 进主界面；**不等** WiFi / agent |
+| 动画 | 位图仍单帧；LVGL 淡入 / 宠图轻呼吸 / 环旋转 / 短淡出。`boot/anim/` reserved，**暂不做** |
 
 ### A.5 工具（`tools/pet_tool/`）
 
@@ -74,7 +111,7 @@ Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/the
 | Qt GUI `skin/run_gui.py` | Splash / Design / Pack / Body / **Theme**；Pack 可 Export zip |
 | Theme UI 图标 | `theme/ui/*.bin`；透明圆图（PNG 透明区不填色）或纯色圆；缺图字母 fallback |
 | 网页预览 `serve.py` | 读 `skin/pack.json` + PNG；`http://127.0.0.1:8765/web/` |
-| 网页换肤 | 设备 `GET /` 上传 `pet.zip` → 覆盖 `/sdcard/pet/`（**无字库时保留原 `font/`**）→ 重启 |
+| 网页换肤 | 设备 `GET /` 上传 `pet.zip` → 覆盖 `/sdcard/pet/`（无 `font/caption.bin` 保留 `font/`；无 `lang/` 保留 `lang/`；无 `sfx/**/*.wav` 保留 `sfx/`）→ 重启 |
 | 教程 | [`tools/pet_tool/README.md`](../../tools/pet_tool/README.md) · [`skin/README.md`](../../tools/pet_tool/skin/README.md) |
 
 ---
@@ -94,6 +131,7 @@ Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/the
   身体热区（tap / hold→喂；收窄避开侧键）
   Needs 底弧三段（饥饿/心情/精力 %）
   网络状态（顶中偏右，ø200 安全圆内；STA 有 IPv4=在线）
+  电量状态（WiFi 左侧偏上同弧）
   设置入口（WiFi 右侧偏下同弧）
   异常短提示（可选淡出）
   左侧护理弧：喂 / 玩 / 睡（独立圆钮，中钮更靠外）
@@ -105,7 +143,8 @@ Reserved（卡上不预建空目录；固件暂不读）：`pet/sfx/`、`pet/the
 
 - Needs：底缘三条短直线（左→右 H/M/E）+ 百分比；NVS；约 30 s 消耗一拍。
 - 网络：顶中偏右小图标（圆屏安全区内，勿贴矩形角）；`theme/ui/wifi_on.bin` / `wifi_off.bin`（可选，≤32）；缺则绘制扇形（在线青 / 离线灰）。判定：`net_wifi_sta_has_ipv4()`。**单击**：在线→断 STA，离线→重连（仅 STA 模式；SoftAP 配网态忽略）。
-- 设置：WiFi 右侧偏下同弧；可选 `theme/ui/settings.bin`；缺则字母 S。进页隐藏主界面铬；竖直滚动列表（安全圆内缩）。首版：固件/皮肤包版本、MAC、网络/SSID/IP；默认英文，有 CJK 字库可切中文；触摸校准入口；换肤切换 reserved（soon，仍用网页）。
+- 电量：WiFi 左侧偏上同弧电池图形；读 `battery_percent_update` / `battery_info_read`；绿≥50% / 黄≤50% / 红≤20%；充电青色。缺采样时灰空壳。
+- 设置：WiFi 右侧偏下同弧；可选 `theme/ui/settings.bin`；缺则字母 S。进页隐藏主界面铬；竖直滚动列表（安全圆内缩）。首版：固件/皮肤包版本、MAC、网络/SSID/IP、电量%；默认英文，有 CJK 字库可切中文（`pet_ui` NVS 记住）；文案来自固件底表，可选 `lang/{en,zh}.txt` 按 key 覆盖；触摸校准入口；换肤切换 reserved（soon，仍用网页）。
 - 照料弧：ø≈28；左侧上移 F→P→S（喂/玩/睡）；可选 `theme/ui/{feed,play,sleep}.bin`。
 - Chat：右侧独立 C；可选 `theme/ui/chat.bin`；样式与照料区分。
 - 缺图标时字母 / 绘制 fallback；热区 `ext_click_area` 外扩，身体热区与侧键错开。

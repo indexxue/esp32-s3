@@ -1,0 +1,40 @@
+{
+  "engine": "edge",
+  "note": "Cute Care SFX for pet/sfx; pool ≤8 per clip; filename 8.3 (N.wav).",
+  "voices": {
+    "zh-f":  { "voice": "zh-CN-XiaoxiaoNeural", "rate": "+8%",  "pitch": "+18Hz" },
+    "zh-f2": { "voice": "zh-CN-XiaoyiNeural",   "rate": "+10%", "pitch": "+22Hz" }
+  },
+  "clips": {
+    "eat": [
+      { "file": "0.wav", "voice_key": "zh-f",  "text": "好吃耶～" },
+      { "file": "1.wav", "voice_key": "zh-f2", "text": "嗯嗯，真香" },
+      { "file": "2.wav", "voice_key": "zh-f",  "text": "谢谢喂食" },
+      { "file": "3.wav", "voice_key": "zh-f2", "text": "再来一口嘛" }
+    ],
+    "play": [
+      { "file": "0.wav", "voice_key": "zh-f",  "text": "耶！开心" },
+      { "file": "1.wav", "voice_key": "zh-f2", "text": "一起玩嘛" },
+      { "file": "2.wav", "voice_key": "zh-f",  "text": "好开心呀" },
+      { "file": "3.wav", "voice_key": "zh-f2", "text": "再玩一会儿" }
+    ],
+    "poke": [
+      { "file": "0.wav", "voice_key": "zh-f",  "text": "呀～" },
+      { "file": "1.wav", "voice_key": "zh-f2", "text": "嘿嘿" },
+      { "file": "2.wav", "voice_key": "zh-f",  "text": "干嘛呀" },
+      { "file": "3.wav", "voice_key": "zh-f2", "text": "痒痒的" }
+    ],
+    "refuse": [
+      { "file": "0.wav", "voice_key": "zh-f",  "text": "不要啦～" },
+      { "file": "1.wav", "voice_key": "zh-f2", "text": "哼，不要" },
+      { "file": "2.wav", "voice_key": "zh-f",  "text": "人家饱了" },
+      { "file": "3.wav", "voice_key": "zh-f2", "text": "才不要呢" }
+    ],
+    "sleep": [
+      { "file": "0.wav", "voice_key": "zh-f",  "text": "晚安～" },
+      { "file": "1.wav", "voice_key": "zh-f2", "text": "困困了" },
+      { "file": "2.wav", "voice_key": "zh-f",  "text": "呼呼睡" },
+      { "file": "3.wav", "voice_key": "zh-f2", "text": "明天再玩" }
+    ]
+  }
+}

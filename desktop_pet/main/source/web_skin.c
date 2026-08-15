@@ -29,7 +29,8 @@
 #define WEB_SKIN_PATH_MAX     (200U)
 #define WEB_SKIN_REL_MAX      (160U)
 #define WEB_SKIN_ZIP_MAX      (4U * 1024U * 1024U)
-#define WEB_SKIN_FILE_MAX     (512U * 1024U)
+/* caption.bin / splash can exceed 512 KiB; keep headroom for larger UI fonts */
+#define WEB_SKIN_FILE_MAX     (1536U * 1024U)
 #define WEB_SKIN_MAX_ENTRIES  (64U)
 #define WEB_SKIN_RECV_CHUNK   (1024U)
 #define WEB_SKIN_COPY_CHUNK   (1024U)
@@ -41,6 +42,10 @@
 #define WEB_SKIN_LIVE_REL     "pet"
 /* Staging zip 无字库时，换肤前暂存 live font/，提交后再挂回 */
 #define WEB_SKIN_FONT_KEEP_REL "fontkeep"
+/* Staging zip 无 lang/ 时，暂存 live lang/ */
+#define WEB_SKIN_LANG_KEEP_REL "langkeep"
+/* Staging zip 无有效 sfx WAV 时，暂存 live sfx/ */
+#define WEB_SKIN_SFX_KEEP_REL  "sfxkeep"
 
 static const char *TAG = "web_skin";
 
@@ -426,70 +431,210 @@ static bool staging_has_caption(const char *staging)
     return path_is_reg(p);
 }
 
+/** True if staging already carries lang/en.txt or lang/zh.txt. */
+static bool staging_has_lang(const char *staging)
+{
+    char dir[WEB_SKIN_PATH_MAX];
+    char p[WEB_SKIN_PATH_MAX];
+
+    if (!path_join(dir, sizeof(dir), staging, "lang")) {
+        return false;
+    }
+    if (path_join(p, sizeof(p), dir, "en.txt") && path_is_reg(p)) {
+        return true;
+    }
+    if (path_join(p, sizeof(p), dir, "zh.txt") && path_is_reg(p)) {
+        return true;
+    }
+    return false;
+}
+
+static bool dir_has_wav_file(const char *dir_abs)
+{
+    DIR *d;
+    struct dirent *ent;
+    bool found = false;
+
+    if ((dir_abs == NULL) || !path_is_dir(dir_abs)) {
+        return false;
+    }
+    d = opendir(dir_abs);
+    if (d == NULL) {
+        return false;
+    }
+    while ((ent = readdir(d)) != NULL) {
+        size_t n;
+
+        if (ent->d_name[0] == '.') {
+            continue;
+        }
+        n = strlen(ent->d_name);
+        if ((n >= 5U) && (ent->d_name[n - 4] == '.') &&
+            ((ent->d_name[n - 3] == 'w') || (ent->d_name[n - 3] == 'W')) &&
+            ((ent->d_name[n - 2] == 'a') || (ent->d_name[n - 2] == 'A')) &&
+            ((ent->d_name[n - 1] == 'v') || (ent->d_name[n - 1] == 'V'))) {
+            found = true;
+            break;
+        }
+    }
+    (void)closedir(d);
+    return found;
+}
+
+/** True if staging has any Care SFX WAV under sfx clip subdirs. */
+static bool staging_has_sfx(const char *staging)
+{
+    static const char *k_subs[] = {"eat", "play", "poke", "refuse", "sleep"};
+    char sfx[WEB_SKIN_PATH_MAX];
+    char sub[WEB_SKIN_PATH_MAX];
+    size_t i;
+
+    if (!path_join(sfx, sizeof(sfx), staging, "sfx")) {
+        return false;
+    }
+    if (!path_is_dir(sfx)) {
+        return false;
+    }
+    for (i = 0; i < (sizeof(k_subs) / sizeof(k_subs[0])); i++) {
+        if (path_join(sub, sizeof(sub), sfx, k_subs[i]) && dir_has_wav_file(sub)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * If staging lacks `subdir` content (per has_fn), stash live/`subdir` aside to keep_rel.
+ * Returns true if a stash was created.
+ */
+static bool stash_live_subdir_if_missing(const char *live, const char *staging, const char *subdir,
+                                         const char *keep_rel,
+                                         bool (*has_fn)(const char *staging_root),
+                                         const char *tag)
+{
+    char live_sub[WEB_SKIN_PATH_MAX];
+    char keep[WEB_SKIN_PATH_MAX];
+
+    if ((has_fn != NULL) && has_fn(staging)) {
+        return false;
+    }
+    if (!path_join(live_sub, sizeof(live_sub), live, subdir)) {
+        return false;
+    }
+    if (!path_is_dir(live_sub)) {
+        return false;
+    }
+    skin_abs(keep, sizeof(keep), keep_rel);
+    rmtree(keep, 0U);
+    if (rename(live_sub, keep) == 0) {
+        ESP_LOGI(TAG, "preserved live %s/ -> %s", tag, keep);
+        return true;
+    }
+    ESP_LOGW(TAG, "could not preserve %s/ (errno=%d)", tag, errno);
+    return false;
+}
+
+static void restore_stashed_subdir(const char *live, const char *subdir, const char *keep_rel,
+                                   bool saved, bool (*live_has_fn)(const char *live_root),
+                                   const char *tag)
+{
+    char keep[WEB_SKIN_PATH_MAX];
+    char new_sub[WEB_SKIN_PATH_MAX];
+
+    if (!saved) {
+        return;
+    }
+    skin_abs(keep, sizeof(keep), keep_rel);
+    if (!path_join(new_sub, sizeof(new_sub), live, subdir)) {
+        rmtree(keep, 0U);
+        return;
+    }
+    /* Zip brought real content → drop stash. Empty placeholder dir → replace. */
+    if ((live_has_fn != NULL) && live_has_fn(live)) {
+        rmtree(keep, 0U);
+        return;
+    }
+    if (path_is_dir(new_sub) || path_is_reg(new_sub)) {
+        rmtree(new_sub, 0U);
+    }
+    if (rename(keep, new_sub) != 0) {
+        ESP_LOGW(TAG, "restore %s/ failed (errno=%d)", tag, errno);
+    } else {
+        ESP_LOGI(TAG, "restored %s/ into new skin", tag);
+    }
+}
+
 void web_skin_commit_pending(void)
 {
     char staging[WEB_SKIN_PATH_MAX];
     char live[WEB_SKIN_PATH_MAX];
     char pack[WEB_SKIN_PATH_MAX];
-    char keep[WEB_SKIN_PATH_MAX];
-    char live_font[WEB_SKIN_PATH_MAX];
-    char new_font[WEB_SKIN_PATH_MAX];
     bool saved_font = false;
+    bool saved_lang = false;
+    bool saved_sfx = false;
 
     if (sdcard_get_card() == NULL) {
         return;
     }
     skin_abs(staging, sizeof(staging), WEB_SKIN_NEXT_REL);
     skin_abs(live, sizeof(live), WEB_SKIN_LIVE_REL);
-    skin_abs(keep, sizeof(keep), WEB_SKIN_FONT_KEEP_REL);
     if (!path_join(pack, sizeof(pack), staging, "pack.bin")) {
         return;
     }
     if (!path_is_reg(pack)) {
         return;
     }
-    if (!path_join(live_font, sizeof(live_font), live, "font")) {
-        return;
-    }
 
     /*
-     * Full replace of /sdcard/pet would drop caption.bin when the zip only has
-     * body/theme. Keep live font/ aside unless the new pack already ships one.
+     * Full replace of /sdcard/pet would drop caption.bin / lang / sfx when the
+     * zip only has body/theme. Keep live dirs aside unless the new pack ships them.
      */
-    if (!staging_has_caption(staging) && path_is_dir(live_font)) {
-        rmtree(keep, 0U);
-        if (rename(live_font, keep) == 0) {
-            saved_font = true;
-            ESP_LOGI(TAG, "preserved live font/ -> %s", keep);
-        } else {
-            ESP_LOGW(TAG, "could not preserve font/ (errno=%d)", errno);
-        }
-    }
+    saved_font = stash_live_subdir_if_missing(live, staging, "font", WEB_SKIN_FONT_KEEP_REL,
+                                              staging_has_caption, "font");
+    saved_lang = stash_live_subdir_if_missing(live, staging, "lang", WEB_SKIN_LANG_KEEP_REL,
+                                              staging_has_lang, "lang");
+    saved_sfx = stash_live_subdir_if_missing(live, staging, "sfx", WEB_SKIN_SFX_KEEP_REL,
+                                             staging_has_sfx, "sfx");
 
     ESP_LOGI(TAG, "commit pending skin -> %s", live);
     rmtree(live, 0U);
     if (rename(staging, live) != 0) {
         ESP_LOGE(TAG, "rename staging failed");
-        if (saved_font && path_is_dir(keep)) {
-            (void)rename(keep, live_font);
+        if (saved_font) {
+            char live_font[WEB_SKIN_PATH_MAX];
+            char keep[WEB_SKIN_PATH_MAX];
+
+            skin_abs(keep, sizeof(keep), WEB_SKIN_FONT_KEEP_REL);
+            if (path_join(live_font, sizeof(live_font), live, "font") && path_is_dir(keep)) {
+                (void)rename(keep, live_font);
+            }
+        }
+        if (saved_lang) {
+            char live_lang[WEB_SKIN_PATH_MAX];
+            char keep[WEB_SKIN_PATH_MAX];
+
+            skin_abs(keep, sizeof(keep), WEB_SKIN_LANG_KEEP_REL);
+            if (path_join(live_lang, sizeof(live_lang), live, "lang") && path_is_dir(keep)) {
+                (void)rename(keep, live_lang);
+            }
+        }
+        if (saved_sfx) {
+            char live_sfx[WEB_SKIN_PATH_MAX];
+            char keep[WEB_SKIN_PATH_MAX];
+
+            skin_abs(keep, sizeof(keep), WEB_SKIN_SFX_KEEP_REL);
+            if (path_join(live_sfx, sizeof(live_sfx), live, "sfx") && path_is_dir(keep)) {
+                (void)rename(keep, live_sfx);
+            }
         }
         return;
     }
 
-    if (saved_font) {
-        if (!path_join(new_font, sizeof(new_font), live, "font")) {
-            rmtree(keep, 0U);
-            return;
-        }
-        if (path_is_dir(new_font) || path_is_reg(new_font)) {
-            /* Zip brought its own font; drop the stash. */
-            rmtree(keep, 0U);
-        } else if (rename(keep, new_font) != 0) {
-            ESP_LOGW(TAG, "restore font/ failed (errno=%d)", errno);
-        } else {
-            ESP_LOGI(TAG, "restored font/ into new skin");
-        }
-    }
+    restore_stashed_subdir(live, "font", WEB_SKIN_FONT_KEEP_REL, saved_font, staging_has_caption,
+                           "font");
+    restore_stashed_subdir(live, "lang", WEB_SKIN_LANG_KEEP_REL, saved_lang, staging_has_lang,
+                           "lang");
+    restore_stashed_subdir(live, "sfx", WEB_SKIN_SFX_KEEP_REL, saved_sfx, staging_has_sfx, "sfx");
 }
 
 static void reboot_task(void *arg)

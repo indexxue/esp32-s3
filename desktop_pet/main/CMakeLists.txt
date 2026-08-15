@@ -12,6 +12,8 @@ idf_component_register(
         "source/pet/pet_fs.c"
         "source/pet/sd_cfg.c"
         "source/pet/pet_res/pet_res.c"
+        "source/pet/pet_i18n/pet_i18n.c"
+        "source/pet/pet_sfx/pet_sfx.c"
         "source/pet/pet_view/pet_view.c"
     INCLUDE_DIRS
         "."
@@ -19,6 +21,8 @@ idf_component_register(
         "source/pet"
         "source/pet/pet_core"
         "source/pet/pet_res"
+        "source/pet/pet_i18n"
+        "source/pet/pet_sfx"
         "source/pet/pet_view"
     EMBED_FILES "source/www/index.html"
     REQUIRES cbb common bsp_driver esp_timer app_update web_ctrl nvs_flash lvgl esp_driver_i2s

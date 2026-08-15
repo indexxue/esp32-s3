@@ -11,7 +11,7 @@ SD 挂载根上的 `config`（现路径 `/sdcard/config`）。UTF-8 `KEY=VALUE`�
 _Avoid_：把设备配置写进 `/sdcard/pet/`、卡上 JSON（首版不解析 JSON）、无文件时拒绝启动
 
 **皮肤包 (Skin Pack)**：
-作者侧生成、可整包替换的只读内容树；含身体 clip、开机画面、以及后续主题/音效索引。设备挂载根现为 `/sdcard/pet/`。可用 zip（根为 `pack.bin` 或 `pet/pack.bin`）经网页 `POST /api/pet/skin` 覆盖后重启；不覆盖卡根 `config`。若 zip **不含** `font/caption.bin`，提交时保留卡上原有 `pet/font/`（避免换肤丢字幕字库）。
+作者侧生成、可整包替换的只读内容树；含身体 clip、开机画面、可选 `font/` 字幕字库、`lang/` UI 铬文案、`sfx/` 照料提示音、以及后续主题索引。设备挂载根现为 `/sdcard/pet/`。可用 zip（根为 `pack.bin` 或 `pet/pack.bin`）经网页 `POST /api/pet/skin` 覆盖后重启；不覆盖卡根 `config`。若 zip **不含** `font/caption.bin`，提交时保留卡上原有 `pet/font/`；若 zip **不含** `lang/`，保留 `pet/lang/`；若 zip **不含**有效 `sfx/**/*.wav`，保留 `pet/sfx/`。
 _Avoid_：资源包（仅指 `pack.bin` 时）、主题包（未定前勿混用）、固件资源
 
 **运行时数据 (Runtime Data)**：
@@ -23,7 +23,7 @@ _Avoid_：用户文件（过宽）、缓存（未定义淘汰策略前勿用）
 _Avoid_：多根散落（`/sdcard/boot` + `/sdcard/ui` 等）
 
 **开机画面 (Boot Splash)**：
-上电后、主界面前展示的皮肤资源；固定相对路径 `boot/splash.bin`，**静态单帧**静图，与 `pack.bin` 解耦；缺文件则固件 fallback。**视觉框架 C**：身体 + 环形进度；LVGL 可叠进度弧，位图仍为单帧 `splash.bin`。
+上电后、主界面前展示的皮肤资源；固定相对路径 `boot/splash.bin`，**静态单帧**静图，与 `pack.bin` 解耦；缺文件则固件 fallback。**视觉框架 C**：身体 + 环形进度；LVGL 淡入/呼吸/淡出 + 进度弧，位图仍为单帧 `splash.bin`。
 _Avoid_：启动动画文件序列（`boot/anim` 首版不做）、固件内嵌图（非默认策略）
 
 **合法路径 (Declared Paths)**：
@@ -58,12 +58,16 @@ _Avoid_：顶中三点、过密每秒衰减、常显数字百分比
 主界面顶部偏右常显网络图形（落在 ø200 安全圆内，避免圆屏切角）；STA 已获 IPv4 为在线。可选皮肤 `theme/ui/wifi_on.bin` / `wifi_off.bin`，缺则固件绘制扇形（在线青 / 离线灰）。单击：在线断连、离线重连（STA；不改凭据）。进对话页 / 设置页随主界面铬隐藏。
 _Avoid_：贴矩形屏角（圆屏不可见）、常显 IP 字符串、用文字替代图标为默认产品态
 
+**电量状态 (Battery Status)**：
+主界面顶铬：WiFi **左侧偏上**同弧小电池图形（安全圆内）；ADC 分压读 `battery_*`（GPIO4）；绿/黄/红按电量，充电时青色。进对话页 / 设置页随铬隐藏。
+_Avoid_：常显大号百分比、贴圆屏切角、阻塞 UI 线程做频繁 ADC（硬件采样已节流）
+
 **设置入口 (Settings Entry)**：
 主界面顶铬：WiFi 右侧偏下同弧小钮；可选 `theme/ui/settings.bin`，缺则字母 S。进入可滑动设置页（圆屏安全区内滚动）。
 _Avoid_：贴矩形角、与身体热区抢点、把设置嵌进主界面仪表盘
 
 **设置页 (Settings Surface)**：
-独立层，返回钮 + 竖直滚动列表。首版：固件/皮肤包版本、MAC、网络/SSID/IP；有 CJK 字库时可切 EN/中文（默认 EN）；触摸校准入口。换肤切换 reserved（首版显示 soon，仍走网页换肤）。
+独立层，返回钮 + 竖直滚动列表。首版：固件/皮肤包版本、MAC、网络/SSID/IP、电量%；有 CJK 字库时可切 EN/中文（默认 EN，**NVS 持久化**）；文案为 **UI 铬语言包**（固件底表 + 可选皮肤 `lang/`）；触摸校准入口。换肤切换 reserved（首版显示 soon，仍走网页换肤）。
 _Avoid_：首版塞清 WiFi/重启等危险动作、无字库时强切中文、把网页换肤做成未完成的屏上流程
 
 **产品主界面 (Product Home)**：
@@ -87,9 +91,17 @@ _Avoid_：在按钮回调里直接驱电机/改 LVGL 动画抢 `pet_core`
 喂/戳等按 Needs 规则选档（爽/平/拒或冷），再映射 clip；首版喂+戳，共享 one-shot `refuse`。档内随机与玩分档后置。详见 [`framework.md`](framework.md) §5.1。
 _Avoid_：按钮里写死单一动画、把分档逻辑放进 `pet_view`
 
+**照料提示音 (Care SFX)**：
+随身体 clip 触发的本地短语音/音效；皮肤 `pet/sfx/<clip>/*.wav`（16 kHz mono 16-bit），每池多句、每次随机播一句（尽量不连播同一文件）。可打断上一句 Care SFX；对话听/说中不播。缺资源静默。由 `PET_INTENT_SFX`（`arg0`=clip）驱动，不经云端 TTS。
+_Avoid_：语言包（UI 铬）、云端播报、idle/sleepy/sad 提示音（首版不做）
+
 **主界面文案 (Home Chrome Text)**：
 产品主界面默认不常显状态句（如 `idle`）；仅异常短暂提示（如 `NO PACK`）后淡出。
 _Avoid_：常显调试用英文状态行
+
+**UI 铬语言包 (UI Chrome Locale)**：
+设备屏上**系统铬**可切换语种的文案集合：设置页标签、对话模式字（听/说/连接中等）、短提示（如 `NO PACK` / `tap to talk`）。可选挂在皮肤 `lang/{en,zh}.txt`（UTF-8 `KEY=VALUE`，按 key 覆盖固件底表）；换肤保留策略同字库。不含角色口吻、不含云端 STT/TTS/LLM 语种。用户当前语种偏好属设备态（NVS），不属于本包内容。
+_Avoid_：语言包（过宽）、皮肤口吻文案、会话语种、独立第三包（未定前勿另起根）
 
 **对话入口 (Chat Entry)**：
 主界面**右侧**独立「聊」钮进入对话页；首版可占位。可选 `theme/ui/chat.bin`，缺则字母 C。
