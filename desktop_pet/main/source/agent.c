@@ -1,6 +1,6 @@
 /**
  * @file agent.c
- * @brief 小智兼容 WS：hello + listen + Opus 二进制上行（Z1-3）。
+ * @brief 小智兼容 WS：OTA 登记 + hello + listen + Opus 上下行。
  */
 
 #include "agent.h"
@@ -16,9 +16,14 @@
 #include "freertos/task.h"
 
 #include "cJSON.h"
+#include "esp_app_desc.h"
+#include "esp_crt_bundle.h"
 #include "esp_event.h"
+#include "esp_flash.h"
 #include "esp_heap_caps.h"
+#include "esp_http_client.h"
 #include "esp_mac.h"
+#include "esp_system.h"
 #include "esp_websocket_client.h"
 #include "esp_wifi.h"
 
@@ -52,8 +57,14 @@
 #define AGENT_HELLO_BIT BIT0
 #define AGENT_FAIL_BIT BIT1
 #define AGENT_SESSION_ID_MAX (64U)
-#define AGENT_HEADER_MAX (320U)
+#define AGENT_HEADER_MAX (512U)
 #define AGENT_CLIENT_ID_MAX (40U)
+#define AGENT_WS_URI_MAX (160U)
+#define AGENT_WS_TOKEN_MAX (192U)
+#define AGENT_ACTIVATION_MAX (16U)
+#define AGENT_OTA_RESP_MAX (2048U)
+#define AGENT_OTA_TIMEOUT_MS (15000)
+#define AGENT_OTA_TASK_STACK (10240U)
 
 typedef struct {
     uint16_t len;
@@ -74,6 +85,9 @@ static char s_session_id[AGENT_SESSION_ID_MAX];
 static char s_client_id[AGENT_CLIENT_ID_MAX];
 static char s_device_id[24];
 static char s_headers[AGENT_HEADER_MAX];
+static char s_ws_uri[AGENT_WS_URI_MAX];
+static char s_ws_token[AGENT_WS_TOKEN_MAX];
+static char s_activation_code[AGENT_ACTIVATION_MAX];
 static bool s_hello_sent;
 static volatile bool s_uplink_run;
 static volatile bool s_downlink_run;
@@ -92,6 +106,7 @@ static QueueHandle_t s_cmd_q;
 static uint32_t s_uplink_frames;
 static uint32_t s_downlink_frames;
 static int s_server_pcm_hz = 16000;
+static status_t s_ota_st;
 
 typedef enum {
     AGENT_CMD_SESSION_TOGGLE = 1,
@@ -197,6 +212,261 @@ static void agent_fill_ids(void)
     (void)snprintf(s_client_id, sizeof(s_client_id), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mac[0] ^ 0x5Au, mac[1] ^ 0xA5u, mac[2], mac[3],
                    mac[4], mac[5], mac[0], mac[1], mac[2], mac[3]);
+}
+
+static void agent_endpoint_from_kconfig(void)
+{
+    (void)snprintf(s_ws_uri, sizeof(s_ws_uri), "%s", CONFIG_DESKTOP_PET_AGENT_WS_URI);
+    (void)snprintf(s_ws_token, sizeof(s_ws_token), "%s", CONFIG_DESKTOP_PET_AGENT_ACCESS_TOKEN);
+    s_activation_code[0] = '\0';
+}
+
+static bool agent_ota_url_set(void)
+{
+    const char *url = CONFIG_DESKTOP_PET_AGENT_OTA_URL;
+
+    return (url != NULL) && (url[0] != '\0');
+}
+
+static void agent_copy_json_str(char *dst, size_t dst_len, const cJSON *item)
+{
+    if ((dst == NULL) || (dst_len == 0U) || !cJSON_IsString(item) || (item->valuestring == NULL) ||
+        (item->valuestring[0] == '\0')) {
+        return;
+    }
+    (void)snprintf(dst, dst_len, "%s", item->valuestring);
+}
+
+static void agent_ota_apply_response(const char *json, int len)
+{
+    cJSON *root;
+    cJSON *ws;
+    cJSON *act;
+    cJSON *fw;
+    cJSON *item;
+
+    if ((json == NULL) || (len <= 0)) {
+        return;
+    }
+    (void)len;
+    root = cJSON_Parse(json);
+    if (root == NULL) {
+        LOG_WARN("agent: OTA JSON parse fail");
+        return;
+    }
+
+    ws = cJSON_GetObjectItemCaseSensitive(root, "websocket");
+    if (cJSON_IsObject(ws)) {
+        agent_copy_json_str(s_ws_uri, sizeof(s_ws_uri), cJSON_GetObjectItemCaseSensitive(ws, "url"));
+        agent_copy_json_str(s_ws_token, sizeof(s_ws_token), cJSON_GetObjectItemCaseSensitive(ws, "token"));
+    }
+
+    act = cJSON_GetObjectItemCaseSensitive(root, "activation");
+    if (cJSON_IsObject(act)) {
+        item = cJSON_GetObjectItemCaseSensitive(act, "code");
+        if (cJSON_IsString(item) && (item->valuestring != NULL)) {
+            (void)snprintf(s_activation_code, sizeof(s_activation_code), "%s", item->valuestring);
+        } else if (cJSON_IsNumber(item)) {
+            (void)snprintf(s_activation_code, sizeof(s_activation_code), "%d", (int)item->valuedouble);
+        }
+    }
+
+    fw = cJSON_GetObjectItemCaseSensitive(root, "firmware");
+    if (cJSON_IsObject(fw)) {
+        item = cJSON_GetObjectItemCaseSensitive(fw, "url");
+        if (cJSON_IsString(item) && (item->valuestring != NULL) && (item->valuestring[0] != '\0')) {
+            LOG_WARN("agent: ignore official firmware.url (keep desktop_pet)");
+        }
+    }
+
+    cJSON_Delete(root);
+}
+
+static char *agent_ota_build_body(void)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *app = cJSON_CreateObject();
+    cJSON *board = cJSON_CreateObject();
+    const esp_app_desc_t *desc = esp_app_get_description();
+    uint32_t flash_size = 0U;
+    char *out;
+
+    if ((root == NULL) || (app == NULL) || (board == NULL)) {
+        cJSON_Delete(root);
+        cJSON_Delete(app);
+        cJSON_Delete(board);
+        return NULL;
+    }
+
+    (void)esp_flash_get_size(NULL, &flash_size);
+    cJSON_AddNumberToObject(root, "version", 2);
+    cJSON_AddStringToObject(root, "language", "zh-CN");
+    cJSON_AddNumberToObject(root, "flash_size", (double)flash_size);
+    cJSON_AddNumberToObject(root, "minimum_free_heap_size", (double)esp_get_minimum_free_heap_size());
+    cJSON_AddStringToObject(root, "mac_address", s_device_id);
+    cJSON_AddStringToObject(root, "uuid", s_client_id);
+    cJSON_AddStringToObject(root, "chip_model_name", CONFIG_IDF_TARGET);
+    cJSON_AddStringToObject(app, "name", (desc != NULL) ? desc->project_name : "desktop_pet");
+    cJSON_AddStringToObject(app, "version", (desc != NULL) ? desc->version : "0.0.0");
+    cJSON_AddItemToObject(root, "application", app);
+    cJSON_AddStringToObject(board, "type", "desktop-pet");
+    cJSON_AddItemToObject(root, "board", board);
+    out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return out;
+}
+
+static status_t agent_ota_register_do(void)
+{
+    esp_http_client_config_t cfg = {
+        .url = CONFIG_DESKTOP_PET_AGENT_OTA_URL,
+        .timeout_ms = AGENT_OTA_TIMEOUT_MS,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .method = HTTP_METHOD_POST,
+    };
+    esp_http_client_handle_t client;
+    char *body;
+    char *resp;
+    char ua[48];
+    const esp_app_desc_t *desc = esp_app_get_description();
+    status_t st;
+    int http_status;
+    int n;
+    int r;
+    int body_len;
+    size_t got = 0U;
+
+    body = agent_ota_build_body();
+    if (body == NULL) {
+        return STATUS_NO_MEM;
+    }
+    body_len = (int)strlen(body);
+    resp = (char *)malloc(AGENT_OTA_RESP_MAX);
+    if (resp == NULL) {
+        free(body);
+        return STATUS_NO_MEM;
+    }
+
+    (void)snprintf(ua, sizeof(ua), "desktop-pet/%s", (desc != NULL) ? desc->version : "0.0.0");
+    client = esp_http_client_init(&cfg);
+    if (client == NULL) {
+        free(body);
+        free(resp);
+        return STATUS_NO_MEM;
+    }
+
+    (void)esp_http_client_set_header(client, "Content-Type", "application/json");
+    (void)esp_http_client_set_header(client, "Device-Id", s_device_id);
+    (void)esp_http_client_set_header(client, "Client-Id", s_client_id);
+    (void)esp_http_client_set_header(client, "Activation-Version", "1");
+    (void)esp_http_client_set_header(client, "User-Agent", ua);
+    (void)esp_http_client_set_header(client, "Accept-Language", "zh-CN");
+
+    LOG_INFO("agent: OTA POST %s free_int=%u free_psram=%u", CONFIG_DESKTOP_PET_AGENT_OTA_URL,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+
+    st = esp_http_client_open(client, body_len);
+    if (st != ESP_OK) {
+        LOG_ERROR("agent: OTA open %s", status_to_str(st));
+        esp_http_client_cleanup(client);
+        free(body);
+        free(resp);
+        return st;
+    }
+    n = esp_http_client_write(client, body, body_len);
+    free(body);
+    body = NULL;
+    if (n < body_len) {
+        LOG_ERROR("agent: OTA write %d/%d", n, body_len);
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        free(resp);
+        return STATUS_FAIL;
+    }
+
+    r = esp_http_client_fetch_headers(client);
+    http_status = esp_http_client_get_status_code(client);
+    if (r < 0) {
+        LOG_ERROR("agent: OTA headers fail");
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        free(resp);
+        return STATUS_FAIL;
+    }
+    if ((http_status < 200) || (http_status >= 300)) {
+        LOG_ERROR("agent: OTA HTTP %d", http_status);
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        free(resp);
+        return STATUS_FAIL;
+    }
+
+    while (got + 1U < AGENT_OTA_RESP_MAX) {
+        r = esp_http_client_read(client, resp + got, (int)(AGENT_OTA_RESP_MAX - 1U - got));
+        if (r < 0) {
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+            free(resp);
+            return STATUS_FAIL;
+        }
+        if (r == 0) {
+            break;
+        }
+        got += (size_t)r;
+    }
+    resp[got] = '\0';
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    agent_ota_apply_response(resp, (int)got);
+    free(resp);
+    LOG_INFO("agent: OTA ok ws=%s bind=%s", s_ws_uri, (s_activation_code[0] != '\0') ? s_activation_code : "(none)");
+    return STATUS_OK;
+}
+
+static void agent_ota_task(void *arg)
+{
+    TaskHandle_t waiter = (TaskHandle_t)arg;
+
+    s_ota_st = agent_ota_register_do();
+    if (waiter != NULL) {
+        xTaskNotifyGive(waiter);
+    }
+    vTaskDelete(NULL);
+}
+
+/** HTTPS 必须走内部 RAM 栈；agent worker 在 PSRAM。 */
+static status_t agent_ota_register(void)
+{
+    TaskHandle_t self = xTaskGetCurrentTaskHandle();
+
+    if (!agent_ota_url_set()) {
+        return STATUS_OK;
+    }
+    s_ota_st = STATUS_FAIL;
+    (void)ulTaskNotifyTake(pdTRUE, 0);
+    if (xTaskCreate(agent_ota_task, "pet_xz_ota", AGENT_OTA_TASK_STACK, self, AGENT_TASK_PRIORITY, NULL) != pdPASS) {
+        LOG_ERROR("agent: OTA task create failed");
+        return STATUS_NO_MEM;
+    }
+    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(AGENT_OTA_TIMEOUT_MS + 5000)) == 0U) {
+        LOG_ERROR("agent: OTA timeout");
+        return STATUS_TIMEOUT;
+    }
+    return s_ota_st;
+}
+
+static void agent_show_bind_code(void)
+{
+    char cap[40];
+
+    if (s_activation_code[0] == '\0') {
+        return;
+    }
+    (void)snprintf(cap, sizeof(cap), "code %s", s_activation_code);
+    LOG_INFO("agent: enter %s at xiaozhi.me Add Device", s_activation_code);
+    agent_notify_ui(DESKTOP_PET_AGENT_UI_NET, cap);
 }
 
 static void agent_stop_uplink(void)
@@ -931,26 +1201,32 @@ static status_t agent_open_session(void)
     }
 
     agent_destroy_ws();
-
     agent_set_state(DESKTOP_PET_AGENT_STATE_CONNECTING);
     s_hello_sent = false;
     s_session_id[0] = '\0';
     (void)xEventGroupClearBits(s_events, AGENT_HELLO_BIT | AGENT_FAIL_BIT);
 
     agent_fill_ids();
+    agent_endpoint_from_kconfig();
+    if (agent_ota_register() != STATUS_OK) {
+        LOG_ERROR("agent: OTA register failed");
+        agent_fail_session("OTA fail");
+        return STATUS_FAIL;
+    }
+    agent_show_bind_code();
 
     n = snprintf(s_headers, sizeof(s_headers),
                  "Authorization: Bearer %s\r\n"
                  "Protocol-Version: 1\r\n"
                  "Device-Id: %s\r\n"
                  "Client-Id: %s\r\n",
-                 CONFIG_DESKTOP_PET_AGENT_ACCESS_TOKEN, s_device_id, s_client_id);
+                 s_ws_token, s_device_id, s_client_id);
     if (n <= 0 || (size_t)n >= sizeof(s_headers)) {
         agent_fail_session("connect fail");
         return STATUS_FAIL;
     }
 
-    cfg.uri = CONFIG_DESKTOP_PET_AGENT_WS_URI;
+    cfg.uri = s_ws_uri;
     cfg.headers = s_headers;
     cfg.buffer_size = 4096;
     /* 栈在 PSRAM（managed esp_websocket_client 已改 WithCaps）；16K 防 send_bin 溢出。 */
@@ -964,8 +1240,11 @@ static status_t agent_open_session(void)
     cfg.keep_alive_idle = 5;
     cfg.keep_alive_interval = 3;
     cfg.keep_alive_count = 3;
+    if (strncmp(s_ws_uri, "wss://", 6) == 0) {
+        cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    }
 
-    LOG_INFO("agent: connecting %s device_id=%s free_int=%u largest_int=%u", CONFIG_DESKTOP_PET_AGENT_WS_URI,
+    LOG_INFO("agent: connecting %s device_id=%s free_int=%u largest_int=%u", s_ws_uri,
              s_device_id, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
 
@@ -1003,6 +1282,7 @@ static status_t agent_open_session(void)
 
     agent_set_state(DESKTOP_PET_AGENT_STATE_OPEN);
     LOG_INFO("agent: session OPEN");
+    agent_show_bind_code();
     return STATUS_OK;
 }
 
@@ -1215,7 +1495,8 @@ status_t desktop_pet_agent_init(void)
     agent_fill_ids();
     agent_set_state(DESKTOP_PET_AGENT_STATE_IDLE);
     s_inited = true;
-    LOG_INFO("agent: init uri=%s", CONFIG_DESKTOP_PET_AGENT_WS_URI);
+    LOG_INFO("agent: init uri=%s ota=%s", CONFIG_DESKTOP_PET_AGENT_WS_URI,
+             agent_ota_url_set() ? CONFIG_DESKTOP_PET_AGENT_OTA_URL : "(off)");
     return STATUS_OK;
 }
 

@@ -12,12 +12,25 @@ config DESKTOP_PET_AGENT_WS_URI
     depends on DESKTOP_PET_AGENT_ENABLE
     default "ws://192.168.10.198:8000/xiaozhi/v1/"
     help
-        LAN address of your xiaozhi-esp32-server. Do not use Docker internal 172.x.
+        Official: wss://api.tenclass.net/xiaozhi/v1/
+        LAN: ws://<PC-LAN-IP>:8000/xiaozhi/v1/ (not Docker 172.x).
+        Not the console MCP URL (wss://api.xiaozhi.me/mcp/?token=...).
 
 config DESKTOP_PET_AGENT_ACCESS_TOKEN
     string "Bearer access token (empty if server auth disabled)"
     depends on DESKTOP_PET_AGENT_ENABLE
     default ""
+    help
+        Official cloud default is test-token. LAN server often leaves this empty.
+
+config DESKTOP_PET_AGENT_OTA_URL
+    string "Xiaozhi OTA register URL (empty = skip)"
+    depends on DESKTOP_PET_AGENT_ENABLE
+    default ""
+    help
+        Device registration only (activation code). Firmware download URLs are ignored.
+        Official: https://api.tenclass.net/xiaozhi/ota/
+        LAN Docker: leave empty.
 
 config DESKTOP_PET_AGENT_HELLO_TIMEOUT_MS
     int "Hello reply timeout (ms)"

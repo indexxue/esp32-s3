@@ -38,7 +38,18 @@ desktop_pet — ESP32-S3 桌宠（LVGL UI + 板级驱动）
   若 `idf.py reconfigure` 后 WS 又报 Error create websocket task：对 stock
   managed 组件重新应用 patches/esp_websocket_client_psram_stack.patch
   （任务栈改到 PSRAM；见 patch 头注释）。当前树内 managed 文件已含该改动。
-  Agent URI：menuconfig「Desktop Pet Xiaozhi Agent」或 sdkconfig.defaults 中 CONFIG_DESKTOP_PET_AGENT_WS_URI
+  Agent URI：menuconfig「Desktop Pet Xiaozhi Agent」或 sdkconfig.defaults
+  官方云默认：WSS wss://api.tenclass.net/xiaozhi/v1/ + OTA https://api.tenclass.net/xiaozhi/ota/
+  进对话页会 POST OTA 登记设备（不下载官方固件）。未绑定时字幕/日志出现 `code XXXXXX`，
+  到 xiaozhi.me「添加设备」填入；绑完后退出再进对话页。
+  局域网 Docker：OTA URL 留空，WS 改回 ws://<PC-LAN-IP>:8000/xiaozhi/v1/
+
+小智服务端 Docker（本机联调，目录在仓库外）：
+  cd D:\Docker\xiaozhi-server
+  docker compose up -d
+  docker logs -f xiaozhi-esp32-server
+  设备 WS：ws://<PC-LAN-IP>:8000/xiaozhi/v1/（勿用 172.x）
+  详见 doc/desktop_pet/README.md
 
 触摸校准（NVS `touch_cal`，线性 Q16）：
   入口：长按 GPIO0，或网页 `GET /`「触摸校准」/ API

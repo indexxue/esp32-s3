@@ -245,7 +245,7 @@ IDLE ──唤醒/按键──► CONNECTING ──hello OK──► LISTENING
 
 ### 6.1 Z1-1 部署清单（本机）
 
-> 当前开发机：**无 Docker**、有 **Python 3.13**。推荐先装 Docker Desktop 走最简路径；或按官方文档用 **conda + Python 3.10** 源码跑（勿直接用 3.13 硬扛依赖）。
+> 当前联调：**Docker Desktop**，目录 `D:\Docker\xiaozhi-server`。简介与启停命令见 [`README.md`](README.md)「小智服务端（Docker）」。
 
 **目标地址形态（设备侧后续写入配置）**：
 
@@ -254,15 +254,18 @@ IDLE ──唤醒/按键──► CONNECTING ──hello OK──► LISTENING
 | WebSocket | `ws://192.168.x.x:8000/xiaozhi/v1/` |
 | OTA/引导（可选） | `http://192.168.x.x:8003/xiaozhi/ota/` |
 
-**路径 A — Docker 最简（优先）**
+**路径 A — Docker（本机已用）**
 
-1. 安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)（Windows）。
-2. 按官方 [Deployment.md](https://github.com/xinnan-tech/xiaozhi-esp32-server/blob/main/docs/Deployment.md) 建目录：`xiaozhi-server/{data,models/SenseVoiceSmall}`。
-3. 放入 `docker-compose.yml`、`data/.config.yaml`；下载 SenseVoice `model.pt`。
-4. 在 `.config.yaml` 配置 LLM Key（如智谱/豆包等，**只放服务端**）。
-5. `docker compose up -d` → `docker logs -f xiaozhi-esp32-server`。
-6. 日志或按局域网 IP 确认 WS 地址；**PC/手机浏览器勿当 WS 测**；可用官方 digital-human 或后续设备联调。
-7. 防火墙放行 **8000**（及需要的 8003）。
+```powershell
+cd D:\Docker\xiaozhi-server
+docker compose up -d
+docker logs -f xiaozhi-esp32-server
+```
+
+1. 目录含 `docker-compose.yml`、`data/.config.yaml`、`models/SenseVoiceSmall/model.pt`。
+2. 在 `.config.yaml` 配置 LLM Key（**只放服务端**，勿入库）。
+3. 日志确认 WS；**PC/手机浏览器勿当 WS 测**。
+4. 防火墙放行 **8000**（及需要的 8003）。
 
 **路径 B — conda 源码最简（无 Docker 时）**
 
@@ -273,8 +276,7 @@ IDLE ──唤醒/按键──► CONNECTING ──hello OK──► LISTENING
 
 **Z1-1 验收**：同网 PC 侧能启动服务且日志出现 WebSocket 地址；LLM/ASR/TTS 模块无启动即崩（可先云端 ASR/TTS API，SenseVoice 本地亦可）。
 
-**本切片状态**：选型与步骤已钉死；**实际起容器/进程需你在本机执行**（缺 Docker/conda 与云厂商 Key）。起好后把 LAN IP / WS URL 记到下方 §13，供 Z1-2 写入固件配置。
-
+**本切片状态**：容器 Up；设备 WS 见下方 §13。
 ---
 
 ## 7. 安全与合规
@@ -374,11 +376,13 @@ IDLE ──唤醒/按键──► CONNECTING ──hello OK──► LISTENING
 | S4 | Z1-4 Opus 下行播放 | ✅ 本对话 | tts start→decode→playout；看 `downlink frames` / 喇叭 |
 | S5 | Z1-5 / Z1-6 对话 UI + GPIO0 开会话 | 待办 | 与 D14 对齐 |
 | S6+ | M3 唤醒 / M4 业务 | 待办 | 不阻塞 M2 |
+| S7 | 官方云 OTA 登记 + WSS | ✅ 本对话 | 进会话 POST `/xiaozhi/ota/`；屏显 `code XXXXXX`；忽略 firmware.url |
 
 **填写（起服务后）**：
 
+- 当前默认后端：**官方云** `wss://api.tenclass.net/xiaozhi/v1/`（OTA `https://api.tenclass.net/xiaozhi/ota/`）
+- 局域网回退：OTA URL 留空；WS `ws://<PC-LAN-IP>:8000/xiaozhi/v1/`
 - 服务端 LAN IP：`192.168.1.13`（电脑 WLAN，与板子同网）
-- WebSocket URL：`ws://192.168.1.13:8000/xiaozhi/v1/`
 - 部署方式：`[x] Docker`（`D:\Docker\xiaozhi-server`） / `[ ] conda 源码`
 - LLM 模块（勿写入仓库密钥）：`ChatGLMLLM`（已配置，密钥仅在 `D:\Docker\...\data\.config.yaml`）
-- 状态：放弃电脑热点；同局域网联调（需防火墙放行 + 关路由器无线隔离）
+- 状态：官方云需公网 STA；绑设备用 OTA 返回的 6 位码（xiaozhi.me 添加设备）

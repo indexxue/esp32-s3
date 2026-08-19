@@ -1,6 +1,6 @@
 /**
  * @file agent.h
- * @brief 小智兼容 WebSocket 会话（hello + Opus 上行）。
+ * @brief 小智兼容 WebSocket 会话（OTA 登记 + hello + Opus）。
  */
 
 #ifndef AGENT_H

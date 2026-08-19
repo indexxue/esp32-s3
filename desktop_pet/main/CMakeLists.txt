@@ -26,7 +26,7 @@ idf_component_register(
         "source/pet/pet_view"
     EMBED_FILES "source/www/index.html"
     REQUIRES cbb common bsp_driver esp_timer app_update web_ctrl nvs_flash lvgl esp_driver_i2s
-                 esp_websocket_client json esp_wifi 78__esp-opus
+                 esp_websocket_client json esp_wifi 78__esp-opus esp_http_client mbedtls spi_flash
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
