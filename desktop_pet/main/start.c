@@ -16,6 +16,7 @@
 #include "agent.h"
 #include "audio.h"
 #include "ui.h"
+#include "wake.h"
 #include "esp_system.h"
 #include "flexible_button.h"
 #include "led_scene.h"
@@ -311,6 +312,12 @@ static status_t app_init(void)
     if (desktop_pet_agent_init() != STATUS_OK) {
         LOG_WARN("desktop_pet_agent_init failed");
     }
+
+#if DESKTOP_PET_ENABLE_AUDIO
+    if (desktop_pet_wake_init() != STATUS_OK) {
+        LOG_WARN("desktop_pet_wake_init failed");
+    }
+#endif
 
     LOG_INFO("%s ready lcd=%d touch=%d imu=%d audio=%d motor=%d sd=%d (platform_mask=0x%02lX)",
              product->name,

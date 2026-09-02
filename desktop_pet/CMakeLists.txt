@@ -16,7 +16,9 @@ set(EXTRA_COMPONENT_DIRS
     "../common"
     "../bsp_driver"
     "../cbb"
-    "../components"
+    "../components/web_ctrl"
+    "../components/lcd_font"
+    "../components/menu"
 )
 
 nvs_project_use_device_id(DESKTOP_PET)

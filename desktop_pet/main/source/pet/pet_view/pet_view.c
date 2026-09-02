@@ -2566,6 +2566,28 @@ bool pet_view_chat_is_open(void)
     return s_chat_open;
 }
 
+void pet_view_chat_open(void)
+{
+    chat_open_internal();
+}
+
+void pet_view_chat_open_from_wake(void)
+{
+    chat_open_internal();
+    if (!s_chat_open) {
+        return;
+    }
+    /* γ: auto listen follows from wake task; arm local toggle state. */
+    s_chat_listen_on = true;
+    s_chat_listen_ui_pending = true;
+    (void)pet_core_post(PET_EVT_LISTEN, 0);
+}
+
+bool pet_view_settings_is_open(void)
+{
+    return s_set_open;
+}
+
 void pet_view_chat_close(void)
 {
     chat_close_internal(true);

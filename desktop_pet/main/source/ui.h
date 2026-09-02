@@ -48,6 +48,15 @@ bool desktop_pet_ui_touch_calib_is_running(void);
  */
 void desktop_pet_ui_touch_calib_status(bool *running, uint8_t *step, uint8_t *steps, bool *saved);
 
+/** True while backlight is off (idle blank). */
+bool ui_display_is_blank(void);
+
+/** Reset idle timer (touch / chat / wake / listen). */
+void ui_display_note_activity(void);
+
+/** Force blank or light; lighting also notes activity. */
+void ui_display_blank_set(bool blank);
+
 #ifdef __cplusplus
 }
 #endif

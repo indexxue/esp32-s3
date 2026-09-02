@@ -7,8 +7,20 @@
 ## Language
 
 **卡根配置 (Card Config)**：
-SD 挂载根上的 `config`（现路径 `/sdcard/config`）。UTF-8 `KEY=VALUE`，上电挂载后读取；可声明 `content_root` / `record_root`，未知键保留。凡 `*_root` 键都会被扫描（文件名+大小）。不属于皮肤包，换肤不覆盖。缺文件用默认根并仍尝试枚举文件。
+SD 挂载根上的 `config`（现路径 `/sdcard/config`）。UTF-8 `KEY=VALUE`，上电挂载后读取；可声明 `content_root` / `record_root` / `wake_*`，未知键保留。凡 `*_root` 键都会被扫描（文件名+大小）。不属于皮肤包，换肤不覆盖。缺文件用默认根并仍尝试枚举文件。
 _Avoid_：把设备配置写进 `/sdcard/pet/`、卡上 JSON（首版不解析 JSON）、无文件时拒绝启动
+
+**唤醒模型包 (Wake Model Pack)**：
+ESP-SR WakeNet 模型整包，挂在 SD（默认 `/sdcard/sr_models/<wake_model>/`），**不进皮肤包、不打进 Flash**。`config` 用 `wake_enable` / `wake_model` / `wake_label` / `wake_model_path` 开机选择。缺目录或加载失败 → 正常启动，不做唤醒识别。默认口令 **嗨乐鑫**（`wn9s_hilexin`）；`wake_label` 仅展示。真·自定义词 = 换已训模型，不是改中文字符串。
+_Avoid_：把模型塞进 `/sdcard/pet/`、无模型就拒绝开机、用纯文本当识别词
+
+**唤醒回复 (Wake Reply)**：
+主界面命中唤醒、开对话页之后、开听之前的本地反馈：**先叮（可选 `ding.wav`）+ 短句池随机一句**。资源在卡根 `/sdcard/sfx/wake/`（`wake_reply_path`），**不属于皮肤包**、换肤不覆盖。16 kHz mono 16-bit WAV。缺文件 → 静默仍自动听。播报期间不开上行麦。建议口播：在呢 / 我在 / 嗯？ / 来了 / 怎么啦。
+_Avoid_：用云端 TTS 做首版唤醒应声、把回复音塞进 `pet/sfx`（会被换肤策略搅乱）、播报应声时同时开听
+
+**息屏 (Display Blank)**：
+空闲超时后关背光（默认 60 s，`config` 键 `screen_blank_s`；`0`=关）。任意界面可进；**听/说/连接中**禁止。触摸亮屏且吞掉该次按下（不点穿按钮）。语音唤醒亮屏后走与主界面相同的 γ（开对话 + 叮/短句 + 自动听）。与宠物 `needs.sleeping` **正交**（息屏只关背光）。
+_Avoid_：把息屏做成宠物睡觉、听/说中灭屏、亮屏触摸误触照料
 
 **皮肤包 (Skin Pack)**：
 作者侧生成、可整包替换的只读内容树；含身体 clip、开机画面、可选 `font/` 字幕字库、`lang/` UI 铬文案、`sfx/` 照料提示音、以及后续主题索引。设备挂载根现为 `/sdcard/pet/`。可用 zip（根为 `pack.bin` 或 `pet/pack.bin`）经网页 `POST /api/pet/skin` 覆盖后重启；不覆盖卡根 `config`。若 zip **不含** `font/caption.bin`，提交时保留卡上原有 `pet/font/`；若 zip **不含** `lang/`，保留 `pet/lang/`；若 zip **不含**有效 `sfx/**/*.wav`，保留 `pet/sfx/`。
@@ -27,7 +39,7 @@ _Avoid_：多根散落（`/sdcard/boot` + `/sdcard/ui` 等）
 _Avoid_：启动动画文件序列（`boot/anim` 首版不做）、固件内嵌图（非默认策略）
 
 **合法路径 (Declared Paths)**：
-皮肤包内固件会读或文档已承诺的相对路径集合；首版皮肤：`pack.bin`、`body/*`、`boot/splash.bin`。卡根另承诺 `/sdcard/config`。未实现能力只在文档标为 reserved，不在卡上预建空目录。
+皮肤包内固件会读或文档已承诺的相对路径集合；首版皮肤：`pack.bin`、`body/*`、`boot/splash.bin`。卡根另承诺 `/sdcard/config`、可选 `/sdcard/sr_models/`（唤醒模型）、可选 `/sdcard/sfx/wake/`（唤醒回复）。`config` 亦可含 `screen_blank_s`。未实现能力只在文档标为 reserved，不在卡上预建空目录。
 _Avoid_：空目录占位、未文档化的随意路径
 
 **设备像素帧 (RGBH Frame)**：
@@ -75,8 +87,8 @@ _Avoid_：首版塞清 WiFi/重启等危险动作、无字库时强切中文、�
 _Avoid_：把 debug 页当正式功能入口
 
 **对话页 (Chat Surface)**：
-独立界面，主界面「聊」进入。**框架 D（单击切换听/等答）**：大宠脸 + 当前一轮字幕 + 波形。**进页只连会话**；**单击开听 / 再单击停听等答**；说中可再点打断；字幕只展当前一轮；**无活动约 45s** 自动回主界面并离开即停。字幕字体优先 `/sdcard/pet/font/caption.bin`（LVGL bin），缺则内置 CJK 子集。
-_Avoid_：无返回、禁止打断、离开挂 WS、主路径滚长历史、超时仅静音仍留在对话页
+独立界面。入口：**右侧「聊」**（只连会话、不自动听）或**主界面唤醒「嗨乐鑫」**（开页 → 叮/短句回复 → 自动听，方案 γ）。**框架 D（单击切换听/等答）**：大宠脸 + 当前一轮字幕 + 波形。进对话页停唤醒检测；说中可点身体打断，**不可**唤醒打断。字幕只展当前一轮；**无活动约 45s** 自动回主界面并离开即停，回主界面后恢复唤醒。字幕字体优先 `/sdcard/pet/font/caption.bin`（LVGL bin），缺则内置 CJK 子集。
+_Avoid_：无返回、禁止点打断、离开挂 WS、主路径滚长历史、超时仅静音仍留在对话页、无模型拒绝开机
 
 **照料 Dock (Care Dock) / 护理弧**：
 主界面左侧弧形常显照料圆钮（喂 / 玩 / 睡），贴安全圆内；点按仍只投递既有 `PET_EVT_CARE_*`。
@@ -104,8 +116,8 @@ _Avoid_：常显调试用英文状态行
 _Avoid_：语言包（过宽）、皮肤口吻文案、会话语种、独立第三包（未定前勿另起根）
 
 **对话入口 (Chat Entry)**：
-主界面**右侧**独立「聊」钮进入对话页；首版可占位。可选 `theme/ui/chat.bin`，缺则字母 C。
-_Avoid_：用身体点按替代对话入口、把聊天框嵌进主界面
+主界面**右侧**独立「聊」钮进入对话页（只连不自动听）；另可用主界面唤醒词进入（自动听）。可选 `theme/ui/chat.bin`，缺则字母 C。
+_Avoid_：用身体点按替代对话入口、把聊天框嵌进主界面、拿掉「聊」兜底
 
 **主 Dock (Home Dock)**：
 历史用语；现布局为 **左弧照料三钮 + 右侧 Chat**（不再底弧四钮一排）。命中区保持在安全圆内。

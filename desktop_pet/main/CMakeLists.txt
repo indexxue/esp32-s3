@@ -5,6 +5,7 @@ idf_component_register(
         "source/ui.c"
         "source/audio.c"
         "source/agent.c"
+        "source/wake.c"
         "source/pet_opus.c"
         "source/web_pages.c"
         "source/web_skin.c"
@@ -27,6 +28,7 @@ idf_component_register(
     EMBED_FILES "source/www/index.html"
     REQUIRES cbb common bsp_driver esp_timer app_update web_ctrl nvs_flash lvgl esp_driver_i2s
                  esp_websocket_client json esp_wifi 78__esp-opus esp_http_client mbedtls spi_flash
+                 espressif__esp-sr
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE

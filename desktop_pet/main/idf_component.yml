@@ -7,5 +7,10 @@ dependencies:
   espressif/esp_websocket_client:
     path: ../components/esp_websocket_client
   78/esp-opus: "^1.0.5"
+  # WakeNet (M3); models load from SD (CONFIG_MODEL_IN_SDCARD), not flash partition.
+  # Pull dl_fft/esp_new_jpeg from registry as espressif__* (local ../components copies are not EXTRA dirs).
+  espressif/esp-sr: "^2.1.0"
+  espressif/dl_fft: "^0.6.0"
+  espressif/esp_new_jpeg: "^1.0.0"
   idf:
     version: ">=5.5.0"

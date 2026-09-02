@@ -21,6 +21,7 @@
 #include "qmi8658a.h"
 #include "type.h"
 #include "agent.h"
+#include "wake.h"
 
 #if DESKTOP_PET_ENABLE_DEBUG_UI
 #include "audio.h"
@@ -80,6 +81,7 @@
 #define UI_CALIB_IDX_BOT (2U)   /* Dock / 下 */
 #define UI_CALIB_IDX_LEFT (3U)
 #define UI_CHAT_CAPTION_MAX (160)
+#define UI_BLANK_DEFAULT_S (60U)
 
 static lv_display_t *s_disp;
 static lv_indev_t *s_indev;
@@ -87,6 +89,9 @@ static uint8_t *s_buf1;
 static uint8_t *s_buf2;
 static esp_timer_handle_t s_tick_timer;
 static bool s_started;
+static volatile bool s_display_blank;
+static TickType_t s_blank_last_activity;
+static uint32_t s_blank_timeout_ms; /* 0 = disabled */
 #if DESKTOP_PET_ENABLE_DEBUG_UI
 static lv_obj_t *s_debug;
 static lv_obj_t *s_lbl_roll;
@@ -187,6 +192,10 @@ static void ui_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_m
         lv_display_flush_ready(disp);
         return;
     }
+    if (s_display_blank) {
+        lv_display_flush_ready(disp);
+        return;
+    }
 
     w = (uint32_t)(area->x2 - area->x1 + 1);
     h = (uint32_t)(area->y2 - area->y1 + 1);
@@ -201,6 +210,102 @@ static void ui_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_m
     (void)gc9a01_write_pixels(lcd, (const uint16_t *)px_map, px_count);
     gc9a01_end_write(lcd);
     lv_display_flush_ready(disp);
+}
+
+bool ui_display_is_blank(void)
+{
+    return s_display_blank;
+}
+
+void ui_display_note_activity(void)
+{
+    s_blank_last_activity = xTaskGetTickCount();
+}
+
+void ui_display_blank_set(bool blank)
+{
+    gc9a01_t *lcd;
+
+    if (blank == s_display_blank) {
+        if (!blank) {
+            ui_display_note_activity();
+        }
+        return;
+    }
+
+    lcd = BoardGc9a01();
+    s_display_blank = blank;
+    if (lcd != NULL) {
+        (void)gc9a01_set_backlight(lcd, !blank);
+    }
+    if (blank) {
+        desktop_pet_wake_arm_for_blank();
+        LOG_INFO("ui: display blank");
+    } else {
+        ui_display_note_activity();
+        LOG_INFO("ui: display lit");
+    }
+}
+
+static bool ui_blank_allowed(void)
+{
+    desktop_pet_agent_state_t st;
+
+    if (s_blank_timeout_ms == 0U) {
+        return false;
+    }
+    if (desktop_pet_ui_touch_calib_is_running()) {
+        return false;
+    }
+    if (desktop_pet_wake_is_busy()) {
+        return false;
+    }
+    if (desktop_pet_agent_is_listen_active()) {
+        return false;
+    }
+    st = desktop_pet_agent_get_state();
+    if ((st == DESKTOP_PET_AGENT_STATE_LISTENING) || (st == DESKTOP_PET_AGENT_STATE_SPEAKING) ||
+        (st == DESKTOP_PET_AGENT_STATE_CONNECTING)) {
+        return false;
+    }
+    return true;
+}
+
+static void ui_blank_poll(void)
+{
+    TickType_t now;
+
+    if (s_display_blank || !ui_blank_allowed()) {
+        if (!s_display_blank && !ui_blank_allowed()) {
+            /* Keep timer fresh while listen/speak so we don't blank immediately after. */
+            ui_display_note_activity();
+        }
+        return;
+    }
+    now = xTaskGetTickCount();
+    if ((now - s_blank_last_activity) >= pdMS_TO_TICKS(s_blank_timeout_ms)) {
+        ui_display_blank_set(true);
+    }
+}
+
+static void ui_blank_read_cfg(void)
+{
+    const char *v = sd_cfg_get("screen_blank_s");
+    unsigned sec = UI_BLANK_DEFAULT_S;
+
+    if ((v != NULL) && (v[0] != '\0')) {
+        sec = (unsigned)strtoul(v, NULL, 10);
+    }
+    if (sec == 0U) {
+        s_blank_timeout_ms = 0U;
+        LOG_INFO("ui: screen blank disabled");
+    } else {
+        if (sec > 3600U) {
+            sec = 3600U;
+        }
+        s_blank_timeout_ms = sec * 1000U;
+        LOG_INFO("ui: screen blank after %us", sec);
+    }
 }
 
 static void ui_tick_cb(void *arg)
@@ -293,6 +398,18 @@ static void ui_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
         }
         if (!pt.pressed) {
             s_logged_press = false;
+        }
+        /* Blank: first press only lights screen (no button hit-through). */
+        if (s_display_blank && pt.pressed) {
+            ui_display_blank_set(false);
+            data->point.x = s_last_x;
+            data->point.y = s_last_y;
+            data->state = LV_INDEV_STATE_RELEASED;
+            s_last_pressed = false;
+            return;
+        }
+        if (pt.pressed && !was_pressed && !s_calib_running) {
+            ui_display_note_activity();
         }
         if (s_calib_running) {
             if (pt.pressed && !was_pressed) {
@@ -1191,23 +1308,30 @@ static void ui_chat_hook(pet_chat_act_t act)
     switch (act) {
     case PET_CHAT_ACT_ENTER:
         LOG_INFO("chat: enter → session");
+        ui_display_note_activity();
+        /* Phase CHAT: drop WakeNet before WS/capture eat internal SRAM. */
+        desktop_pet_wake_enter_chat_mode();
         s_chat_agent_prev = desktop_pet_agent_get_state();
         s_chat_reconnect_cool = 0U;
         (void)desktop_pet_agent_session_open();
         break;
     case PET_CHAT_ACT_LEAVE:
         LOG_INFO("chat: leave → stop");
+        ui_display_note_activity();
         s_chat_reconnect_cool = 0U;
         (void)desktop_pet_agent_session_close();
         s_chat_agent_prev = DESKTOP_PET_AGENT_STATE_IDLE;
+        desktop_pet_wake_leave_chat_mode();
         break;
     case PET_CHAT_ACT_LISTEN_ON:
         LOG_INFO("chat: tap → listen");
+        ui_display_note_activity();
         s_chat_reconnect_cool = 0U;
         (void)desktop_pet_agent_listen_start();
         break;
     case PET_CHAT_ACT_LISTEN_OFF:
         LOG_INFO("chat: tap → wait answer");
+        ui_display_note_activity();
         s_chat_reconnect_cool = 0U;
         (void)desktop_pet_agent_listen_stop();
         break;
@@ -1322,7 +1446,9 @@ static void ui_gesture_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
 
+    desktop_pet_wake_ui_poll();
     ui_chat_sync();
+    ui_blank_poll();
 
     if (s_shake_cool_ms > UI_GESTURE_PERIOD_MS) {
         s_shake_cool_ms -= UI_GESTURE_PERIOD_MS;
@@ -1538,6 +1664,7 @@ static void ui_on_pet_home(lv_obj_t *scr)
     (void)scr;
 #endif
     (void)lv_timer_create(ui_gesture_timer_cb, UI_GESTURE_PERIOD_MS, NULL);
+    desktop_pet_wake_set_home_active(true);
 }
 
 static void ui_screen_pet_create(void)
@@ -1793,7 +1920,10 @@ status_t desktop_pet_ui_start(void)
         return STATUS_FAIL;
     }
 
+    ui_blank_read_cfg();
+    ui_display_note_activity();
     (void)gc9a01_set_backlight(lcd, true);
+    s_display_blank = false;
     s_started = true;
     LOG_INFO("desktop_pet_ui started %dx%d touch=%d", UI_HOR_RES, UI_VER_RES,
 #if DESKTOP_PET_ENABLE_TOUCH

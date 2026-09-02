@@ -9,6 +9,10 @@
 #include "pet_fs.h"
 
 #if defined(ESP_PLATFORM)
+#include "wake.h"
+#endif
+
+#if defined(ESP_PLATFORM)
 #include "log.h"
 #include "esp_random.h"
 #define SFX_INFO(...) LOG_INFO(__VA_ARGS__)
@@ -179,6 +183,9 @@ void pet_sfx_play_for_clip(pet_clip_id_t clip)
     if (!pet_fs_join(abs, sizeof(abs), file_rel)) {
         return;
     }
+#if defined(ESP_PLATFORM)
+    desktop_pet_wake_yield_for_playback();
+#endif
     if (desktop_pet_audio_play_wav_path(abs) != STATUS_OK) {
         SFX_WARN("sfx: play fail %s", file_rel);
         return;

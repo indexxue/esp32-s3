@@ -18,7 +18,10 @@
 #include "sdkconfig.h"
 
 #include "esp_http_server.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "web_ctrl_cmd.h"
 
@@ -248,6 +251,10 @@ static esp_err_t cmd_post_handler(httpd_req_t *req)
 
 esp_err_t web_server_start(uint16_t port, web_root_handler_fn root_get_handler)
 {
+    static uint16_t s_ctrl_port = 32768U;
+    size_t largest;
+    size_t stack_try;
+
     if (s_server != NULL) {
         ESP_LOGW(TAG, "HTTP server already running");
         return ESP_ERR_INVALID_STATE;
@@ -255,81 +262,100 @@ esp_err_t web_server_start(uint16_t port, web_root_handler_fn root_get_handler)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = (port == 0U) ? 80U : port;
-    /* 默认 8 槽：`web_server` 3 个 + `web_ctrl_wifi_api` 7 个会溢出，须加大。 */
+    /* Rotate ctrl UDP port — stale ctrl sock after stop can block restart. */
+    s_ctrl_port++;
+    if ((s_ctrl_port < 32768U) || (s_ctrl_port > 32900U)) {
+        s_ctrl_port = 32768U;
+    }
+    config.ctrl_port = s_ctrl_port;
     config.max_uri_handlers = 32U;
-    /* httpd 允许 max_open_sockets 最大 7（另 3 个 socket 为内部占用）；勿超过否则 httpd_start 失败并连带停 Wi-Fi。 */
-    config.max_open_sockets = 7U;
-    /*
-     * LRU purge 会把「只发不收」的 MJPEG 长连接当成最久未用而踢掉，
-     * 表现为预览突然断流（send 104/128）。图传场景关闭 purge。
-     * 校准固件经 web_server_prefer_lru_purge(true) 打开，避免图传占满槽导致舵机 API 无响应。
-     */
+    /* httpd 内部另占 3 个 socket；与 agent WS 并存时勿用满 LWIP_MAX_SOCKETS。 */
+    config.max_open_sockets = 2U;
     config.lru_purge_enable = s_prefer_lru_purge;
-    /* 默认栈 4096：`wifi_scan_result_get_handler` 等单帧 JSON 约 4KB，会栈溢出破坏 httpd 会话表。 */
-    config.stack_size = 12288U;
-    /* MJPEG / 大包发送：默认 5s 在 Wi‑Fi 抖动时易断，统一拉长。 */
+    config.task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 30;
 #if CONFIG_WEB_CTRL_OTA
-    /* OTA 上传 ~8MB 时 Flash 写入耗时长，默认 5s recv 超时易断连。 */
     config.recv_wait_timeout = 120;
     config.send_wait_timeout = 120;
-    config.stack_size        = 16384U;
 #endif
 
-    esp_err_t err = httpd_start(&s_server, &config);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
-        s_server = NULL;
-        return err;
+    largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (largest >= (10U * 1024U + 512U)) {
+        stack_try = 10240U;
+    } else if (largest >= (8U * 1024U + 512U)) {
+        stack_try = 8192U;
+    } else {
+        stack_try = 6144U;
+    }
+    config.stack_size = stack_try;
+
+    {
+        esp_err_t err = httpd_start(&s_server, &config);
+        if ((err == ESP_ERR_HTTPD_TASK) && (config.stack_size > 6144U)) {
+            ESP_LOGW(TAG, "httpd stack %u failed; retry 6KiB", (unsigned)config.stack_size);
+            config.stack_size = 6144U;
+            err               = httpd_start(&s_server, &config);
+        }
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "httpd_start failed: %s (ctrl_port=%u largest=%u)", esp_err_to_name(err),
+                     (unsigned)config.ctrl_port, (unsigned)largest);
+            s_server = NULL;
+            return err;
+        }
+        ESP_LOGI(TAG, "httpd up port=%u ctrl=%u stack=%u", (unsigned)config.server_port,
+                 (unsigned)config.ctrl_port, (unsigned)config.stack_size);
     }
 
-    const httpd_uri_t uri_health = {
-        .uri = "/api/health",
-        .method = HTTP_GET,
-        .handler = health_get_handler,
-        .user_ctx = NULL,
-    };
-    const httpd_uri_t uri_cmd = {
-        .uri = "/api/cmd",
-        .method = HTTP_POST,
-        .handler = cmd_post_handler,
-        .user_ctx = NULL,
-    };
-
-    if (root_get_handler != NULL) {
-        const httpd_uri_t uri_root = {
-            .uri       = "/",
-            .method    = HTTP_GET,
-            .handler   = root_get_handler,
-            .user_ctx  = NULL,
+    {
+        esp_err_t err;
+        const httpd_uri_t uri_health = {
+            .uri = "/api/health",
+            .method = HTTP_GET,
+            .handler = health_get_handler,
+            .user_ctx = NULL,
+        };
+        const httpd_uri_t uri_cmd = {
+            .uri = "/api/cmd",
+            .method = HTTP_POST,
+            .handler = cmd_post_handler,
+            .user_ctx = NULL,
         };
 
-        err = httpd_register_uri_handler(s_server, &uri_root);
+        if (root_get_handler != NULL) {
+            const httpd_uri_t uri_root = {
+                .uri       = "/",
+                .method    = HTTP_GET,
+                .handler   = root_get_handler,
+                .user_ctx  = NULL,
+            };
+
+            err = httpd_register_uri_handler(s_server, &uri_root);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "register / failed: %s", esp_err_to_name(err));
+                (void)httpd_stop(s_server);
+                s_server = NULL;
+                return err;
+            }
+        } else {
+            ESP_LOGW(TAG, "no GET / handler; register web_pages_root_get_handler in app config");
+        }
+
+        err = httpd_register_uri_handler(s_server, &uri_health);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "register / failed: %s", esp_err_to_name(err));
+            ESP_LOGE(TAG, "register /api/health failed: %s", esp_err_to_name(err));
             (void)httpd_stop(s_server);
             s_server = NULL;
             return err;
         }
-    } else {
-        ESP_LOGW(TAG, "no GET / handler; register web_pages_root_get_handler in app config");
-    }
 
-    err = httpd_register_uri_handler(s_server, &uri_health);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "register /api/health failed: %s", esp_err_to_name(err));
-        (void)httpd_stop(s_server);
-        s_server = NULL;
-        return err;
-    }
-
-    err = httpd_register_uri_handler(s_server, &uri_cmd);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "register /api/cmd failed: %s", esp_err_to_name(err));
-        (void)httpd_stop(s_server);
-        s_server = NULL;
-        return err;
+        err = httpd_register_uri_handler(s_server, &uri_cmd);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "register /api/cmd failed: %s", esp_err_to_name(err));
+            (void)httpd_stop(s_server);
+            s_server = NULL;
+            return err;
+        }
     }
 
     ESP_LOGI(TAG, "HTTP listening on port %u", (unsigned int)config.server_port);
@@ -347,11 +373,19 @@ esp_err_t web_server_stop(void)
         return ESP_OK;
     }
 
-    esp_err_t err = httpd_stop(s_server);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "httpd_stop: %s", esp_err_to_name(err));
+    {
+        httpd_handle_t h = s_server;
+        esp_err_t err = httpd_stop(h);
+
+        /* Clear before delay so a concurrent start cannot see a stale handle. */
+        s_server = NULL;
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "httpd_stop: %s (handle cleared)", esp_err_to_name(err));
+            return err;
+        }
     }
-    s_server = NULL;
+    /* Let lwIP reclaim listen PCB before next bind/listen (errno 112). */
+    vTaskDelay(pdMS_TO_TICKS(300));
     return ESP_OK;
 }
 

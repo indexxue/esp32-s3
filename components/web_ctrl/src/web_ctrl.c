@@ -35,10 +35,67 @@
 static const char *TAG = "web_ctrl";
 
 static bool s_web_ctrl_started;
+static bool s_http_up;
 static bool s_wifi_cmd_registered;
 static web_ctrl_config_t s_last_cfg;
 static bool s_last_cfg_valid;
 static volatile bool s_sta_retry_busy;
+
+static esp_err_t web_ctrl_start_http_stack(const web_ctrl_config_t *cfg)
+{
+    const uint16_t port = (cfg->http_port == 0U) ? 80U : cfg->http_port;
+    esp_err_t err;
+
+    err = web_ctrl_cmd_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "web_ctrl_cmd_start failed (Wi-Fi kept): %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = web_server_start(port, cfg->root_get_handler);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "web_server_start failed (Wi-Fi kept for agent/STA): %s",
+                 esp_err_to_name(err));
+        /* Keep cmd task — chat resume may retry httpd without tearing cmd. */
+        return err;
+    }
+
+    if (cfg->gallery_http_register != NULL) {
+        err = cfg->gallery_http_register(web_server_get_handle());
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "gallery HTTP register failed (Wi-Fi kept): %s", esp_err_to_name(err));
+            (void)web_server_stop();
+            return err;
+        }
+    }
+
+    if (cfg->video_http_register != NULL) {
+        err = cfg->video_http_register(web_server_get_handle());
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "video HTTP register failed (Wi-Fi kept): %s", esp_err_to_name(err));
+            (void)web_server_stop();
+            return err;
+        }
+    }
+
+    err = web_ctrl_wifi_api_register(web_server_get_handle());
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "web_ctrl_wifi_api_register failed (Wi-Fi kept): %s", esp_err_to_name(err));
+        (void)web_server_stop();
+        return err;
+    }
+
+    err = web_ctrl_ota_register(web_server_get_handle());
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "web_ctrl_ota_register failed (Wi-Fi kept): %s", esp_err_to_name(err));
+        (void)web_server_stop();
+        return err;
+    }
+
+    s_http_up = true;
+    ESP_LOGI(TAG, "HTTP up (port %u)", (unsigned int)port);
+    return ESP_OK;
+}
 
 static void cmd_wifi(int argc, const char *argv[])
 {
@@ -167,68 +224,15 @@ esp_err_t web_ctrl_start(const web_ctrl_config_t *cfg_in)
     }
 
 start_http_stack:
-    {
-        const uint16_t port = (cfg.http_port == 0U) ? 80U : cfg.http_port;
-
-        err = web_ctrl_cmd_start();
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "web_ctrl_cmd_start failed, stopping Wi-Fi: %s", esp_err_to_name(err));
-            (void)net_wifi_stop();
-            return err;
-        }
-
-        err = web_server_start(port, cfg.root_get_handler);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "web_server_start failed, stopping Wi-Fi: %s", esp_err_to_name(err));
-            (void)web_ctrl_cmd_stop();
-            (void)net_wifi_stop();
-            return err;
-        }
-
-        if (cfg.gallery_http_register != NULL) {
-            err = cfg.gallery_http_register(web_server_get_handle());
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "gallery HTTP register failed: %s", esp_err_to_name(err));
-                (void)web_server_stop();
-                (void)web_ctrl_cmd_stop();
-                (void)net_wifi_stop();
-                return err;
-            }
-        }
-
-        if (cfg.video_http_register != NULL) {
-            err = cfg.video_http_register(web_server_get_handle());
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "video HTTP register failed: %s", esp_err_to_name(err));
-                (void)web_server_stop();
-                (void)web_ctrl_cmd_stop();
-                (void)net_wifi_stop();
-                return err;
-            }
-        }
-
-        err = web_ctrl_wifi_api_register(web_server_get_handle());
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "web_ctrl_wifi_api_register failed: %s", esp_err_to_name(err));
-            (void)web_server_stop();
-            (void)web_ctrl_cmd_stop();
-            (void)net_wifi_stop();
-            return err;
-        }
-
-        err = web_ctrl_ota_register(web_server_get_handle());
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "web_ctrl_ota_register failed: %s", esp_err_to_name(err));
-            (void)web_server_stop();
-            (void)web_ctrl_cmd_stop();
-            (void)net_wifi_stop();
-            return err;
-        }
-
-        s_web_ctrl_started = true;
-        web_ctrl_register_wifi_cmd_once();
-        ESP_LOGI(TAG, "web_ctrl started (HTTP port %u)", (unsigned int)port);
+    err = web_ctrl_start_http_stack(&cfg);
+    if (err != ESP_OK) {
+        return err;
     }
+
+    s_web_ctrl_started = true;
+    web_ctrl_register_wifi_cmd_once();
+    ESP_LOGI(TAG, "web_ctrl started (HTTP port %u)",
+             (unsigned int)((cfg.http_port == 0U) ? 80U : cfg.http_port));
     return ESP_OK;
 }
 
@@ -237,6 +241,7 @@ esp_err_t web_ctrl_stop(void)
     (void)web_server_stop();
     web_ctrl_cmd_stop();
     (void)net_wifi_stop();
+    s_http_up = false;
     if (s_web_ctrl_started) {
         ESP_LOGI(TAG, "web_ctrl stopped");
     }
@@ -247,6 +252,48 @@ esp_err_t web_ctrl_stop(void)
 bool web_ctrl_is_running(void)
 {
     return s_web_ctrl_started;
+}
+
+esp_err_t web_ctrl_http_suspend(void)
+{
+    if (!s_http_up) {
+        return ESP_OK;
+    }
+    (void)web_server_stop();
+    s_http_up = false;
+    /* Extra settle after agent may still hold TIME_WAIT PCBs. */
+    vTaskDelay(pdMS_TO_TICKS(200));
+    ESP_LOGI(TAG, "HTTP suspended (Wi-Fi kept)");
+    return ESP_OK;
+}
+
+esp_err_t web_ctrl_http_resume(void)
+{
+    static const uint16_t delays_ms[] = {500U, 1000U, 2000U, 3000U};
+    esp_err_t err = ESP_FAIL;
+    size_t i;
+
+    if (!s_last_cfg_valid) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_http_up) {
+        return ESP_OK;
+    }
+
+    for (i = 0U; i < (sizeof(delays_ms) / sizeof(delays_ms[0])); i++) {
+        vTaskDelay(pdMS_TO_TICKS(delays_ms[i]));
+        err = web_ctrl_start_http_stack(&s_last_cfg);
+        if (err == ESP_OK) {
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "HTTP resume try %u failed: %s", (unsigned)(i + 1U), esp_err_to_name(err));
+    }
+    return err;
+}
+
+bool web_ctrl_http_is_up(void)
+{
+    return s_http_up;
 }
 
 static void web_ctrl_sta_retry_task(void *arg)

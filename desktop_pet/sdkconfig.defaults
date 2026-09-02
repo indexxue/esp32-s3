@@ -72,3 +72,13 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 # Skin files use long names (sleep_loop_0.bin) and web upload writes them.
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
+
+# ESP-SR WakeNet: models on SD (/sdcard/sr_models/...), not flashed model partition.
+CONFIG_MODEL_IN_SDCARD=y
+CONFIG_SR_WN_WN9S_HILEXIN=y
+
+# httpd stop→start after chat: without SO_REUSE, listen/bind returns errno 112 (EADDRINUSE).
+CONFIG_LWIP_SO_REUSE=y
+CONFIG_LWIP_SO_REUSE_RXTOALL=y
+# httpd needs max_open_sockets+3; agent WS also holds fds — 10 is too tight (listen 112).
+CONFIG_LWIP_MAX_SOCKETS=16

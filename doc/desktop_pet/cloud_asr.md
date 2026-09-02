@@ -1,9 +1,9 @@
 # desktop_pet 对齐「小智」语音助手开发计划
 
-**版本**：2.1  
-**日期**：2026-08-13  
+**版本**：2.2  
+**日期**：2026-08-19  
 **工程**：[`desktop_pet/`](../../desktop_pet/)  
-**状态**：方案对齐小智；**§11 已拍板**；实施中（见 §13）  
+**状态**：方案对齐小智；**§11 Q1–Q6 已拍板**；实施中（见 §13）  
 **参考**：[78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)、[乐鑫小智组件说明](https://docs.espressif.com/projects/esp-iot-solution/zh_CN/latest/ai/xiaozhi.html)、现有 [`audio`](../../desktop_pet/main/source/audio.c)  
 **文档集**：[`README.md`](README.md) · [`framework.md`](framework.md) · [`product.md`](product.md) · [`CONTEXT.md`](CONTEXT.md)
 
@@ -51,7 +51,7 @@
 |------|------|
 | **M1 音频对齐** | 已具备：录/放通、STA 可出网 |
 | **M2 流式会话** | 按键开会话 → Opus 上行 → 服务端回 Opus TTS → 喇叭可听、屏有简短状态 |
-| **M3 唤醒对齐** | 「你好小智/自定义词」本地唤醒后进入 M2 |
+| **M3 唤醒对齐** | 主界面「嗨乐鑫」本地唤醒 → 开对话页并自动听（γ）；模型在 SD，缺则无唤醒仍可启动 |
 | **M4 桌宠业务** | 对话结果驱动表情/舵机/灯（MCP 或本地意图钩子） |
 
 ---
@@ -66,14 +66,15 @@
 | D4 | 音频编解码 | **Opus** 上下行 | PCM 仅板内；调试可保留 WAV 落盘 |
 | D5 | 采样率策略 | **板内统一后与服务器 hello 协商** | 现网 16 kHz；若服务端要 16/24 kHz 则重采样或改 Codec 时钟 |
 | D6 | 服务端 | **小智兼容服务端（自建）优先** | 避免设备直连多家 ASR/TTS SDK；密钥集中在服务端 |
-| D7 | 唤醒 | **ESP-SR WakeNet**；按键可强制开会话 | 与小智一致 |
+| D7 | 唤醒 | **ESP-SR WakeNet**；仅主界面；「聊」/按键兜底 | 对话页内停检测；SPEAKING 不可唤醒打断 |
 | D8 | 现有 Rec/Play UI | **保留为调试页/厂测**；产品页另做「对话态」 | 不删已验证通路 |
 | D9 | 密钥 | 设备侧仅会话 Token / 设备 ID；**大模型与 ASR Key 不放固件** | |
 | D10 | 服务端选型 | **[xinnan-tech/xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)** 最简安装 | 局域网自建；优先 Docker，无 Docker 则 conda+源码 |
-| D11 | 唤醒词 | **ESP-SR 默认词先上**；定制模型后期 | M3 |
+| D11 | 唤醒词 | 默认 **嗨乐鑫**（`wn9s_hilexin`）；模型**整包在 SD** `sr_models/`；`/sdcard/config` 开机选模型 | 缺模型 → 正常启动、不做唤醒；真定制=换 SD 模型 |
 | D12 | 双工策略 | **首版半双工** | LISTENING 时少播；SPEAKING 时 mute 上行 |
 | D13 | 采样率 | **hello 协商**；板内优先软件重采样 | 现网 Codec 16 kHz |
 | D14 | 对话/调试切换 | **GPIO0（BTN_ID_CONFIRM）** | 单击切换对话态↔调试 Rec/Play；与现有 `start.c` 按键钩子对齐 |
+| D15 | 唤醒后回复 | **B+C：叮 + 本地短句随机**；资源 SD `sfx/wake/`；缺则静默仍开听；播完再 `listen_start` | 非云端 TTS；不属于皮肤包 |
 
 ---
 
@@ -111,8 +112,8 @@
 | Opus 编解码 | ❌ | 需接入（如 `esp-opus` / 小智同款组件） |
 | WebSocket 双向音视频会话 | ❌（仅有设备作 HTTP **服务器** 的 web_ctrl） | 需 **WS 客户端** + hello/会话协议 |
 | 云端 ASR+LLM+TTS | ❌ | 用**兼容小智协议的服务端**承接，设备不直连各厂 ASR |
-| ESP-SR 唤醒 / AFE | ❌ | 需集成 esp-sr；占 Flash/IRAM，要测与 LVGL 共存 |
-| 会话状态机（听/说/闲） | 仅有 Rec/Play 互斥 | 需 Listening / Speaking / Idle |
+| ESP-SR 唤醒 / AFE | ❌ | 模型改放 **SD**（减 Flash）；需测与 LVGL 共存；无模型则跳过唤醒 |
+| 会话状态机（听/说/闲） | ✅ 骨架（agent + 对话页） | M3：主界面唤醒 → 开页并自动听 |
 | MCP 控设备 | ❌ | M4 再做；可先本地钩子转表情/电机 |
 | 调试 WAV 落盘 | ✅ | 保留 |
 
@@ -122,8 +123,32 @@
 |----|------|
 | PSRAM 8MB | 足够同时撑 LVGL 缓冲 + 音频环形缓冲 + WS；✅ |
 | 内部 SRAM | WiFi + TLS + Opus + SR 模型峰值要盯；可能需关部分调试功能或把缓冲外置 PSRAM |
-| Flash app 分区 | 现 app 约 ~1.6MB 量级仍有余量，但 **ESP-SR 模型 + Opus + LVGL** 叠加后要做 `size` 验收 |
+| Flash app 分区 | 唤醒模型在 SD，Flash 压力低于「模型打进固件」；仍需 `size` 验收 Opus+LVGL+esp-sr 运行时 |
 | CPU | S3@240MHz 跑半双工流式对话常见可行；全双工 AEC 更吃紧，故首版半双工 |
+
+### 3.4.1 内存分相（强制约定，避免「全都开」）
+
+ESP32-S3 **不能**把会碰 Flash 的任务栈放到 PSRAM。内部 SRAM 撑不住 **WakeNet + httpd(~8–10KB 栈) + agent TLS** 同时峰值：
+
+- 保 WakeNet + 保 httpd 进对话 → TLS `esp-aes` OOM  
+- 毁 WakeNet 再 `create` → 离开后 `largest` 过小，且 httpd `listen(112)` 难恢复  
+
+| 相 | 允许常驻 | 必须释放 / 禁止 |
+|----|----------|-----------------|
+| **HOME** | WakeNet + 检测；httpd | 不开 agent 上下行 |
+| **CHAT** | agent WS / Opus / capture；**WakeNet 实例保留**；**STA 保留** | `web_ctrl_http_suspend`；停检测（`wake_enter_chat_mode`） |
+| **离开对话** | 回 HOME | 再武装检测；`web_ctrl_http_resume`（**不** destroy/recreate 模型） |
+
+原则：
+
+1. **大块数据 → PSRAM**  
+2. **碰 Flash 的任务栈 → 内部 RAM**  
+3. 对话期停网页换 TLS 余量；模型常驻避免 SD 再加载  
+4. HTTP suspend/失败 → **保留 STA**  
+5. 仅关 SD 管理 API **不够**（httpd 栈仍在）  
+6. `listen(112)`：socket 池、ctrl_port 轮换、stop 后延时；唤醒不依赖网页立即恢复  
+
+日志：进对话 `PAUSE (keep model, http down)`；离开 `HTTP resumed`。
 
 ### 3.5 可行性一句话
 
@@ -143,7 +168,7 @@
                                    │ JSON 控制 + 二进制 Opus
 ┌──────────────────────────────────┴────────────────────────┐
 │ desktop_pet                                                │
-│  WakeNet(ESP-SR) / 按键                                     │
+│  WakeNet(ESP-SR，SD 模型) / 主界面；「聊」兜底              │
 │       │                                                    │
 │  MIC→ES8311→I2S RX→[AFE可选]→PCM→Opus Enc→WS 上行          │
 │  SPK←ES8311←I2S TX←PCM←Opus Dec←WS 下行                     │
@@ -160,7 +185,7 @@
 | `desktop_pet_audio` | Codec/I2S、PA、PCM 环形缓冲；保留 debug 录满/WAV/本地 Play |
 | `desktop_pet_opus` | PCM↔Opus |
 | `desktop_pet_agent` 或 `desktop_pet_xiaozhi` | WS 会话、hello、状态机、上下行调度 |
-| `desktop_pet_wake` | ESP-SR 唤醒回调 → 开会话 |
+| `desktop_pet_wake` | ESP-SR（SD 模型）；仅主界面；命中 → 开对话页 + 自动听；缺模型则 no-op |
 | `desktop_pet_ui` | 对话 UI + 保留调试页 |
 | 服务端 | 社区 xiaozhi-esp32-server 一类，或自研兼容协议 |
 
@@ -169,11 +194,12 @@
 ### 4.2 设备侧状态机（半双工首版）
 
 ```
-IDLE ──唤醒/按键──► CONNECTING ──hello OK──► LISTENING
-                                              │
-                    ┌──── TTS 播完 / 超时 ─────┘
-                    ▼
-                 SPEAKING ──► IDLE（或自动再听，由产品定）
+主界面 IDLE
+  ├─「聊」──────► CONNECTING ──hello OK──► OPEN（等点身体再听）
+  └─唤醒嗨乐鑫──► CONNECTING ──hello OK──► [叮+短句] ──► LISTENING
+LISTENING ──listen stop──►（等 STT/LLM）──► SPEAKING
+SPEAKING ──播完/点打断──► LISTENING 或 OPEN
+对话页内不跑唤醒；离开对话页 → 恢复主界面唤醒
 任意态 ──断网/错误──► IDLE + UI 提示
 ```
 
@@ -209,9 +235,10 @@ IDLE ──唤醒/按键──► CONNECTING ──hello OK──► LISTENING
 
 | ID | 任务 | 验收 |
 |----|------|------|
-| Z2-1 | 集成 ESP-SR WakeNet | 自定义或默认唤醒词触发 |
-| Z2-2 | 唤醒 → 自动 OpenAudioChannel | 免按键开聊 |
-| Z2-3 | 测 Flash/RAM；必要时裁剪模型或 UI 资源 | `size` + 实机稳定 30min |
+| Z2-0 | ~~拍板唤醒后回复词（D15 / Q6）~~ | ✅ B+C：SD `sfx/wake/` 叮 + 随机短句 |
+| Z2-1 | 集成 ESP-SR WakeNet；模型从 SD `sr_models/` 加载 | 「嗨乐鑫」可触发；无卡/无模型仍正常开机 |
+| Z2-2 | 主界面唤醒 → 开对话页 → 播 wake reply → `listen_start`（γ）；进页停唤醒 | 与「聊」入口行为可区分；无 reply 文件则静默开听 |
+| Z2-3 | 测 RAM；与 LVGL/agent 音频互斥 | 实机稳定 30min；无模型路径无崩溃 |
 
 ### 阶段 3 — 体验与桌宠业务（M4）
 
@@ -314,8 +341,11 @@ docker logs -f xiaozhi-esp32-server
 
 ### M3（唤醒）
 
-- [ ] 唤醒词触发开会话，误唤醒率可接受（室内静音抽测）  
-- [ ] 长时间运行无泄漏/死锁（≥30 min）  
+- [ ] SD 有 `sr_models/wn9s_hilexin` 时，主界面「嗨乐鑫」可开对话并自动听  
+- [ ] SD 无模型 / `wake_enable=0` 时正常启动，无唤醒、无崩溃  
+- [ ] 对话页内不触发唤醒；「聊」入口仍只连不自动听  
+- [ ] 唤醒后：有 `ding.wav` 则先叮，再随机短句；无文件则静默；然后自动听；播报期间不上行  
+- [ ] 误唤醒率可接受（室内静音抽测）；长时间运行无泄漏（≥30 min）  
 
 ### 工程
 
@@ -335,15 +365,18 @@ docker logs -f xiaozhi-esp32-server
 
 ---
 
-## 11. 开放问题（已拍板 → §2 D10–D14）
+## 11. 开放问题（已拍板 → §2）
 
 | # | 问题 | 决定 |
 |---|------|------|
 | Q1 | 服务端 | **社区兼容 server** → D10 `xinnan-tech/xiaozhi-esp32-server` |
-| Q2 | 唤醒词 | **ESP-SR 默认词**，定制后期 → D11 |
+| Q2 | 唤醒词 | **嗨乐鑫** + SD 模型 → D11（修订） |
 | Q3 | 半双工 / 全双工 | **半双工** → D12 |
 | Q4 | 采样率 | **hello 协商 + 优先软件重采样** → D13 |
 | Q5 | 对话 UI ↔ debug Rec/Play | **GPIO0 按键** → D14 |
+| Q6 | 唤醒后回复 | **B+C：叮 + SD 短句随机** → D15 |
+
+D15 细节（与 [`product.md`](product.md) §A.3 一致）：`/sdcard/sfx/wake/`；可选 `ding.wav` 先播；其余 wav 随机一句；缺资源静默；播完再开听。建议口播：在呢 / 我在 / 嗯？ / 来了 / 怎么啦。
 
 ---
 
@@ -375,7 +408,7 @@ docker logs -f xiaozhi-esp32-server
 | S3 | Z1-3 Opus 上行流 | ✅ 代码 | listen + I2S→Opus→WS；验收看 `uplink frames` / 服务端 STT |
 | S4 | Z1-4 Opus 下行播放 | ✅ 本对话 | tts start→decode→playout；看 `downlink frames` / 喇叭 |
 | S5 | Z1-5 / Z1-6 对话 UI + GPIO0 开会话 | 待办 | 与 D14 对齐 |
-| S6+ | M3 唤醒 / M4 业务 | 待办 | 不阻塞 M2 |
+| S6+ | M3 唤醒 / M4 业务 | **内存分相**：对话停 httpd（保模型）；离开再开网页 | 见 §3.4.1 |
 | S7 | 官方云 OTA 登记 + WSS | ✅ 本对话 | 进会话 POST `/xiaozhi/ota/`；屏显 `code XXXXXX`；忽略 firmware.url |
 
 **填写（起服务后）**：

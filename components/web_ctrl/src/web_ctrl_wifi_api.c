@@ -38,7 +38,7 @@ static const char *TAG = "web_ctrl_wifi";
 
 static SemaphoreHandle_t s_mtx;
 static TaskHandle_t    s_scan_task;
-static bool            s_registered;
+static bool            s_infra_ready;
 static volatile bool   s_scan_busy;
 static uint32_t        s_scan_generation;
 static wifi_ap_record_t s_ap_buf[WEB_CTRL_WIFI_SCAN_MAX];
@@ -677,46 +677,46 @@ esp_err_t web_ctrl_wifi_api_register(httpd_handle_t server)
     if (server == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_registered) {
-        return ESP_OK;
-    }
 
-    if (s_mtx == NULL) {
-        s_mtx = xSemaphoreCreateMutex();
+    if (!s_infra_ready) {
         if (s_mtx == NULL) {
-            ESP_LOGE(TAG, "mutex create failed");
-            return ESP_ERR_NO_MEM;
+            s_mtx = xSemaphoreCreateMutex();
+            if (s_mtx == NULL) {
+                ESP_LOGE(TAG, "mutex create failed");
+                return ESP_ERR_NO_MEM;
+            }
         }
-    }
 
-    if (s_scan_evt == NULL) {
-        s_scan_evt = xEventGroupCreate();
         if (s_scan_evt == NULL) {
-            ESP_LOGE(TAG, "scan event group create failed");
-            return ESP_ERR_NO_MEM;
+            s_scan_evt = xEventGroupCreate();
+            if (s_scan_evt == NULL) {
+                ESP_LOGE(TAG, "scan event group create failed");
+                return ESP_ERR_NO_MEM;
+            }
         }
-    }
 
-    if (s_scan_evt_inst == NULL) {
-        const esp_err_t e =
-            esp_event_handler_instance_register(WIFI_EVENT,
-                                                WIFI_EVENT_SCAN_DONE,
-                                                wifi_scan_done_event,
-                                                NULL,
-                                                &s_scan_evt_inst);
-        if (e != ESP_OK) {
-            ESP_LOGW(TAG, "SCAN_DONE register: %s (fallback delay)", esp_err_to_name(e));
+        if (s_scan_evt_inst == NULL) {
+            const esp_err_t e =
+                esp_event_handler_instance_register(WIFI_EVENT,
+                                                    WIFI_EVENT_SCAN_DONE,
+                                                    wifi_scan_done_event,
+                                                    NULL,
+                                                    &s_scan_evt_inst);
+            if (e != ESP_OK) {
+                ESP_LOGW(TAG, "SCAN_DONE register: %s (fallback delay)", esp_err_to_name(e));
+            }
         }
-    }
 
-    if (s_scan_task == NULL) {
-        const BaseType_t ok =
-            xTaskCreate(scan_worker, "w_wifi_scan", WEB_CTRL_WIFI_SCAN_TASK_STACK, NULL, WEB_CTRL_WIFI_SCAN_TASK_PRIO,
-                        &s_scan_task);
-        if (ok != pdPASS) {
-            ESP_LOGE(TAG, "scan task create failed");
-            return ESP_ERR_NO_MEM;
+        if (s_scan_task == NULL) {
+            const BaseType_t ok =
+                xTaskCreate(scan_worker, "w_wifi_scan", WEB_CTRL_WIFI_SCAN_TASK_STACK, NULL,
+                            WEB_CTRL_WIFI_SCAN_TASK_PRIO, &s_scan_task);
+            if (ok != pdPASS) {
+                ESP_LOGE(TAG, "scan task create failed");
+                return ESP_ERR_NO_MEM;
+            }
         }
+        s_infra_ready = true;
     }
 
     {
@@ -775,7 +775,6 @@ esp_err_t web_ctrl_wifi_api_register(httpd_handle_t server)
         }
     }
 
-    s_registered = true;
     ESP_LOGI(TAG, "wifi provisioning URIs registered");
     return ESP_OK;
 

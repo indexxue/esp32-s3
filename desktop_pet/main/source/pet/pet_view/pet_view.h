@@ -56,6 +56,14 @@ void pet_view_create(lv_obj_t *parent);
 void pet_view_poll(void);
 
 bool pet_view_chat_is_open(void);
+/** Open chat surface (WS enter only). Safe on LVGL thread. */
+void pet_view_chat_open(void);
+/**
+ * Open chat from wake word: same as open, but arm listen UI so next tap stops listen.
+ * Safe on LVGL thread.
+ */
+void pet_view_chat_open_from_wake(void);
+bool pet_view_settings_is_open(void);
 void pet_view_chat_close(void);
 void pet_view_chat_set_mode(pet_chat_mode_t mode);
 /** Current-turn caption (STT / assistant). NULL or "" → placeholder. UTF-8. */

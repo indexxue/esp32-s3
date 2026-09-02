@@ -43,7 +43,7 @@
 /** 播放任务只写 I2S：必须内部 RAM 栈（PSRAM 栈上调 i2s_channel_write 可能假成功无声）。 */
 #define AGENT_PLAYOUT_STACK_BYTES (4096U)
 /** 采音任务仅 I2S，内部 RAM 小栈、高优先级，避免编码/发送堵死 DMA。 */
-#define AGENT_CAPTURE_STACK_BYTES (4096U)
+#define AGENT_CAPTURE_STACK_BYTES (3072U)
 #define AGENT_TASK_PRIORITY (4U)
 #define AGENT_UPLINK_PRIORITY (5U)
 #define AGENT_DOWNLINK_PRIORITY (6U)
@@ -64,7 +64,7 @@
 #define AGENT_ACTIVATION_MAX (16U)
 #define AGENT_OTA_RESP_MAX (2048U)
 #define AGENT_OTA_TIMEOUT_MS (15000)
-#define AGENT_OTA_TASK_STACK (10240U)
+#define AGENT_OTA_TASK_STACK (6144U)
 
 typedef struct {
     uint16_t len;
@@ -107,6 +107,7 @@ static uint32_t s_uplink_frames;
 static uint32_t s_downlink_frames;
 static int s_server_pcm_hz = 16000;
 static status_t s_ota_st;
+static bool s_ota_ok; /* successful OTA this boot; skip re-create */
 
 typedef enum {
     AGENT_CMD_SESSION_TOGGLE = 1,
@@ -436,7 +437,7 @@ static void agent_ota_task(void *arg)
     vTaskDelete(NULL);
 }
 
-/** HTTPS 必须走内部 RAM 栈；agent worker 在 PSRAM。 */
+/** OTA HTTPS：栈必须内部 RAM（Flash/cache 安全）；失败则跳过、用 kconfig endpoint。 */
 static status_t agent_ota_register(void)
 {
     TaskHandle_t self = xTaskGetCurrentTaskHandle();
@@ -444,15 +445,22 @@ static status_t agent_ota_register(void)
     if (!agent_ota_url_set()) {
         return STATUS_OK;
     }
+    if (s_ota_ok) {
+        return STATUS_OK;
+    }
     s_ota_st = STATUS_FAIL;
     (void)ulTaskNotifyTake(pdTRUE, 0);
-    if (xTaskCreate(agent_ota_task, "pet_xz_ota", AGENT_OTA_TASK_STACK, self, AGENT_TASK_PRIORITY, NULL) != pdPASS) {
+    if (xTaskCreate(agent_ota_task, "pet_xz_ota", AGENT_OTA_TASK_STACK, self, AGENT_TASK_PRIORITY,
+                    NULL) != pdPASS) {
         LOG_ERROR("agent: OTA task create failed");
         return STATUS_NO_MEM;
     }
     if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(AGENT_OTA_TIMEOUT_MS + 5000)) == 0U) {
         LOG_ERROR("agent: OTA timeout");
         return STATUS_TIMEOUT;
+    }
+    if (s_ota_st == STATUS_OK) {
+        s_ota_ok = true;
     }
     return s_ota_st;
 }
@@ -1209,9 +1217,8 @@ static status_t agent_open_session(void)
     agent_fill_ids();
     agent_endpoint_from_kconfig();
     if (agent_ota_register() != STATUS_OK) {
-        LOG_ERROR("agent: OTA register failed");
-        agent_fail_session("OTA fail");
-        return STATUS_FAIL;
+        /* Keep kconfig WS/token so wake chat still works under RAM pressure. */
+        LOG_WARN("agent: OTA skip; use kconfig endpoint %s", s_ws_uri);
     }
     agent_show_bind_code();
 

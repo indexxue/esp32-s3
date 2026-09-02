@@ -43,6 +43,20 @@ esp_err_t web_ctrl_stop(void);
 bool web_ctrl_is_running(void);
 
 /**
+ * @brief 仅停 httpd（保留 STA/SoftAP），释放 ~8–10KB 内部栈给 agent TLS。
+ * @note 可重复调用；未启动 HTTP 时返回 ESP_OK。
+ */
+esp_err_t web_ctrl_http_suspend(void);
+
+/**
+ * @brief 按上次 `web_ctrl_start` 配置重建 httpd 与全部路由（Wi‑Fi 不动）。
+ */
+esp_err_t web_ctrl_http_resume(void);
+
+/** True while httpd is listening (false after suspend / before start). */
+bool web_ctrl_http_is_up(void);
+
+/**
  * @brief SoftAP 回落或 STA 掉线后，异步再试 NVS 里的 STA（stop→start，失败仍 SoftAP）。
  * @note 已在 STA 且无 IPv4 时直接 `esp_wifi_connect`；无 STA 凭据返回 `ESP_ERR_NOT_FOUND`。
  */

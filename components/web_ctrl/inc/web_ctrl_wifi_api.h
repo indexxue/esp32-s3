@@ -8,7 +8,8 @@
 #include "esp_http_server.h"
 
 /**
- * @brief 向已启动的 `httpd` 注册 Wi‑Fi 配网 URI；可重复调用（仅首次生效）。
+ * @brief 向已启动的 `httpd` 注册 Wi‑Fi 配网 URI。
+ * @note 可对**新** server 重复调用（httpd stop/start 后须再注册）；扫描任务等基础设施只建一次。
  */
 esp_err_t web_ctrl_wifi_api_register(httpd_handle_t server);
 

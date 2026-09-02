@@ -7,6 +7,28 @@ version=1
 content_root=pet
 record_root=record
 
+# Wake word (M3): model pack under /sdcard/sr_models/<wake_model>/
+# Missing model dir => boot OK, no wake detection.
+wake_enable=1
+wake_model=wn9s_hilexin
+wake_label=嗨乐鑫
+wake_model_path=sr_models
+
+# Wake reply (D15): ding.wav first (optional), then random phrase from other *.wav
+# Missing files => silent, still auto-listen after wake.
+wake_reply_path=sfx/wake
+# Suggested files under /sdcard/sfx/wake/:
+#   ding.wav ding
+#   zaine.wav 在呢
+#   wozai.wav 我在
+#   en.wav 嗯？
+#   laile.wav 来了
+#   zenme.wav 怎么啦
+
+# Display blank: idle seconds before backlight off (0=disable). Touch lights only;
+# wake word lights + opens chat + auto-listen (same as home wake γ).
+screen_blank_s=60
+
 # reserved (ignored until implemented):
 # volume=80
 # brightness=100
